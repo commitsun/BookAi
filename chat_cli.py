@@ -1,4 +1,5 @@
 import asyncio
+from orquestacion_multiagente import app
 
 async def chat():
     print("💬 Chat HotelAI (escribe 'salir' para terminar)\n")
@@ -7,13 +8,8 @@ async def chat():
         if user_msg.lower() in ["salir", "exit", "quit"]:
             break
 
-        # 🔹 Aquí simularíamos orquestación del MainAgent
-        if "reserva" in user_msg or "precio" in user_msg:
-            response = "MainAgent -> DispoPreciosAgent: 'Habitación estándar disponible por 200€.'"
-        elif "mascota" in user_msg or "piscina" in user_msg:
-            response = "MainAgent -> InfoAgent: 'No se permiten mascotas en el hotel.'"
-        else:
-            response = "MainAgent -> InternoAgent: 'He avisado al encargado, esperando respuesta.'"
+        result = app.invoke({"messages": [{"role": "user", "content": user_msg}], "route": None})
+        response = result["messages"][-1]["content"]
 
         print(f"🤖 {response}\n")
 
