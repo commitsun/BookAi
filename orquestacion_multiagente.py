@@ -1,5 +1,6 @@
-# orquestacion_multiagente.py
 from typing import Literal, TypedDict, List
+from pathlib import Path
+
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
@@ -16,6 +17,22 @@ class GraphState(TypedDict):
 
 
 # =========
+# Utilidad para cargar prompts
+# =========
+def load_prompt(filename: str) -> str:
+    return (Path("prompts") / filename).read_text(encoding="utf-8")
+
+
+# =========
+# Cargar prompts externos
+# =========
+main_prompt = load_prompt("main_prompt.txt")
+info_prompt = load_prompt("info_prompt.txt")
+dispo_precios_prompt = load_prompt("dispo_precios_prompt.txt")
+interno_prompt = load_prompt("interno_prompt.txt")
+
+
+# =========
 # LLM Router
 # =========
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -24,19 +41,11 @@ class RouteDecision(BaseModel):
     route: Literal["general_info", "pricing", "other"] = Field(...)
     rationale: str = Field(...)
 
-router_system = (
-    "Eres un router que decide el destino del mensaje:\n"
-    "- 'general_info': horarios, servicios, ubicación, normas.\n"
-    "- 'pricing': precios, disponibilidad, reservas.\n"
-    "- 'other': todo lo demás (encargado interno).\n"
-    "Responde en JSON {route, rationale}"
-)
-
 def router_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     structured = llm_router.with_structured_output(RouteDecision)
     decision = structured.invoke([
-        {"role": "system", "content": router_system},
+        {"role": "system", "content": main_prompt},
         {"role": "user", "content": last_msg},
     ])
     return {**state, "route": decision.route, "rationale": decision.rationale}
@@ -66,38 +75,44 @@ mcp_connections = {
 mcp_client = MultiServerMCPClient(mcp_connections)
 
 
-
 # =========
-# Nodos asíncronos (usan ainvoke)
+# Nodos asíncronos con prompts inyectados
 # =========
 async def general_info_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     tools = await mcp_client.get_tools(server_name="InfoAgent")
     tool = next(t for t in tools if t.name == "consulta_info")
-    reply = await tool.ainvoke({"pregunta": last_msg})
+    reply = await tool.ainvoke({"pregunta": f"{info_prompt}\n\nConsulta: {last_msg}"})
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
     }
+
 
 async def pricing_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
     tool = next(t for t in tools if t.name == "consulta_dispo")
-    # TODO: parsear fechas/personas en serio (por ahora está hardcodeado)
-    reply = await tool.ainvoke({"fechas": "2025-10-01/2025-10-05", "personas": 2})
+    # ⚠️ Aquí deberías parsear fechas/personas de `last_msg` (por ahora fijo)
+    reply = await tool.ainvoke({
+        "fechas": "2025-10-01/2025-10-05",
+        "personas": 2,
+        "prompt": dispo_precios_prompt,
+        "mensaje": last_msg
+    })
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
     }
 
+
 async def other_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     tools = await mcp_client.get_tools(server_name="InternoAgent")
     tool = next(t for t in tools if t.name == "consulta_encargado")
-    reply = await tool.ainvoke({"mensaje": last_msg})
+    reply = await tool.ainvoke({"mensaje": f"{interno_prompt}\n\nConsulta: {last_msg}"})
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": reply}],
         "route": state["route"],
