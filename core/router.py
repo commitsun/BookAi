@@ -42,7 +42,6 @@ ROUTE_MAP = {
     "Interno": "other",
     "Encargado": "other",
     "Supervisor": "other",
-    "Inciso": "other",
     "other": "other",
 }
 

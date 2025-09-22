@@ -1,0 +1,113 @@
+{
+  "hotel": {
+    "nombre": "Hotel Alda Centro Ponferrada",
+    "direccion": "Calle Real 25, 24400 Ponferrada, León, España",
+    "telefono": "+34 987 411 550",
+    "email": "centroponferrada@aldahotels.com",
+    "ciudad": "Ponferrada",
+    "checkin": "14:00",
+    "checkout": "12:00",
+    "idiomas_soportados": ["es", "en", "fr", "de"]
+  },
+  "instalaciones": {
+    "piscina": "Piscina climatizada 🏊 abierta de 9:00 a 20:00",
+    "spa": "Spa con sauna, jacuzzi y masajes. Abierto de 10:00 a 21:00",
+    "gimnasio": "Gimnasio 24h con equipamiento de cardio y pesas",
+    "restaurante": "Restaurante con menú diario y cocina internacional",
+    "bar": "Bar abierto hasta medianoche",
+    "parking": "Parking privado cubierto por 10€/día",
+    "wifi": "Wifi gratuito en todo el hotel",
+    "mascotas": "No se admiten mascotas",
+    "accesibilidad": "Rutas adaptadas y 3 habitaciones accesibles para movilidad reducida",
+    "sala_reuniones": "3 salas de reuniones con capacidad hasta 80 personas"
+  },
+  "habitaciones": [
+    {
+      "tipo": "Estándar",
+      "capacidad": 2,
+      "precio_noche": 100,
+      "descripcion": "Habitación cómoda con cama doble o dos camas individuales, baño privado y escritorio."
+    },
+    {
+      "tipo": "Triple",
+      "capacidad": 3,
+      "precio_noche": 130,
+      "descripcion": "Habitación con tres camas individuales o una cama doble + una individual."
+    },
+    {
+      "tipo": "Familiar",
+      "capacidad": 4,
+      "precio_noche": 160,
+      "descripcion": "Habitación amplia con dos camas dobles, perfecta para familias."
+    },
+    {
+      "tipo": "Suite",
+      "capacidad": 4,
+      "precio_noche": 200,
+      "descripcion": "Suite con sala de estar, cama king size y jacuzzi privado."
+    }
+  ],
+  "servicios": {
+    "desayuno": "Buffet libre por 12€/persona, incluido en reservas de Suite",
+    "almuerzo": "Menú del día 15€, carta disponible",
+    "cena": "Cena a la carta desde 20€ por persona",
+    "servicio_habitaciones": "Disponible de 8:00 a 23:00",
+    "lavanderia": "Servicio de lavandería bajo petición",
+    "transporte": "Traslado al aeropuerto de León por 40€"
+  },
+  "políticas": {
+    "cancelacion": "Cancelación gratuita hasta 48h antes de la llegada",
+    "fumar": "Prohibido fumar en las habitaciones, permitido en zonas exteriores",
+    "niños": "Hasta 2 años gratis en cuna. Mayores de 12 años cuentan como adultos.",
+    "mascotas": "No admitidas"
+  },
+  "eventos": [
+    {
+      "nombre": "Concierto de Jazz",
+      "fecha": "2025-10-12",
+      "descripcion": "Concierto gratuito en el bar del hotel a las 21:00"
+    },
+    {
+      "nombre": "Cata de vinos",
+      "fecha": "2025-11-03",
+      "descripcion": "Cata de vinos de la región del Bierzo en el restaurante del hotel"
+    },
+    {
+      "nombre": "Taller de yoga",
+      "fecha": "2025-11-20",
+      "descripcion": "Sesión gratuita de yoga para huéspedes en la terraza del hotel"
+    }
+  ],
+  "ciudades": {
+    "Ponferrada": {
+      "clima": "Mediterráneo continental, veranos calurosos e inviernos fríos",
+      "lugares_interes": [
+        "Castillo de los Templarios",
+        "Museo del Ferrocarril",
+        "Basílica de la Encina",
+        "Ruta del vino del Bierzo"
+      ]
+    },
+    "Málaga": {
+      "hotel_asociado": "Hotel Alda Málaga Centro",
+      "telefono": "+34 952 123 456",
+      "email": "malagacentro@aldahotels.com",
+      "instalaciones": [
+        "Piscina en azotea",
+        "Restaurante con terraza",
+        "Parking privado",
+        "Salón de eventos para 150 personas"
+      ],
+      "habitaciones": [
+        {
+          "tipo": "Estándar",
+          "precio_noche": 120
+        },
+        {
+          "tipo": "Superior",
+          "precio_noche": 180
+        }
+      ]
+    }
+  }
+}
