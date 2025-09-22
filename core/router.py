@@ -22,14 +22,27 @@ class RouteDecision(BaseModel):
 # Mapa de normalización de rutas
 # =========
 ROUTE_MAP = {
+    # General info
     "Información": "general_info",
-    "Disponibilidad/Precios": "pricing",
-    "Interno": "other",
-    "Inciso": "other",
-    "Supervisor": "other",
-    # Aceptamos también las claves internas por si acaso
+    "Info": "general_info",
+    "General": "general_info",
     "general_info": "general_info",
+
+    # Disponibilidad / Precios
+    "Disponibilidad/Precios": "pricing",
+    "Disponibilidad": "pricing",
+    "Precios": "pricing",
+    "Precio": "pricing",
+    "Habitaciones": "pricing",
+    "Reservas": "pricing",
+    "Reserva": "pricing",
     "pricing": "pricing",
+
+    # Interno / Otros
+    "Interno": "other",
+    "Encargado": "other",
+    "Supervisor": "other",
+    "Inciso": "other",
     "other": "other",
 }
 
@@ -54,6 +67,9 @@ def router_node(state: GraphState) -> GraphState:
 
     # Normalizar ruta
     normalized_route = ROUTE_MAP.get(decision.route, "other")
+
+    # 👇 Debug por consola para ver decisiones del router
+    print(f"🛣️ Router decidió: {decision.route} → {normalized_route}")
 
     return {
         **state,
