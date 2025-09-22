@@ -1,5 +1,10 @@
+import os
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
+
+api_key = os.getenv("OPENAI_API_KEY")
+if not api_key:
+    raise RuntimeError("❌ Falta la variable OPENAI_API_KEY en el entorno.")
 
 # =========
 # LLM para idioma y estilo

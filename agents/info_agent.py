@@ -1,15 +1,13 @@
 import os
 from fastmcp import FastMCP
 from langchain_openai import ChatOpenAI
-from pathlib import Path
+from core.utils_prompt import load_prompt
+from core.language import enforce_language, detect_language
 from utils.logging_config import silence_logs
 from dotenv import load_dotenv
+
 load_dotenv()
-
 silence_logs()
-
-def load_prompt(filename: str) -> str:
-    return (Path("prompts") / filename).read_text(encoding="utf-8")
 
 info_prompt = load_prompt("info_prompt.txt")
 
@@ -20,22 +18,21 @@ if not api_key:
 llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3, api_key=api_key)
 mcp = FastMCP("InfoAgent")
 
-def build_prompt(prompt_text: str, user_message: str):
-    return [
-        {"role": "system", "content": prompt_text},
-        {
-            "role": "system",
-            "content": "⚠️ Detecta automáticamente el idioma del usuario y responde SIEMPRE en ese idioma."
-        },
-        {"role": "user", "content": user_message},
-    ]
 
 @mcp.tool()
 def consulta_info(pregunta: str) -> str:
-    """Responde preguntas generales sobre el hotel"""
-    messages = build_prompt(info_prompt, pregunta)
-    response = llm.invoke(messages)
-    return response.content
+    """Responde preguntas generales sobre el hotel."""
+    try:
+        lang = detect_language(pregunta)
+        response = llm.invoke([
+            {"role": "system", "content": info_prompt},
+            {"role": "user", "content": pregunta},
+        ])
+        return enforce_language(pregunta, response.content, lang)
+    except Exception as e:
+        return f"⚠️ Error en InfoAgent: {e}"
+
 
 if __name__ == "__main__":
+    print("✅ InfoAgent arrancado con tool: consulta_info")
     mcp.run(transport="stdio", show_banner=False)
