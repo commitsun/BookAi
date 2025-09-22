@@ -1,4 +1,9 @@
-from mcp.server.fastmcp import FastMCP
+from fastmcp import FastMCP
+import logging
+
+# 🔇 Silenciar logs de fastmcp y mcp
+logging.getLogger("fastmcp").setLevel(logging.ERROR)
+logging.getLogger("mcp").setLevel(logging.ERROR)
 
 mcp = FastMCP("InfoAgent")
 
@@ -14,4 +19,5 @@ def consulta_info(pregunta: str) -> str:
     return "No dispongo de ese dato, consultaré con el encargado."
 
 if __name__ == "__main__":
-    mcp.run(transport="stdio")
+    # 👇 aquí está la clave: show_banner=False en run()
+    mcp.run(transport="stdio", show_banner=False)

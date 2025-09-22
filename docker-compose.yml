@@ -4,8 +4,8 @@ services:
     build: .
     container_name: hotelai
     tty: true
-    stdin_open: true   # 🔹 permite input interactivo
+    stdin_open: true   
     env_file:
-      - .env           # 🔹 carga tu API key
+      - .env           
     volumes:
       - .:/app

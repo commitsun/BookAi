@@ -1,6 +1,7 @@
 langchain
 langchain-openai
 langchain-mcp-adapters
-mcp
 langgraph
 python-dotenv
+fastmcp>=3.0.0
+mcp

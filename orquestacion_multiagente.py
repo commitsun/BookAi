@@ -3,6 +3,8 @@ from typing import Literal, TypedDict, List
 from langchain_openai import ChatOpenAI
 from langgraph.graph import StateGraph, END
 from pydantic import BaseModel, Field
+from langchain_mcp_adapters.client import MultiServerMCPClient
+
 
 # =========
 # Estado compartido
@@ -10,26 +12,23 @@ from pydantic import BaseModel, Field
 class GraphState(TypedDict):
     messages: List[dict]
     route: Literal["general_info", "pricing", "other"] | None
+    rationale: str | None
+
 
 # =========
-# LLMs
+# LLM Router
 # =========
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-llm_general = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-llm_pricing = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-# =========
-# Router
-# =========
 class RouteDecision(BaseModel):
     route: Literal["general_info", "pricing", "other"] = Field(...)
     rationale: str = Field(...)
 
 router_system = (
-    "Eres un router. Decide el destino:\n"
-    "- 'general_info': horarios, servicios, ubicación.\n"
+    "Eres un router que decide el destino del mensaje:\n"
+    "- 'general_info': horarios, servicios, ubicación, normas.\n"
     "- 'pricing': precios, disponibilidad, reservas.\n"
-    "- 'other': todo lo demás.\n"
+    "- 'other': todo lo demás (encargado interno).\n"
     "Responde en JSON {route, rationale}"
 )
 
@@ -40,22 +39,70 @@ def router_node(state: GraphState) -> GraphState:
         {"role": "system", "content": router_system},
         {"role": "user", "content": last_msg},
     ])
-    return {**state, "route": decision.route}
+    return {**state, "route": decision.route, "rationale": decision.rationale}
+
 
 # =========
-# Agentes simulados (pueden llamar a tus MCP en el futuro)
+# Configuración de clientes MCP
 # =========
-def general_info_node(state: GraphState) -> GraphState:
-    reply = "Check-in 14:00, check-out 12:00. Servicios: WiFi, piscina climatizada."
-    return {"messages": state["messages"] + [{"role": "assistant", "content": reply}], "route": state["route"]}
+mcp_connections = {
+    "InfoAgent": {
+        "command": "python",
+        "args": ["agents/info_agent.py"],
+        "transport": "stdio"
+    },
+    "DispoPreciosAgent": {
+        "command": "python",
+        "args": ["agents/dispo_precios_agent.py"],
+        "transport": "stdio"
+    },
+    "InternoAgent": {
+        "command": "python",
+        "args": ["agents/interno_agent.py"],
+        "transport": "stdio"
+    }
+}
 
-def pricing_node(state: GraphState) -> GraphState:
-    reply = "Disponible. Precio 200€/noche para 2 personas."
-    return {"messages": state["messages"] + [{"role": "assistant", "content": reply}], "route": state["route"]}
+mcp_client = MultiServerMCPClient(mcp_connections)
 
-def other_node(state: GraphState) -> GraphState:
-    reply = "Puedo ayudarte con información del hotel o precios/disponibilidad."
-    return {"messages": state["messages"] + [{"role": "assistant", "content": reply}], "route": state["route"]}
+
+# =========
+# Nodos asíncronos (usan ainvoke)
+# =========
+async def general_info_node(state: GraphState) -> GraphState:
+    last_msg = state["messages"][-1]["content"]
+    tools = await mcp_client.get_tools(server_name="InfoAgent")
+    tool = next(t for t in tools if t.name == "consulta_info")
+    reply = await tool.ainvoke({"pregunta": last_msg})
+    return {
+        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "route": state["route"],
+        "rationale": state.get("rationale"),
+    }
+
+async def pricing_node(state: GraphState) -> GraphState:
+    last_msg = state["messages"][-1]["content"]
+    tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+    tool = next(t for t in tools if t.name == "consulta_dispo")
+    # TODO: parsear fechas/personas en serio (por ahora está hardcodeado)
+    reply = await tool.ainvoke({"fechas": "2025-10-01/2025-10-05", "personas": 2})
+    return {
+        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "route": state["route"],
+        "rationale": state.get("rationale"),
+    }
+
+async def other_node(state: GraphState) -> GraphState:
+    last_msg = state["messages"][-1]["content"]
+    tools = await mcp_client.get_tools(server_name="InternoAgent")
+    tool = next(t for t in tools if t.name == "consulta_encargado")
+    reply = await tool.ainvoke({"mensaje": last_msg})
+    return {
+        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "route": state["route"],
+        "rationale": state.get("rationale"),
+    }
+
 
 # =========
 # Construcción del grafo
