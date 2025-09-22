@@ -14,6 +14,7 @@ class GraphState(TypedDict):
     messages: List[dict]
     route: Literal["general_info", "pricing", "other"] | None
     rationale: str | None
+    language: str | None   # 👈 guardamos idioma detectado
 
 
 # =========
@@ -36,7 +37,7 @@ interno_prompt = load_prompt("interno_prompt.txt")
 # LLMs
 # =========
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-llm_language = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # fuerza idioma del cliente
+llm_language = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # enforcer de idioma
 
 
 class RouteDecision(BaseModel):
@@ -44,14 +45,56 @@ class RouteDecision(BaseModel):
     rationale: str = Field(...)
 
 
+class LangDetect(BaseModel):
+    language: str = Field(..., description="Idioma detectado en código ISO-639-1 (ej. es, en, fr, ar)")
+
+
+# =========
+# Detectar idioma con la IA
+# =========
+def detect_language(text: str) -> str:
+    structured = llm_language.with_structured_output(LangDetect)
+    result = structured.invoke([
+        {"role": "system", "content": "Detecta el idioma del siguiente texto y respóndelo como código ISO-639-1."},
+        {"role": "user", "content": text},
+    ])
+    return result.language
+
+
+def enforce_language(user_msg: str, reply: str, lang: str | None = None) -> str:
+    """Asegura que la respuesta sea en el idioma detectado del usuario"""
+    system_prompt = (
+        f"Responde SIEMPRE en {lang}." if lang
+        else "Responde SIEMPRE en el mismo idioma que el usuario."
+    )
+
+    enforced = llm_language.invoke([
+        {"role": "system", "content": system_prompt},
+        {"role": "user", "content": user_msg},
+        {"role": "assistant", "content": reply},
+    ])
+    return enforced.content
+
+
+# =========
+# Router principal
+# =========
 def router_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
+    user_lang = detect_language(last_msg)
+
     structured = llm_router.with_structured_output(RouteDecision)
     decision = structured.invoke([
         {"role": "system", "content": main_prompt},
         {"role": "user", "content": last_msg},
     ])
-    return {**state, "route": decision.route, "rationale": decision.rationale}
+
+    return {
+        **state,
+        "route": decision.route,
+        "rationale": decision.rationale,
+        "language": user_lang,   # guardamos idioma
+    }
 
 
 # =========
@@ -79,61 +122,61 @@ mcp_client = MultiServerMCPClient(mcp_connections)
 
 
 # =========
-# Función auxiliar: aplica enforcer de idioma
-# =========
-def enforce_language(user_msg: str, reply: str) -> str:
-    enforced = llm_language.invoke([
-        {"role": "system", "content": "Responde SIEMPRE en el mismo idioma que el usuario. No mezcles idiomas."},
-        {"role": "user", "content": user_msg},
-        {"role": "assistant", "content": reply},
-    ])
-    return enforced.content
-
-
-# =========
-# Nodos asíncronos con prompts inyectados + enforcer de idioma
+# Nodos de ejecución (con historial completo)
 # =========
 async def general_info_node(state: GraphState) -> GraphState:
-    last_msg = state["messages"][-1]["content"]
+    # Usar TODO el historial del usuario como contexto
+    conversation = "\n".join([m["content"] for m in state["messages"] if m["role"] == "user"])
+
     tools = await mcp_client.get_tools(server_name="InfoAgent")
     tool = next(t for t in tools if t.name == "consulta_info")
-    reply = await tool.ainvoke({"pregunta": f"{info_prompt}\n\nConsulta: {last_msg}"})
-    final_reply = enforce_language(last_msg, reply)
+    reply = await tool.ainvoke({"pregunta": f"{info_prompt}\n\nConversación:\n{conversation}"})
+
+    final_reply = enforce_language(state["messages"][-1]["content"], reply, state.get("language"))
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
+        "language": state.get("language"),
     }
 
 
 async def pricing_node(state: GraphState) -> GraphState:
-    last_msg = state["messages"][-1]["content"]
+    # Usar TODO el historial del usuario como contexto
+    conversation = "\n".join([m["content"] for m in state["messages"] if m["role"] == "user"])
+
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
     tool = next(t for t in tools if t.name == "consulta_dispo")
     reply = await tool.ainvoke({
         "fechas": "2025-10-01/2025-10-05",  # TODO: parsear fechas reales
         "personas": 2,
         "prompt": dispo_precios_prompt,
-        "mensaje": last_msg
+        "mensaje": conversation
     })
-    final_reply = enforce_language(last_msg, reply)
+
+    final_reply = enforce_language(state["messages"][-1]["content"], reply, state.get("language"))
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
+        "language": state.get("language"),
     }
 
 
 async def other_node(state: GraphState) -> GraphState:
-    last_msg = state["messages"][-1]["content"]
+    # Usar TODO el historial del usuario como contexto
+    conversation = "\n".join([m["content"] for m in state["messages"] if m["role"] == "user"])
+
     tools = await mcp_client.get_tools(server_name="InternoAgent")
     tool = next(t for t in tools if t.name == "consulta_encargado")
-    reply = await tool.ainvoke({"mensaje": f"{interno_prompt}\n\nConsulta: {last_msg}"})
-    final_reply = enforce_language(last_msg, reply)
+    reply = await tool.ainvoke({"mensaje": f"{interno_prompt}\n\nConversación:\n{conversation}"})
+
+    final_reply = enforce_language(state["messages"][-1]["content"], reply, state.get("language"))
     return {
         "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
+        "language": state.get("language"),
     }
 
 
