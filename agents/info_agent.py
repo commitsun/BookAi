@@ -1,9 +1,14 @@
 from fastmcp import FastMCP
 import logging
 
-# 🔇 Silenciar logs de fastmcp y mcp
-logging.getLogger("fastmcp").setLevel(logging.ERROR)
-logging.getLogger("mcp").setLevel(logging.ERROR)
+# 🔇 Silenciar TODOS los logs (uvicorn, mcp, fastmcp)
+logging.getLogger().handlers.clear()
+logging.basicConfig(level=logging.CRITICAL, force=True)
+logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
+logging.getLogger("mcp").setLevel(logging.CRITICAL)
+logging.getLogger("fastmcp").setLevel(logging.CRITICAL)
 
 mcp = FastMCP("InfoAgent")
 
@@ -19,5 +24,4 @@ def consulta_info(pregunta: str) -> str:
     return "No dispongo de ese dato, consultaré con el encargado."
 
 if __name__ == "__main__":
-    # 👇 aquí está la clave: show_banner=False en run()
     mcp.run(transport="stdio", show_banner=False)

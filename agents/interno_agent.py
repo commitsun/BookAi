@@ -1,9 +1,14 @@
 from fastmcp import FastMCP
 import logging
 
-# 🔇 Silenciar logs de fastmcp y mcp
-logging.getLogger("fastmcp").setLevel(logging.ERROR)
-logging.getLogger("mcp").setLevel(logging.ERROR)
+# 🔇 Silenciar TODOS los logs (uvicorn, mcp, fastmcp)
+logging.getLogger().handlers.clear()
+logging.basicConfig(level=logging.CRITICAL, force=True)
+logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
+logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
+logging.getLogger("mcp").setLevel(logging.CRITICAL)
+logging.getLogger("fastmcp").setLevel(logging.CRITICAL)
 
 mcp = FastMCP("InternoAgent")
 
@@ -15,5 +20,4 @@ def consulta_encargado(mensaje: str) -> str:
     return f"He avisado al encargado del hotel: {mensaje}. Esperando respuesta..."
 
 if __name__ == "__main__":
-    # 👇 sin banner
     mcp.run(transport="stdio", show_banner=False)

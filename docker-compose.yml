@@ -1,11 +1,12 @@
-version: "3.8"
 services:
   hotelai:
     build: .
     container_name: hotelai
     tty: true
-    stdin_open: true   
+    stdin_open: true
     env_file:
-      - .env           
+      - .env
     volumes:
       - .:/app
+    command: >
+      sh -c "python chat_cli.py 2>/dev/null"
