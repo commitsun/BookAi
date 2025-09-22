@@ -48,22 +48,23 @@ def router_node(state: GraphState) -> GraphState:
 mcp_connections = {
     "InfoAgent": {
         "command": "python",
-        "args": ["agents/info_agent.py"],
+        "args": ["-m", "agents.info_agent"],
         "transport": "stdio"
     },
     "DispoPreciosAgent": {
         "command": "python",
-        "args": ["agents/dispo_precios_agent.py"],
+        "args": ["-m", "agents.dispo_precios_agent"],
         "transport": "stdio"
     },
     "InternoAgent": {
         "command": "python",
-        "args": ["agents/interno_agent.py"],
+        "args": ["-m", "agents.interno_agent"],
         "transport": "stdio"
     }
 }
 
 mcp_client = MultiServerMCPClient(mcp_connections)
+
 
 
 # =========

@@ -8,5 +8,4 @@ services:
       - .env
     volumes:
       - .:/app
-    command: >
-      sh -c "python chat_cli.py 2>/dev/null"
+    command: python chat_cli.py

@@ -1,15 +1,7 @@
 from fastmcp import FastMCP
-import logging
+from utils.logging_config import silence_logs
 
-# 🔇 Silenciar TODOS los logs (uvicorn, mcp, fastmcp)
-logging.getLogger().handlers.clear()
-logging.basicConfig(level=logging.CRITICAL, force=True)
-logging.getLogger("uvicorn").setLevel(logging.CRITICAL)
-logging.getLogger("uvicorn.error").setLevel(logging.CRITICAL)
-logging.getLogger("uvicorn.access").setLevel(logging.CRITICAL)
-logging.getLogger("mcp").setLevel(logging.CRITICAL)
-logging.getLogger("fastmcp").setLevel(logging.CRITICAL)
-
+silence_logs()
 mcp = FastMCP("InfoAgent")
 
 @mcp.tool()
@@ -19,7 +11,7 @@ def consulta_info(pregunta: str) -> str:
     """
     if "mascota" in pregunta.lower():
         return "No se permiten mascotas en el hotel."
-    elif "piscina" in pregunta.lower():
+    if "piscina" in pregunta.lower():
         return "Sí, contamos con piscina climatizada."
     return "No dispongo de ese dato, consultaré con el encargado."
 
