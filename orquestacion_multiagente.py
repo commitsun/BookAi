@@ -33,13 +33,16 @@ interno_prompt = load_prompt("interno_prompt.txt")
 
 
 # =========
-# LLM Router
+# LLMs
 # =========
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm_language = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)  # fuerza idioma del cliente
+
 
 class RouteDecision(BaseModel):
     route: Literal["general_info", "pricing", "other"] = Field(...)
     rationale: str = Field(...)
+
 
 def router_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
@@ -76,15 +79,28 @@ mcp_client = MultiServerMCPClient(mcp_connections)
 
 
 # =========
-# Nodos asíncronos con prompts inyectados
+# Función auxiliar: aplica enforcer de idioma
+# =========
+def enforce_language(user_msg: str, reply: str) -> str:
+    enforced = llm_language.invoke([
+        {"role": "system", "content": "Responde SIEMPRE en el mismo idioma que el usuario. No mezcles idiomas."},
+        {"role": "user", "content": user_msg},
+        {"role": "assistant", "content": reply},
+    ])
+    return enforced.content
+
+
+# =========
+# Nodos asíncronos con prompts inyectados + enforcer de idioma
 # =========
 async def general_info_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     tools = await mcp_client.get_tools(server_name="InfoAgent")
     tool = next(t for t in tools if t.name == "consulta_info")
     reply = await tool.ainvoke({"pregunta": f"{info_prompt}\n\nConsulta: {last_msg}"})
+    final_reply = enforce_language(last_msg, reply)
     return {
-        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
     }
@@ -94,15 +110,15 @@ async def pricing_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
     tool = next(t for t in tools if t.name == "consulta_dispo")
-    # ⚠️ Aquí deberías parsear fechas/personas de `last_msg` (por ahora fijo)
     reply = await tool.ainvoke({
-        "fechas": "2025-10-01/2025-10-05",
+        "fechas": "2025-10-01/2025-10-05",  # TODO: parsear fechas reales
         "personas": 2,
         "prompt": dispo_precios_prompt,
         "mensaje": last_msg
     })
+    final_reply = enforce_language(last_msg, reply)
     return {
-        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
     }
@@ -113,8 +129,9 @@ async def other_node(state: GraphState) -> GraphState:
     tools = await mcp_client.get_tools(server_name="InternoAgent")
     tool = next(t for t in tools if t.name == "consulta_encargado")
     reply = await tool.ainvoke({"mensaje": f"{interno_prompt}\n\nConsulta: {last_msg}"})
+    final_reply = enforce_language(last_msg, reply)
     return {
-        "messages": state["messages"] + [{"role": "assistant", "content": reply}],
+        "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
         "route": state["route"],
         "rationale": state.get("rationale"),
     }

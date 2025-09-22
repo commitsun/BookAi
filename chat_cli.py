@@ -1,5 +1,8 @@
 import asyncio
 from orquestacion_multiagente import app
+from dotenv import load_dotenv
+
+load_dotenv()
 
 async def chat():
     print("💬 Chat HotelAI (escribe 'salir' para terminar)\n")
