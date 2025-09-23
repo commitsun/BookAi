@@ -2,6 +2,7 @@ from .state import GraphState
 from .language import enforce_language
 from .mcp_client import mcp_client
 from .utils_prompt import load_prompt  # 👈 centralizado y seguro
+import json
 
 # =========
 # Cargar prompts externos
@@ -45,38 +46,100 @@ async def general_info_node(state: GraphState) -> GraphState:
 
 
 # =========
-# Pricing Node
+# Pricing Node (invocando solo Disponibilidad_y_precios)
 # =========
+
+
+# =========
+# Pricing Node (usando dispo_tool.args en vez de schema)
+# =========
+
 async def pricing_node(state: GraphState) -> GraphState:
     conversation = state.get("summary") or "\n".join(
         [m["content"] for m in state["messages"] if m["role"] == "user"]
     )
 
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
-    tool = next(t for t in tools if t.name == "consulta_dispo")
+    print("🟢 TOOLS DISPONIBLES:", [t.name for t in tools])  # Debug
 
-    reply = await tool.ainvoke({
-        "fechas": "2025-10-01/2025-10-05",  # TODO: parsear fechas reales
-        "personas": 2,
-        "prompt": dispo_precios_prompt,
-        "mensaje": (
-            "⚠️ CRÍTICO: No inventes precios ni disponibilidad. "
-            "Si no puedes obtener los datos, responde que consultarás con un encargado humano.\n\n"
-            f"Historial de la conversación (cliente):\n{conversation}"
-        )
-    })
+    # 1️⃣ Sacamos el token con la tool buscar_token
+    token = None
+    try:
+        token_tool = next(t for t in tools if t.name == "buscar_token")
+        token_raw = await token_tool.ainvoke({})
+        print("🟢 TOKEN RAW:", token_raw)
+
+        token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
+        if isinstance(token_data, list) and len(token_data) > 0:
+            token = token_data[0].get("key")
+        elif isinstance(token_data, dict):
+            token = token_data.get("key")
+
+        print("🟢 TOKEN EXTRAÍDO:", token)
+    except Exception as e:
+        print("⚠️ Error obteniendo token:", e)
+
+    if not token:
+        return {
+            **state,
+            "messages": state["messages"] + [{
+                "role": "assistant",
+                "content": "⚠️ No pude obtener el token de autorización. Por favor revisa la configuración."
+            }],
+        }
+
+    # 2️⃣ Tool de disponibilidad y precios
+    try:
+        dispo_tool = next(t for t in tools if t.name == "Disponibilidad_y_precios")
+    except StopIteration:
+        return {
+            **state,
+            "messages": state["messages"] + [{
+                "role": "assistant",
+                "content": "⚠️ No encontré la tool 'Disponibilidad_y_precios' en el MCP remoto."
+            }],
+        }
+
+    # 3️⃣ Construimos los parámetros correctos (probamos ISO)
+    params = {
+        "checkin": "2025-10-25T00:00:00",
+        "checkout": "2025-10-27T00:00:00",
+        "occupancy": 2,
+        "key": token
+    }
+    print("🟢 PARAMS ENVIADOS:", params)
+
+    # 🚀 Llamamos a la tool de disponibilidad
+    raw_reply = await dispo_tool.ainvoke(params)
+    print("🟢 RAW REPLY DEL MCP:", raw_reply)
+
+    # Procesamos la respuesta
+    try:
+        rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+        if not rooms:
+            final_reply = "Lo siento, no encontré disponibilidad en esas fechas."
+        else:
+            opciones = "\n".join(
+                f"- {r['roomTypeName']}: {r['avail']} disponibles → {r['price']}€ por noche"
+                for r in rooms
+            )
+            final_reply = (
+                f"Estas son las opciones disponibles del {params['checkin']} "
+                f"al {params['checkout']} para {params['occupancy']} personas:\n{opciones}"
+            )
+    except Exception as e:
+        final_reply = f"⚠️ Error procesando la respuesta de disponibilidad: {e}"
 
     final_reply = enforce_language(
         state["messages"][-1]["content"],
-        reply,
-        state.get("language")  # 👈 siempre pasamos idioma detectado
+        final_reply,
+        state.get("language")
     )
 
     return {
         **state,
         "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
     }
-
 
 # =========
 # Other / Interno Node

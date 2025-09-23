@@ -19,10 +19,9 @@ mcp_connections = {
         "env": {"OPENAI_API_KEY": api_key},
     },
     "DispoPreciosAgent": {
-        "command": "python",
-        "args": ["-m", "agents.dispo_precios_agent"],
-        "transport": "stdio",
-        "env": {"OPENAI_API_KEY": api_key},
+        "transport": "streamable_http",
+        "url": "https://n8n-n8n.d6aq21.easypanel.host/mcp/cbc40f16-8756-40b5-ab72-32912227282f",
+        
     },
     "InternoAgent": {
         "command": "python",
