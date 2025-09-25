@@ -50,10 +50,12 @@ def enforce_language(user_msg: str, reply: str, lang: str | None = None) -> str:
 
     system_prompt = (
         f"Responde SIEMPRE en {target_lang}. "
-        "No traduzcas literalmente, adapta la respuesta para sonar natural. "
-        "Usa un tono humano, cálido y cercano. "
-        "No repitas saludos innecesarios. "
-        "Puedes usar emojis ligeros si encajan 🙂."
+        "Adapta la respuesta para sonar natural y profesional, como un humano. "
+        "⚠️ Evita frases de cierre genéricas ('si necesitas más información...', 'espero que te sirva'). "
+        "⚠️ Evita emojis genéricos (😊, 🙂, 🙌). "
+        "✅ Usa como máximo un emoji solo si aporta valor concreto (ej: 🏊 si hablas de piscina). "
+        "⚠️ Si no tienes la información, dilo claramente: 'No dispongo de ese dato en este momento.' "
+        "No inventes ni añadas datos externos."
     )
 
     enforced = llm_language.invoke([
@@ -61,5 +63,8 @@ def enforce_language(user_msg: str, reply: str, lang: str | None = None) -> str:
         {"role": "system", "content": f"Respuesta propuesta: {reply}"},
         {"role": "user", "content": user_msg},
     ])
+
+    return enforced.content.encode("utf-8", errors="replace").decode("utf-8")
+
 
     return enforced.content.encode("utf-8", errors="replace").decode("utf-8")

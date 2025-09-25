@@ -7,5 +7,14 @@ def load_prompt(filename: str) -> str:
     """
     return (Path("prompts") / filename).read_text(
         encoding="utf-8",
-        errors="replace"   # 👈 evita crash por caracteres corruptos
+        errors="replace"
     )
+
+def sanitize_text(text: str) -> str:
+    """
+    Normaliza cualquier texto a UTF-8 seguro.
+    Reemplaza caracteres inválidos (surrogates) en lugar de romper.
+    """
+    if text is None:
+        return ""
+    return str(text).encode("utf-8", errors="replace").decode("utf-8")

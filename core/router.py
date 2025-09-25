@@ -1,11 +1,11 @@
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from .language import detect_language
-from .state import GraphState
-from .utils_prompt import load_prompt  # 👈 centralizado y seguro
+from core.language import detect_language
+from core.state import GraphState
+from core.utils_prompt import load_prompt
 
 # =========
-# Cargar prompt principal
+# Cargar prompt principal del orquestador BookAI
 # =========
 main_prompt = load_prompt("main_prompt.txt")
 
@@ -22,13 +22,11 @@ class RouteDecision(BaseModel):
 # Mapa de normalización de rutas
 # =========
 ROUTE_MAP = {
-    # General info
     "Información": "general_info",
     "Info": "general_info",
     "General": "general_info",
     "general_info": "general_info",
 
-    # Disponibilidad / Precios
     "Disponibilidad/Precios": "pricing",
     "Disponibilidad": "pricing",
     "Precios": "pricing",
@@ -38,10 +36,10 @@ ROUTE_MAP = {
     "Reserva": "pricing",
     "pricing": "pricing",
 
-    # Interno / Otros
     "Interno": "other",
     "Encargado": "other",
     "Supervisor": "other",
+    "Inciso": "other",
     "other": "other",
 }
 
@@ -55,24 +53,23 @@ def router_node(state: GraphState) -> GraphState:
     try:
         user_lang = detect_language(last_msg)
     except Exception:
-        user_lang = "es"  # 👈 fallback seguro
+        user_lang = "es"
 
-    # Decisión de ruta
+    # Pedir al LLM que decida la ruta según el prompt de BookAI
     structured = llm_router.with_structured_output(RouteDecision)
     decision = structured.invoke([
         {"role": "system", "content": main_prompt},
         {"role": "user", "content": last_msg},
     ])
 
-    # Normalizar ruta
+    # Normalizar la ruta
     normalized_route = ROUTE_MAP.get(decision.route, "other")
 
-    # 👇 Debug por consola para ver decisiones del router
     print(f"🛣️ Router decidió: {decision.route} → {normalized_route}")
 
     return {
         **state,
         "route": normalized_route,
         "rationale": decision.rationale,
-        "language": user_lang,   # 👈 siempre guardamos idioma detectado
+        "language": user_lang,
     }

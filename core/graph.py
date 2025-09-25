@@ -1,8 +1,13 @@
 from langgraph.graph import StateGraph, END
 from .state import GraphState
 from .router import router_node
-from .nodes import general_info_node, pricing_node, other_node
+from .nodes.general_info_node import general_info_node
+from .nodes.pricing_node import pricing_node
+from .nodes.other_node import other_node
 
+# =========
+# Grafo de estados
+# =========
 graph = StateGraph(GraphState)
 
 graph.add_node("router", router_node)
