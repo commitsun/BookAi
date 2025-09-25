@@ -1,21 +1,31 @@
 import json
 from core.state import GraphState
 from core.mcp_client import mcp_client
-from core.utils_prompt import load_prompt
 from core.nodes.other_node import other_node  # fallback
 from core.reply_utils import normalize_reply
+from core.utils_prompt import load_prompt
 
 # =========
-# Prompt externo (si lo usas para estilo/resumen)
+# Prompt externo
 # =========
 info_prompt = load_prompt("info_prompt.txt")
-
 
 # =========
 # General Info Node
 # =========
 async def general_info_node(state: GraphState) -> GraphState:
     user_question = state["messages"][-1]["content"]
+
+    # 🔹 Expansión de sinónimos antes de lanzar la query
+    synonyms = {
+        "correo": ["correo", "email", "correo electrónico", "mail", "e-mail"],
+        "teléfono": ["telefono", "teléfono", "phone", "móvil", "contacto telefónico"],
+        "ubicación": ["ubicación", "dirección", "localización", "address", "dónde está"],
+        "wifi": ["wifi", "wi-fi", "internet", "red"],
+    }
+    for key, values in synonyms.items():
+        if any(v in user_question.lower() for v in values):
+            user_question += f" (también conocido como {', '.join(values)})"
 
     tools = await mcp_client.get_tools(server_name="InfoAgent")
     print("🟢 TOOLS INFO DISPONIBLES:", [t.name for t in tools])

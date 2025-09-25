@@ -14,34 +14,18 @@ main_prompt = load_prompt("main_prompt.txt")
 # =========
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
+# =========
+# Modelo de salida estructurada
+# =========
 class RouteDecision(BaseModel):
-    route: str = Field(..., description="Ruta elegida")
+    route: str = Field(
+        ...,
+        description=(
+            "Ruta elegida. Debe ser exactamente uno de estos valores: "
+            "general_info, pricing, other"
+        )
+    )
     rationale: str = Field(..., description="Razón de la elección")
-
-# =========
-# Mapa de normalización de rutas
-# =========
-ROUTE_MAP = {
-    "Información": "general_info",
-    "Info": "general_info",
-    "General": "general_info",
-    "general_info": "general_info",
-
-    "Disponibilidad/Precios": "pricing",
-    "Disponibilidad": "pricing",
-    "Precios": "pricing",
-    "Precio": "pricing",
-    "Habitaciones": "pricing",
-    "Reservas": "pricing",
-    "Reserva": "pricing",
-    "pricing": "pricing",
-
-    "Interno": "other",
-    "Encargado": "other",
-    "Supervisor": "other",
-    "Inciso": "other",
-    "other": "other",
-}
 
 # =========
 # Nodo router
@@ -49,21 +33,23 @@ ROUTE_MAP = {
 def router_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
 
-    # Detectar idioma con fallback
+    # Detectar idioma con fallback seguro
     try:
         user_lang = detect_language(last_msg)
     except Exception:
         user_lang = "es"
 
-    # Pedir al LLM que decida la ruta según el prompt de BookAI
+    # Pedir al LLM que decida la ruta
     structured = llm_router.with_structured_output(RouteDecision)
     decision = structured.invoke([
         {"role": "system", "content": main_prompt},
         {"role": "user", "content": last_msg},
     ])
 
-    # Normalizar la ruta
-    normalized_route = ROUTE_MAP.get(decision.route, "other")
+    # Normalizar y validar la ruta
+    normalized_route = decision.route.strip().lower()
+    if normalized_route not in ["general_info", "pricing", "other"]:
+        normalized_route = "other"
 
     print(f"🛣️ Router decidió: {decision.route} → {normalized_route}")
 
