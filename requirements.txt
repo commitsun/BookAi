@@ -5,3 +5,5 @@ langgraph
 python-dotenv
 fastmcp>=2.12.3
 mcp
+supabase
+langchain-community
