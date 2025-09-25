@@ -2,38 +2,28 @@ import os
 from langchain_mcp_adapters.client import MultiServerMCPClient
 
 # =========
-# Recuperar API Key
+# Recuperar URL del endpoint MCP
 # =========
-api_key = os.getenv("OPENAI_API_KEY")
-if not api_key:
-    raise RuntimeError("❌ Falta la variable OPENAI_API_KEY en el entorno.")
+mcp_url = os.getenv("ENDPOINT_MCP")
+if not mcp_url:
+    raise RuntimeError("❌ Falta la variable ENDPOINT_MCP en el .env")
 
 # =========
 # Definición de conexiones MCP
+# Todos los agentes usan el mismo endpoint remoto
 # =========
 mcp_connections = {
     "InfoAgent": {
-        "command": "python",
-        "args": ["-m", "agents.info_agent"],
-        "transport": "stdio",
-        "env": {"OPENAI_API_KEY": api_key},
+        "transport": "streamable_http",
+        "url": mcp_url,
     },
     "DispoPreciosAgent": {
         "transport": "streamable_http",
-        "url": "https://n8n-n8n.d6aq21.easypanel.host/mcp/cbc40f16-8756-40b5-ab72-32912227282f",
-        
+        "url": mcp_url,
     },
     "InternoAgent": {
-        "command": "python",
-        "args": ["-m", "agents.interno_agent"],
-        "transport": "stdio",
-        "env": {"OPENAI_API_KEY": api_key},
-    },
-    "KnowledgeBase": {  # 👈 integrado desde tools
-        "command": "python",
-        "args": ["-m", "tools.knowledge_base"],
-        "transport": "stdio",
-        "env": {"OPENAI_API_KEY": api_key},
+        "transport": "streamable_http",
+        "url": mcp_url,
     },
 }
 

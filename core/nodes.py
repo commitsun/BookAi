@@ -16,34 +16,54 @@ interno_prompt = load_prompt("interno_prompt.txt")
 # General Info Node
 # =========
 async def general_info_node(state: GraphState) -> GraphState:
-    # Usamos resumen si existe, si no, concatenamos historial
+    # Usamos resumen si existe, si no, concatenamos historial de usuario
     conversation = state.get("summary") or "\n".join(
         [m["content"] for m in state["messages"] if m["role"] == "user"]
     )
 
+    # 🔌 Pedir tools disponibles al MCP remoto
     tools = await mcp_client.get_tools(server_name="InfoAgent")
-    tool = next(t for t in tools if t.name == "consulta_info")
+    print("🟢 TOOLS INFO DISPONIBLES:", [t.name for t in tools])  # Debug
 
-    reply = await tool.ainvoke({
-        "pregunta": (
-            f"{info_prompt}\n\n"
-            "⚠️ CRÍTICO: No inventes ni añadas información externa. "
-            "Si no tienes el dato, responde que consultarás con el encargado humano.\n\n"
-            f"Historial de la conversación (cliente):\n{conversation}"
-        )
-    })
-
-    final_reply = enforce_language(
-        state["messages"][-1]["content"],
-        reply,
-        state.get("language")  # 👈 siempre pasamos idioma detectado
+    # Buscar tool válida (consulta_info o Base_de_conocimientos_del_hotel)
+    tool = next(
+        (t for t in tools if t.name in ["consulta_info", "Base_de_conocimientos_del_hotel"]),
+        None
     )
+
+    if not tool:
+        final_reply = "⚠️ No encontré ninguna tool válida para responder información general en el MCP remoto."
+    else:
+        try:
+            # 🔎 Debug: mostrar args que espera el endpoint
+            print("🟢 TOOL INFO SCHEMA:", tool.args)
+
+            # Construir parámetros dinámicamente según lo que soporte la tool
+            params = {}
+            if "pregunta" in tool.args:
+                params["pregunta"] = conversation
+            elif "consulta" in tool.args:
+                params["consulta"] = conversation
+            elif "mensaje" in tool.args:
+                params["mensaje"] = conversation
+            else:
+                # fallback genérico
+                params = {"input": conversation}
+
+            raw_reply = await tool.ainvoke(params)
+
+            final_reply = enforce_language(
+                state["messages"][-1]["content"],
+                raw_reply,
+                state.get("language")  # 👈 siempre pasamos idioma detectado
+            )
+        except Exception as e:
+            final_reply = f"⚠️ Error invocando tool de InfoAgent: {e}"
 
     return {
         **state,
         "messages": state["messages"] + [{"role": "assistant", "content": final_reply}],
     }
-
 
 # =========
 # Pricing Node (invocando solo Disponibilidad_y_precios)
