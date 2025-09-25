@@ -2,15 +2,18 @@ import json
 from core.state import GraphState
 from core.language import enforce_language
 from core.mcp_client import mcp_client
-from core.utils_prompt import load_prompt, sanitize_text
-from .other_node import other_node
+from core.utils_prompt import load_prompt
+from core.nodes.other_node import other_node  # 👈 necesario para fallback
 
 # =========
-# Prompt externo
+# Cargar prompt externo
 # =========
 info_prompt = load_prompt("info_prompt.txt")
 
 
+# =========
+# General Info Node
+# =========
 async def general_info_node(state: GraphState) -> GraphState:
     conversation = state.get("summary") or "\n".join(
         [m["content"] for m in state["messages"] if m["role"] == "user"]
@@ -28,7 +31,6 @@ async def general_info_node(state: GraphState) -> GraphState:
         final_reply = "⚠️ No encontré ninguna tool válida para responder información general en el MCP remoto."
     else:
         try:
-            # Parametrización flexible
             params = {}
             if "pregunta" in tool.args:
                 params["pregunta"] = conversation
@@ -43,12 +45,23 @@ async def general_info_node(state: GraphState) -> GraphState:
 
             final_reply = enforce_language(
                 state["messages"][-1]["content"],
-                sanitize_text(raw_reply),
+                raw_reply,
                 state.get("language")
             )
 
-            # 🔹 Fallback automático si InfoAgent no tiene datos
-            if any(x in final_reply.lower() for x in ["no dispongo", "no tengo"]):
+            # 🔹 Forzar fallback si detectamos frases inventadas
+            BLOCKLIST = [
+                "no está permitido",
+                "puede representar un riesgo",
+                "te recomendaría consultar",
+                "podrías considerar",
+            ]
+            if any(b in final_reply.lower() for b in BLOCKLIST):
+                print("⚠️ InfoAgent no tiene datos → fallback a InternoAgent")
+                return await other_node(state)
+
+            # 🔹 Fallback si la respuesta indica que no hay datos
+            if "no dispongo" in final_reply.lower() or "no tengo" in final_reply.lower():
                 print("⚠️ InfoAgent no tiene datos → fallback a InternoAgent")
                 return await other_node(state)
 

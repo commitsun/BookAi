@@ -2,11 +2,18 @@ import json
 from core.state import GraphState
 from core.language import enforce_language
 from core.mcp_client import mcp_client
-from core.utils_prompt import load_prompt, sanitize_text
+from core.utils_prompt import load_prompt
+from core.nodes.other_node import other_node  # 👈 fallback si no hay datos
 
+# =========
+# Cargar prompt externo
+# =========
 dispo_precios_prompt = load_prompt("dispo_precios_prompt.txt")
 
 
+# =========
+# Pricing Node
+# =========
 async def pricing_node(state: GraphState) -> GraphState:
     conversation = state.get("summary") or "\n".join(
         [m["content"] for m in state["messages"] if m["role"] == "user"]
@@ -15,7 +22,7 @@ async def pricing_node(state: GraphState) -> GraphState:
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
     print("🟢 TOOLS DISPONIBLES:", [t.name for t in tools])  # Debug
 
-    # 1️⃣ Token
+    # 1️⃣ Sacamos el token con la tool buscar_token
     token = None
     try:
         token_tool = next(t for t in tools if t.name == "buscar_token")
@@ -23,7 +30,7 @@ async def pricing_node(state: GraphState) -> GraphState:
         print("🟢 TOKEN RAW:", token_raw)
 
         token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
-        if isinstance(token_data, list) and token_data:
+        if isinstance(token_data, list) and len(token_data) > 0:
             token = token_data[0].get("key")
         elif isinstance(token_data, dict):
             token = token_data.get("key")
@@ -37,7 +44,7 @@ async def pricing_node(state: GraphState) -> GraphState:
             **state,
             "messages": state["messages"] + [{
                 "role": "assistant",
-                "content": "⚠️ No pude obtener el token de autorización. Revisa la configuración."
+                "content": "No dispongo de ese dato en este momento."
             }],
         }
 
@@ -49,11 +56,11 @@ async def pricing_node(state: GraphState) -> GraphState:
             **state,
             "messages": state["messages"] + [{
                 "role": "assistant",
-                "content": "⚠️ No encontré la tool 'Disponibilidad_y_precios' en el MCP remoto."
+                "content": "No dispongo de ese dato en este momento."
             }],
         }
 
-    # 3️⃣ Params dummy → luego se ajustará dinámicamente
+    # 3️⃣ Construimos parámetros de prueba (aquí puedes adaptar a fechas reales)
     params = {
         "checkin": "2025-10-25T00:00:00",
         "checkout": "2025-10-27T00:00:00",
@@ -62,31 +69,37 @@ async def pricing_node(state: GraphState) -> GraphState:
     }
     print("🟢 PARAMS ENVIADOS:", params)
 
-    # 🚀 Llamada
+    # 🚀 Llamamos a la tool de disponibilidad
     raw_reply = await dispo_tool.ainvoke(params)
     print("🟢 RAW REPLY DEL MCP:", raw_reply)
 
+    # Procesamos la respuesta
     try:
-        rooms = json.loads(sanitize_text(raw_reply)) if isinstance(raw_reply, str) else raw_reply
+        rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
         if not rooms:
-            final_reply = "No encontré disponibilidad en esas fechas."
+            final_reply = "No dispongo de ese dato en este momento."
         else:
             opciones = "\n".join(
                 f"- {r['roomTypeName']}: {r['avail']} disponibles → {r['price']}€ por noche"
                 for r in rooms
             )
             final_reply = (
-                f"Opciones disponibles del {params['checkin']} "
+                f"Estas son las opciones disponibles del {params['checkin']} "
                 f"al {params['checkout']} para {params['occupancy']} personas:\n{opciones}"
             )
-    except Exception as e:
-        final_reply = f"⚠️ Error procesando la respuesta de disponibilidad: {e}"
+    except Exception:
+        final_reply = "No dispongo de ese dato en este momento."
 
     final_reply = enforce_language(
         state["messages"][-1]["content"],
-        sanitize_text(final_reply),
+        final_reply,
         state.get("language")
     )
+
+    # 🔹 Si la IA decide que no hay datos → fallback a Interno
+    if "no dispongo de ese dato en este momento" in final_reply.lower():
+        print("⚠️ PricingAgent no tiene datos → fallback a InternoAgent")
+        return await other_node(state)
 
     return {
         **state,
