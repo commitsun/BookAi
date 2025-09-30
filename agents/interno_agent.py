@@ -1,11 +1,11 @@
 from fastmcp import FastMCP
-from core.message_composition.language import enforce_language, detect_language
+from core.language import enforce_language, detect_language
 from core.message_composition.utils_prompt import load_prompt
 from dotenv import load_dotenv
 
 load_dotenv()
-interno_prompt = load_prompt("interno_prompt.txt")
 
+interno_prompt = load_prompt("interno_prompt.txt")
 mcp = FastMCP("InternoAgent")
 
 @mcp.tool()
@@ -16,9 +16,7 @@ async def consulta_encargado(mensaje: str) -> str:
     """
     try:
         lang = detect_language(mensaje)
-        reply = "No dispongo de ese dato en este momento."
-        return enforce_language(mensaje, reply, lang)
-
+        return enforce_language(mensaje, "No dispongo de ese dato en este momento.", lang)
     except Exception as e:
         return f"⚠️ Error en InternoAgent: {e}"
 

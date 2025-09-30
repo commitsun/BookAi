@@ -1,9 +1,9 @@
 import json
-from core.message_composition.language import enforce_language
+from core.language import enforce_language
 
-def normalize_reply(raw_reply, user_question, language=None, source="InfoAgent"):
+def normalize_reply(raw_reply, user_question, language=None, source="InfoAgent") -> str:
     """
-    Convierte la respuesta cruda de n8n/MCP en un texto limpio.
+    Convierte la respuesta cruda en texto limpio y forzado al idioma correcto.
     """
     final_reply = ""
 
@@ -45,8 +45,6 @@ def normalize_reply(raw_reply, user_question, language=None, source="InfoAgent")
         final_reply = f"⚠️ Error procesando respuesta de {source}: {e}"
 
     final_reply = enforce_language(user_question, final_reply, language)
-
     preview = final_reply[:200].replace("\n", " ")
     print(f"🟢 CLEAN REPLY ({source}): {preview}...")
-
     return final_reply

@@ -1,21 +1,17 @@
 import json
 import logging
 from core.state import GraphState
-from core.message_composition.language import enforce_language
+from core.language import enforce_language
 from core.mcp_client import mcp_client
-from core.message_composition.utils_prompt import load_prompt
-from core.nodes.other_node import other_node 
+from .other_node import other_node
 
 logger = logging.getLogger(__name__)
 
-dispo_precios_prompt = load_prompt("dispo_precios_prompt.txt")
-
 async def pricing_node(state: GraphState) -> GraphState:
     user_msg = state["messages"][-1]["content"]
-
     tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
-    logger.debug(f"TOOLS DISPONIBLES: {[t.name for t in tools]}")
 
+    # Obtener token
     token = None
     try:
         token_tool = next(t for t in tools if t.name == "buscar_token")
@@ -25,7 +21,6 @@ async def pricing_node(state: GraphState) -> GraphState:
             token = token_data[0].get("key")
         elif isinstance(token_data, dict):
             token = token_data.get("key")
-        logger.debug(f"TOKEN obtenido: {token}")
     except Exception as e:
         logger.error(f"Error obteniendo token: {e}")
 
@@ -38,9 +33,9 @@ async def pricing_node(state: GraphState) -> GraphState:
             }],
         }
 
-    try:
-        dispo_tool = next(t for t in tools if t.name == "Disponibilidad_y_precios")
-    except StopIteration:
+    # Buscar disponibilidad y precios
+    dispo_tool = next((t for t in tools if t.name == "Disponibilidad_y_precios"), None)
+    if not dispo_tool:
         return {
             **state,
             "messages": state["messages"] + [{
@@ -53,16 +48,13 @@ async def pricing_node(state: GraphState) -> GraphState:
         "checkin": "2025-10-25T00:00:00",
         "checkout": "2025-10-27T00:00:00",
         "occupancy": 2,
-        "key": token
+        "key": token,
     }
-    logger.debug(f"PARAMS ENVIADOS: {params}")
 
-    raw_reply = await dispo_tool.ainvoke(params)
-    logger.debug(f"RAW REPLY (PricingAgent): {raw_reply}")
-
-    final_reply = "No dispongo de ese dato en este momento."
     try:
+        raw_reply = await dispo_tool.ainvoke(params)
         rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+
         if isinstance(rooms, list) and rooms:
             opciones = "\n".join(
                 f"- {r['roomTypeName']}: {r['avail']} disponibles · {r['price']}€/noche"
@@ -72,13 +64,16 @@ async def pricing_node(state: GraphState) -> GraphState:
                 f"Estas son las opciones disponibles del {params['checkin'][:10]} "
                 f"al {params['checkout'][:10]} para {params['occupancy']} personas:\n{opciones}"
             )
+        else:
+            final_reply = "No dispongo de ese dato en este momento."
     except Exception as e:
         logger.error(f"Error procesando disponibilidad: {e}")
+        final_reply = "No dispongo de ese dato en este momento."
 
     final_reply = enforce_language(user_msg, final_reply, state.get("language"))
 
     if "no dispongo" in final_reply.lower():
-        logger.warning("PricingAgent no tiene datos → fallback a InternoAgent")
+        logger.warning("PricingAgent sin datos → fallback a InternoAgent")
         return await other_node(state)
 
     return {

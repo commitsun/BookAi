@@ -1,4 +1,3 @@
-import json
 import logging
 from core.state import GraphState
 from core.mcp_client import mcp_client
@@ -10,8 +9,6 @@ async def other_node(state: GraphState) -> GraphState:
     user_question = state["messages"][-1]["content"]
 
     tools = await mcp_client.get_tools(server_name="InternoAgent")
-    logger.debug(f"TOOLS INTERNO DISPONIBLES: {[t.name for t in tools]}")
-
     tool = next((t for t in tools if t.name == "Base_de_conocimientos_del_hotel"), None)
 
     if not tool:
@@ -19,18 +16,10 @@ async def other_node(state: GraphState) -> GraphState:
     else:
         try:
             raw_reply = await tool.ainvoke({"input": user_question})
-            logger.debug(f"RAW REPLY (InternoAgent): {raw_reply}")
-
-            final_reply = normalize_reply(
-                raw_reply,
-                user_question,
-                state.get("language"),
-                source="InternoAgent"
-            )
-
+            final_reply = normalize_reply(raw_reply, user_question, state.get("language"), source="InternoAgent")
         except Exception as e:
-            logger.error(f"Error invocando Base_de_conocimientos_del_hotel (Interno): {e}")
-            final_reply = f"⚠️ Error invocando Base_de_conocimientos_del_hotel (Interno): {e}"
+            logger.error(f"Error en InternoAgent: {e}")
+            final_reply = "No dispongo de ese dato en este momento."
 
     return {
         **state,

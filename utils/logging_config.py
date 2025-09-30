@@ -1,8 +1,7 @@
 import logging
 
-def silence_logs():
-    """Silencia todos los logs molestos de librerías externas."""
-    logging.getLogger().handlers.clear()
-    logging.basicConfig(level=logging.CRITICAL, force=True)
-    for lib in ["uvicorn", "uvicorn.error", "uvicorn.access", "mcp", "fastmcp"]:
-        logging.getLogger(lib).setLevel(logging.CRITICAL)
+def configure_logging(level=logging.INFO):
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+    )
