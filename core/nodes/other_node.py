@@ -2,7 +2,7 @@ import json
 import logging
 from core.state import GraphState
 from core.mcp_client import mcp_client
-from core.reply_utils import normalize_reply
+from core.message_composition.reply_utils import normalize_reply
 
 logger = logging.getLogger(__name__)
 

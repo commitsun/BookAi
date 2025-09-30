@@ -1,8 +1,8 @@
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
-from core.language import detect_language
+from core.message_composition.language import detect_language
 from core.state import GraphState
-from core.utils_prompt import load_prompt
+from core.message_composition.utils_prompt import load_prompt
 
 # =========
 # Cargar prompt principal del orquestador BookAI

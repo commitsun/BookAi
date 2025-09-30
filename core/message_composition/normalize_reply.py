@@ -1,5 +1,5 @@
 import json
-from core.language import enforce_language
+from core.message_composition.language import enforce_language
 
 def normalize_reply(raw_reply, user_question, language=None, source="InfoAgent"):
     """

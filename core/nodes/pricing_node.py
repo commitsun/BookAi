@@ -1,10 +1,10 @@
 import json
 import logging
 from core.state import GraphState
-from core.language import enforce_language
+from core.message_composition.language import enforce_language
 from core.mcp_client import mcp_client
-from core.utils_prompt import load_prompt
-from core.nodes.other_node import other_node  # fallback
+from core.message_composition.utils_prompt import load_prompt
+from core.nodes.other_node import other_node 
 
 logger = logging.getLogger(__name__)
 

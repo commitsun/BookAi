@@ -2,8 +2,8 @@ import json
 from core.state import GraphState
 from core.mcp_client import mcp_client
 from core.nodes.other_node import other_node  # fallback
-from core.reply_utils import normalize_reply
-from core.utils_prompt import load_prompt
+from core.message_composition.reply_utils import normalize_reply
+from core.message_composition.utils_prompt import load_prompt
 
 # =========
 # Prompt externo
