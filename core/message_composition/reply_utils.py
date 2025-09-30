@@ -46,5 +46,5 @@ def normalize_reply(raw_reply, user_question, language=None, source="InfoAgent")
 
     final_reply = enforce_language(user_question, final_reply, language)
     preview = final_reply[:200].replace("\n", " ")
-    print(f"🟢 CLEAN REPLY ({source}): {preview}...")
+    #print(f"🟢 CLEAN REPLY ({source}): {preview}...")
     return final_reply

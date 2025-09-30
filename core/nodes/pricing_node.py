@@ -1,5 +1,3 @@
-# core/nodes/pricing_node.py
-
 import json
 import logging
 from core.state import GraphState

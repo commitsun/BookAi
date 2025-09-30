@@ -1,5 +1,3 @@
-# core/nodes/general_info_node.py
-
 from core.state import GraphState
 from core.mcp_client import mcp_client
 from core.message_composition.reply_utils import normalize_reply
