@@ -1,43 +1,54 @@
+# core/router.py
+
+from typing import Optional
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
 from core.state import GraphState
 from core.language import detect_language
 from core.message_composition.utils_prompt import load_prompt
 
-# Prompt principal
 main_prompt = load_prompt("main_prompt.txt")
 
-# Modelos LLM
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 llm_think = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 
-# Estructura de salida
+
 class RouteDecision(BaseModel):
     route: str = Field(..., description="Ruta: general_info, pricing, other")
     rationale: str = Field(..., description="Razón de la decisión")
 
+
 def router_node(state: GraphState) -> GraphState:
     last_msg = state["messages"][-1]["content"]
 
-    # 🔹 Detectar idioma
     try:
         user_lang = detect_language(last_msg)
     except Exception:
         user_lang = "es"
 
-    # 🔹 Paso 1: THINK en lenguaje natural (recapitulación)
+    # 🔹 Paso 1: THINK — recapitulación clara y concisa
+    think_prompt = (
+        "Eres un analista de intención. Resume el último mensaje del usuario en UNA sola frase "
+        "siguiendo EXACTAMENTE este formato:\n\n"
+        "La intención del usuario es ...\n\n"
+        "Reglas:\n"
+        "- Explica únicamente la intención, sin dar consejos ni sugerencias.\n"
+        "- No hagas preguntas ni pidas más datos.\n"
+        "- No menciones herramientas, procesos ni webs.\n"
+        "- Sé neutral, claro y conciso (máx. 40 palabras).\n"
+        "- Si es un saludo, usa: 'La intención del usuario es saludar e iniciar la conversación.'\n"
+        "- Escribe siempre en el idioma del usuario."
+    )
+
     think_result = llm_think.invoke([
-        {
-            "role": "system",
-            "content": (
-                "Reflexiona en lenguaje natural sobre la intención del usuario. "
-                "Haz un breve resumen explicando lo que está buscando, sin dar respuesta todavía. "
-                "Ejemplo: 'La intención del usuario es consultar la disponibilidad de habitaciones...'"
-            ),
-        },
+        {"role": "system", "content": think_prompt},
         {"role": "user", "content": last_msg},
     ])
     rationale = think_result.content.strip()
+
+    # Garantizar formato correcto
+    if not rationale.lower().startswith("la intención del usuario es"):
+        rationale = f"La intención del usuario es {rationale.rstrip('.')}."
 
     # 🔹 Paso 2: Routing estructurado
     structured = llm_router.with_structured_output(RouteDecision)
@@ -50,11 +61,6 @@ def router_node(state: GraphState) -> GraphState:
     if normalized_route not in ["general_info", "pricing", "other"]:
         normalized_route = "other"
 
-    # 🔹 Regla: si Think menciona saludo → forzar "other"
-    if "saludo" in rationale.lower() or "greeting" in rationale.lower():
-        normalized_route = "other"
-
-    # Logs internos
     print(f"🛣️ Router decidió: {decision.route} → {normalized_route}")
     print(f"💭 Think: {rationale}")
 
