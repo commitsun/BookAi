@@ -1,12 +1,14 @@
 services:
-  hotelai:
+  hotelai-whatsapp:
     build: .
-    container_name: hotelai
+    container_name: hotelai-whatsapp
     tty: true
     stdin_open: true
     env_file:
       - .env
     volumes:
       - .:/app
+    ports:
+      - "8000:8000"
     command: >
-      sh -c "python chat_cli.py 2>/dev/null"
+      sh -c "uvicorn channels_wrapper.channels.whatsapp_meta:fastapi_app --host 0.0.0.0 --port 8000"

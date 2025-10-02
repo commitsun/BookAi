@@ -9,3 +9,6 @@ supabase
 langchain-community
 python-dotenv
 datetime
+fastapi 
+uvicorn 
+requests
