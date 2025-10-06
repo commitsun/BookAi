@@ -22,7 +22,7 @@ conversations = {}
 processed_ids = set()
 
 # ------------------------------------------------------------------
-# 🧩 Fragmentar texto naturalmente
+# Fragmentar texto naturalmente
 # ------------------------------------------------------------------
 def fragment_text_intelligently(text: str) -> list[str]:
     text = re.sub(r'\n{2,}', '\n', text.strip())
@@ -76,7 +76,7 @@ def fragment_text_intelligently(text: str) -> list[str]:
 
 
 # ------------------------------------------------------------------
-# 🧩 Enviar mensajes con simulación de escritura
+# Enviar mensajes con simulación de escritura
 # ------------------------------------------------------------------
 def send_message(to: str, text: str):
     url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
