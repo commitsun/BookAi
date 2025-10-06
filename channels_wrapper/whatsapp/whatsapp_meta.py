@@ -1,6 +1,9 @@
 import os
 import requests
 import json
+import re
+import time
+import random
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from core.graph import app as bot_app
@@ -18,8 +21,128 @@ fastapi_app = FastAPI()
 # 🔹 Guardar conversaciones en memoria (diccionario por usuario)
 conversations = {}
 
+# ------------------------------------------------------------------
+# 🧩 FUNCIÓN: Fragmentar texto de forma natural
+# ------------------------------------------------------------------
+def fragment_text_intelligently(text: str) -> list[str]:
+    """
+    Divide el texto en fragmentos naturales y legibles:
+    conserva listas y formato, evitando mensajes demasiado cortos o largos.
+    """
+    # Normaliza saltos de línea múltiples
+    text = re.sub(r'\n{2,}', '\n', text.strip())
 
-# --- Verificación inicial con Meta ---
+    # Divide por párrafos o bloques de listas
+    raw_parts = re.split(r'(?:(?<=\n)\d+\.|\n-|\n•|\n(?=[A-Z]))', text)
+
+    fragments = []
+    buffer = ""
+
+    for part in raw_parts:
+        p = part.strip()
+        if not p:
+            continue
+
+        # Si es una viñeta o numeración, agrupar líneas relacionadas
+        if re.match(r'^(\d+\.|-|•)\s', p):
+            if buffer:
+                fragments.append(buffer.strip())
+                buffer = ""
+            fragments.append(p)
+            continue
+
+        # Si el párrafo es demasiado largo, lo cortamos con cuidado
+        if len(p) > 500:
+            subparts = re.split(r'(?<=[.!?])\s+', p)
+            temp_chunk = ""
+            for s in subparts:
+                if len(temp_chunk) + len(s) < 300:
+                    temp_chunk += (" " if temp_chunk else "") + s
+                else:
+                    fragments.append(temp_chunk.strip())
+                    temp_chunk = s
+            if temp_chunk:
+                fragments.append(temp_chunk.strip())
+        else:
+            # Acumulamos párrafos pequeños juntos para no enviar mensajes de una línea
+            if len(buffer) + len(p) < 400:
+                buffer += ("\n\n" if buffer else "") + p
+            else:
+                fragments.append(buffer.strip())
+                buffer = p
+
+    if buffer:
+        fragments.append(buffer.strip())
+
+    # 🔹 Limitar a 4 fragmentos máximo para evitar saturar
+    if len(fragments) > 4:
+        merged = []
+        temp = ""
+        for f in fragments:
+            if len(temp) + len(f) < 500:
+                temp += ("\n\n" if temp else "") + f
+            else:
+                merged.append(temp)
+                temp = f
+        if temp:
+            merged.append(temp)
+        fragments = merged[:4]
+
+    return fragments
+
+
+# ------------------------------------------------------------------
+# 🧩 FUNCIÓN: Enviar mensajes simulando escritura humana
+# ------------------------------------------------------------------
+def send_message(to: str, text: str):
+    """Envía un mensaje dividido en fragmentos, simulando escritura humana."""
+    url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
+    headers = {
+        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+        "Content-Type": "application/json"
+    }
+
+    # 1️⃣ Dividir mensaje en fragmentos
+    fragments = fragment_text_intelligently(text)
+
+    for i, frag in enumerate(fragments):
+        # 2️⃣ Simular que el bot está escribiendo
+        typing_payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "typing_on"
+        }
+        requests.post(url, headers=headers, json=typing_payload)
+
+        # Tiempo de espera proporcional al tamaño del texto
+        delay = random.uniform(1.5, 3.5) if len(frag) < 80 else random.uniform(3.0, 5.0)
+        time.sleep(delay)
+
+        # 3️⃣ Enviar fragmento
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "text",
+            "text": {"body": frag}
+        }
+        r = requests.post(url, headers=headers, json=payload)
+        print(f"📤 Enviado fragmento {i+1}/{len(fragments)} ({r.status_code})")
+
+        # 4️⃣ Desactivar "escribiendo"
+        stop_typing_payload = {
+            "messaging_product": "whatsapp",
+            "to": to,
+            "type": "typing_off"
+        }
+        requests.post(url, headers=headers, json=stop_typing_payload)
+
+        # 5️⃣ Pausa entre fragmentos
+        time.sleep(random.uniform(0.5, 1.5))
+
+
+# ------------------------------------------------------------------
+# --- Webhook de verificación ---
+# ------------------------------------------------------------------
 @fastapi_app.get("/webhook")
 async def verify_webhook(request: Request):
     params = request.query_params
@@ -32,23 +155,33 @@ async def verify_webhook(request: Request):
     return PlainTextResponse("Error de verificación", status_code=403)
 
 
+# ------------------------------------------------------------------
 # --- Webhook mensajes entrantes ---
+# ------------------------------------------------------------------
 @fastapi_app.post("/webhook")
 async def whatsapp_webhook(request: Request):
     data = await request.json()
     print("📩 Payload recibido:\n", json.dumps(data, indent=2, ensure_ascii=False))
 
     try:
-        entry = data["entry"][0]["changes"][0]["value"]
+        entry = data.get("entry", [])[0]["changes"][0]["value"]
 
+        # ⚠️ Evita procesar notificaciones sin mensajes
         if "messages" not in entry:
             return JSONResponse({"status": "ok"})
 
         msg = entry["messages"][0]
         msg_type = msg.get("type")
         user_id = msg["from"]
+        msg_id = msg.get("id")
 
-        # 🔹 Inicializar historial del usuario si no existe
+        # ⚙️ Evita procesar el mismo mensaje dos veces (Meta puede reenviar)
+        if hasattr(whatsapp_webhook, "_last_msg_id") and whatsapp_webhook._last_msg_id == msg_id:
+            print("🔁 Mensaje duplicado ignorado.")
+            return JSONResponse({"status": "duplicate_ignored"})
+        whatsapp_webhook._last_msg_id = msg_id
+
+        # Inicializar historial del usuario
         if user_id not in conversations:
             conversations[user_id] = [
                 {
@@ -62,7 +195,7 @@ async def whatsapp_webhook(request: Request):
                 }
             ]
 
-        # 📝 Extraer texto del mensaje según tipo
+        # 🧠 Extraer texto según tipo
         if msg_type == "text":
             user_msg = msg["text"]["body"]
 
@@ -80,20 +213,18 @@ async def whatsapp_webhook(request: Request):
         else:
             user_msg = f"[Mensaje tipo {msg_type} no soportado]"
 
-        # 🔹 Guardar mensaje del usuario en el historial
+        # Guardar mensaje del usuario
         conversations[user_id].append({"role": "user", "content": user_msg})
 
-        # 🚀 Pasar historial completo al bot
+        # 🚀 Obtener respuesta del bot
         state = {"messages": conversations[user_id]}
         state = await bot_app.ainvoke(state)
         reply = state["messages"][-1]["content"]
 
-        # 🔹 Guardar respuesta en el historial
-        conversations[user_id].append({"role": "user", "content": user_msg})
+        # Guardar respuesta del bot
         conversations[user_id].append({"role": "assistant", "content": reply})
-        
 
-        # 📤 Enviar respuesta al usuario
+        # 💬 Enviar respuesta fragmentada y natural
         send_message(user_id, reply)
 
     except Exception as e:
@@ -102,7 +233,9 @@ async def whatsapp_webhook(request: Request):
     return JSONResponse({"status": "ok"})
 
 
+# ------------------------------------------------------------------
 # --- Funciones auxiliares ---
+# ------------------------------------------------------------------
 def download_media(media_id: str, filename: str):
     """Descarga imagen/audio desde WhatsApp Graph API"""
     url = f"https://graph.facebook.com/v19.0/{media_id}"
@@ -143,19 +276,3 @@ def transcribir_audio(filepath: str) -> str:
     texto = transcript.text.strip()
     print(f"📝 Transcripción: {texto}")
     return texto or "[Audio vacío]"
-
-
-def send_message(to: str, text: str):
-    url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
-    headers = {
-        "Authorization": f"Bearer {WHATSAPP_TOKEN}",
-        "Content-Type": "application/json"
-    }
-    payload = {
-        "messaging_product": "whatsapp",
-        "to": to,
-        "type": "text",
-        "text": {"body": text}
-    }
-    r = requests.post(url, headers=headers, json=payload)
-    print("📤 Respuesta de Meta:", r.status_code, r.text)
