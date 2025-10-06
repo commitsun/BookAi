@@ -7,14 +7,15 @@ import random
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 from core.graph import app as bot_app
-import openai
+from openai import OpenAI
 
 # --- Configuración ---
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
 
-openai.api_key = os.getenv("OPENAI_API_KEY")
+# 🔑 Inicializa el cliente de OpenAI
+client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
 fastapi_app = FastAPI()
 
@@ -29,10 +30,7 @@ def fragment_text_intelligently(text: str) -> list[str]:
     Divide el texto en fragmentos naturales y legibles:
     conserva listas y formato, evitando mensajes demasiado cortos o largos.
     """
-    # Normaliza saltos de línea múltiples
     text = re.sub(r'\n{2,}', '\n', text.strip())
-
-    # Divide por párrafos o bloques de listas
     raw_parts = re.split(r'(?:(?<=\n)\d+\.|\n-|\n•|\n(?=[A-Z]))', text)
 
     fragments = []
@@ -43,7 +41,6 @@ def fragment_text_intelligently(text: str) -> list[str]:
         if not p:
             continue
 
-        # Si es una viñeta o numeración, agrupar líneas relacionadas
         if re.match(r'^(\d+\.|-|•)\s', p):
             if buffer:
                 fragments.append(buffer.strip())
@@ -51,7 +48,6 @@ def fragment_text_intelligently(text: str) -> list[str]:
             fragments.append(p)
             continue
 
-        # Si el párrafo es demasiado largo, lo cortamos con cuidado
         if len(p) > 500:
             subparts = re.split(r'(?<=[.!?])\s+', p)
             temp_chunk = ""
@@ -64,7 +60,6 @@ def fragment_text_intelligently(text: str) -> list[str]:
             if temp_chunk:
                 fragments.append(temp_chunk.strip())
         else:
-            # Acumulamos párrafos pequeños juntos para no enviar mensajes de una línea
             if len(buffer) + len(p) < 400:
                 buffer += ("\n\n" if buffer else "") + p
             else:
@@ -74,7 +69,6 @@ def fragment_text_intelligently(text: str) -> list[str]:
     if buffer:
         fragments.append(buffer.strip())
 
-    # 🔹 Limitar a 4 fragmentos máximo para evitar saturar
     if len(fragments) > 4:
         merged = []
         temp = ""
@@ -102,11 +96,9 @@ def send_message(to: str, text: str):
         "Content-Type": "application/json"
     }
 
-    # 1️⃣ Dividir mensaje en fragmentos
     fragments = fragment_text_intelligently(text)
 
     for i, frag in enumerate(fragments):
-        # 2️⃣ Simular que el bot está escribiendo
         typing_payload = {
             "messaging_product": "whatsapp",
             "to": to,
@@ -114,11 +106,9 @@ def send_message(to: str, text: str):
         }
         requests.post(url, headers=headers, json=typing_payload)
 
-        # Tiempo de espera proporcional al tamaño del texto
         delay = random.uniform(1.5, 3.5) if len(frag) < 80 else random.uniform(3.0, 5.0)
         time.sleep(delay)
 
-        # 3️⃣ Enviar fragmento
         payload = {
             "messaging_product": "whatsapp",
             "to": to,
@@ -128,7 +118,6 @@ def send_message(to: str, text: str):
         r = requests.post(url, headers=headers, json=payload)
         print(f"📤 Enviado fragmento {i+1}/{len(fragments)} ({r.status_code})")
 
-        # 4️⃣ Desactivar "escribiendo"
         stop_typing_payload = {
             "messaging_product": "whatsapp",
             "to": to,
@@ -136,7 +125,6 @@ def send_message(to: str, text: str):
         }
         requests.post(url, headers=headers, json=stop_typing_payload)
 
-        # 5️⃣ Pausa entre fragmentos
         time.sleep(random.uniform(0.5, 1.5))
 
 
@@ -166,7 +154,6 @@ async def whatsapp_webhook(request: Request):
     try:
         entry = data.get("entry", [])[0]["changes"][0]["value"]
 
-        # ⚠️ Evita procesar notificaciones sin mensajes
         if "messages" not in entry:
             return JSONResponse({"status": "ok"})
 
@@ -175,13 +162,11 @@ async def whatsapp_webhook(request: Request):
         user_id = msg["from"]
         msg_id = msg.get("id")
 
-        # ⚙️ Evita procesar el mismo mensaje dos veces (Meta puede reenviar)
         if hasattr(whatsapp_webhook, "_last_msg_id") and whatsapp_webhook._last_msg_id == msg_id:
             print("🔁 Mensaje duplicado ignorado.")
             return JSONResponse({"status": "duplicate_ignored"})
         whatsapp_webhook._last_msg_id = msg_id
 
-        # Inicializar historial del usuario
         if user_id not in conversations:
             conversations[user_id] = [
                 {
@@ -195,7 +180,6 @@ async def whatsapp_webhook(request: Request):
                 }
             ]
 
-        # 🧠 Extraer texto según tipo
         if msg_type == "text":
             user_msg = msg["text"]["body"]
 
@@ -213,18 +197,14 @@ async def whatsapp_webhook(request: Request):
         else:
             user_msg = f"[Mensaje tipo {msg_type} no soportado]"
 
-        # Guardar mensaje del usuario
         conversations[user_id].append({"role": "user", "content": user_msg})
 
-        # 🚀 Obtener respuesta del bot
         state = {"messages": conversations[user_id]}
         state = await bot_app.ainvoke(state)
         reply = state["messages"][-1]["content"]
 
-        # Guardar respuesta del bot
         conversations[user_id].append({"role": "assistant", "content": reply})
 
-        # 💬 Enviar respuesta fragmentada y natural
         send_message(user_id, reply)
 
     except Exception as e:
@@ -264,15 +244,20 @@ def download_media(media_id: str, filename: str):
 
 def transcribir_audio(filepath: str) -> str:
     """Transcribe un audio usando Whisper de OpenAI"""
-    if not filepath or not os.path.exists(filepath):
-        return "[Error: no se pudo descargar el audio]"
+    try:
+        if not filepath or not os.path.exists(filepath):
+            return "[Error: no se pudo descargar el audio]"
 
-    with open(filepath, "rb") as f:
-        transcript = openai.audio.transcriptions.create(
-            model="whisper-1",
-            file=f,
-            prompt="Pregunta de un cliente sobre un hotel. Transcribe lo más claro posible."
-        )
-    texto = transcript.text.strip()
-    print(f"📝 Transcripción: {texto}")
-    return texto or "[Audio vacío]"
+        with open(filepath, "rb") as f:
+            transcript = client.audio.transcriptions.create(
+                model="whisper-1",
+                file=f,
+                prompt="Pregunta de un cliente sobre un hotel. Transcribe lo más claro posible."
+            )
+
+        texto = transcript.text.strip()
+        print(f"📝 Transcripción: {texto}")
+        return texto or "[Audio vacío]"
+    except Exception as e:
+        print("⚠️ Error al transcribir audio:", e)
+        return "[Error al transcribir el audio]"
