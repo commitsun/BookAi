@@ -20,8 +20,6 @@ mcp_connections = {
 # Inicializar cliente multi-servidor
 mcp_client = MultiServerMCPClient(mcp_connections)
 
-
-# 🔹 Opcional: ejemplo de loop para procesar eventos
 async def listen_events(client: MultiServerMCPClient, handle_event):
     async for event in client.events():
         # Ignorar "endpoint" u otros eventos desconocidos

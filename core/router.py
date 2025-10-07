@@ -1,5 +1,3 @@
-# core/router.py
-
 from typing import Optional
 from pydantic import BaseModel, Field
 from langchain_openai import ChatOpenAI
@@ -11,7 +9,6 @@ main_prompt = load_prompt("main_prompt.txt")
 
 llm_router = ChatOpenAI(model="gpt-4o-mini", temperature=0)
 llm_think = ChatOpenAI(model="gpt-4o-mini", temperature=0)
-
 
 class RouteDecision(BaseModel):
     route: str = Field(..., description="Ruta: general_info, pricing, other")
@@ -26,7 +23,6 @@ def router_node(state: GraphState) -> GraphState:
     except Exception:
         user_lang = "es"
 
-    # 🔹 Paso 1: THINK — recapitulación clara y concisa
     think_prompt = (
         "Eres un analista de intención. Resume el último mensaje del usuario en UNA sola frase "
         "siguiendo EXACTAMENTE este formato:\n\n"
@@ -56,7 +52,7 @@ def router_node(state: GraphState) -> GraphState:
         {"role": "system", "content": main_prompt},
         {"role": "user", "content": last_msg},
     ])
-
+ 
     normalized_route = decision.route.strip().lower()
     if normalized_route not in ["general_info", "pricing", "other"]:
         normalized_route = "other"
