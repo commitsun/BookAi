@@ -1,6 +1,6 @@
 from abc import ABC, abstractmethod
 from openai import OpenAI
-from core.graph import app as bot_app
+from core.main_agent import HotelAIHybrid
 from channels_wrapper.utils.text_utils import fragment_text_intelligently, sleep_typing
 
 
@@ -63,9 +63,9 @@ class BaseChannel(ABC):
         self.conversations[user_id].append({"role": "user", "content": user_msg})
 
         # Ejecutar el grafo principal (tu bot)
-        state = {"messages": self.conversations[user_id]}
-        state = await bot_app.ainvoke(state)
-        reply = state["messages"][-1]["content"]
+        # Ejecutar el agente híbrido
+        agent = HotelAIHybrid()
+        reply = await agent.process_message(user_msg)
 
         # Añadir la respuesta del asistente
         self.conversations[user_id].append({"role": "assistant", "content": reply})
