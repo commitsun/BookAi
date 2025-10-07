@@ -1,25 +1,37 @@
+import logging
 from fastmcp import FastMCP
+from dotenv import load_dotenv
 from core.language import enforce_language, detect_language
 from utils.utils_prompt import load_prompt
-from dotenv import load_dotenv
 
+# ✅ Cargar entorno
 load_dotenv()
 
-interno_prompt = load_prompt("interno_prompt.txt")
+# ✅ Configurar logs
+logger = logging.getLogger("InternoAgent")
+
+# ✅ Inicializar agente
 mcp = FastMCP("InternoAgent")
+
+# ✅ Cargar prompt contextual
+INTERNAL_PROMPT = load_prompt("interno_prompt.txt")
+
 
 @mcp.tool()
 async def consulta_encargado(mensaje: str) -> str:
     """
-    El InternoAgent nunca inventa datos.
-    Si no hay información, responde siempre con la frase estándar.
+    Responde en nombre del encargado cuando no hay información disponible.
+    Nunca inventa datos. Usa un mensaje estándar en el idioma del usuario.
     """
     try:
         lang = detect_language(mensaje)
-        return enforce_language(mensaje, "No dispongo de ese dato en este momento.", lang)
+        reply = "No dispongo de ese dato en este momento. Estoy contactando con el encargado."
+        return enforce_language(mensaje, reply, lang)
     except Exception as e:
-        return f"⚠️ Error en InternoAgent: {e}"
+        logger.error(f"❌ Error en InternoAgent: {e}", exc_info=True)
+        return "Ha ocurrido un error interno consultando al encargado."
+
 
 if __name__ == "__main__":
-    print("✅ InternoAgent en modo seguro listo")
+    print("✅ InternoAgent iniciado correctamente")
     mcp.run(transport="stdio", show_banner=False)

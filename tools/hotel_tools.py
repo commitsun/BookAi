@@ -7,11 +7,7 @@ from core.utils.normalize_reply import normalize_reply
 
 
 def hybrid_tool(name=None, description=None):
-    """
-    Decorador híbrido compatible con todas las versiones de LangChain.
-    Permite conservar metadatos 'name' y 'description' aunque el decorador
-    original @tool no los acepte como argumentos.
-    """
+
     def wrapper(func):
         decorated = base_tool(func)
         decorated.name = name or func.__name__
