@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SERVICE=hotelai-whatsapp
+SERVICE=hotelai-app
 PORT=8000
 
 echo "🛠️ Reconstruyendo contenedor (modo WhatsApp con ngrok)..."

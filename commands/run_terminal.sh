@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-SERVICE=hotelai
+SERVICE=hotelai-app
 
 echo "🚀 Ejecutando chat en el contenedor existente..."
 docker compose up -d $SERVICE
