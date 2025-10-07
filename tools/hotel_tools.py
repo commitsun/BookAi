@@ -24,9 +24,12 @@ def hybrid_tool(name=None, description=None):
 # 🧠 Información general del hotel
 # =====================================================
 @hybrid_tool(
-    name="Base de conocimientos",
+    name="hotel_information",
     description=(
-        "Agente de IA capacitado para buscar información sobre dudas o consultas en la base de conocimientos"
+        "Proporciona información general del hotel: servicios, políticas, "
+        "ubicación, contacto, instalaciones, normas, horarios o amenities. "
+        "Usa esta herramienta cuando el cliente haga preguntas sobre qué "
+        "ofrece el hotel, su ubicación o cómo llegar."
     )
 )
 async def hotel_information_tool(query: str) -> str:
@@ -50,9 +53,11 @@ async def hotel_information_tool(query: str) -> str:
 # 💰 Disponibilidad, precios y reservas
 # =====================================================
 @hybrid_tool(
-    name="Disponibilidad/precios",
+    name="availability_pricing",
     description=(
-        "Agente de IA capacitado para dar la disponibilidad y los precios de las habitaciones"
+        "Consulta disponibilidad, precios y gestiona reservas de habitaciones. "
+        "Usa esta herramienta para preguntas sobre precios, disponibilidad, "
+        "tarifas, promociones o para realizar una reserva."
     )
 )
 async def availability_pricing_tool(query: str) -> str:
@@ -136,8 +141,8 @@ async def guest_support_tool(query: str) -> str:
 # 💭 Reflexión / análisis (Think Tool)
 # =====================================================
 @hybrid_tool(
-    name="Think",
-    description="Usa esta herramienta para reflexionar sobre algo. No obtendrá nueva información ni modificará la base de datos, pero añadirá el pensamiento al registro (log)."
+    name="think_tool",
+    description="Reflexiona sobre la situación actual antes de tomar una decisión o elegir una herramienta."
 )
 def think_tool(situation: str) -> str:
     """Analiza internamente la situación antes de actuar."""

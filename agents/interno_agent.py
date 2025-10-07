@@ -1,35 +1,30 @@
-import logging
+import os
 from fastmcp import FastMCP
-from dotenv import load_dotenv
 from core.language import enforce_language, detect_language
 from utils.utils_prompt import load_prompt
+from dotenv import load_dotenv
+from langchain_mcp_adapters.client import MCPClient
 
-# ✅ Cargar entorno
 load_dotenv()
-logger = logging.getLogger("InternoAgent")
 
-# ✅ Inicializar agente
-mcp = FastMCP("InternoAgent")
+info_prompt = load_prompt("info_prompt.txt")
+mcp = FastMCP("InfoAgent")
 
-# ✅ Cargar prompt contextual
-INTERNAL_PROMPT = load_prompt("interno_prompt.txt")
+# Cliente MCP directo a la KB
+mcp_url = os.getenv("ENDPOINT_MCP")
+kb_client = MCPClient(transport="streamable_http", url=mcp_url)
 
-
-@mcp.tool(name="Base de conocimientos")
-async def consulta_encargado(mensaje: str) -> str:
-    """
-    Responde en nombre del encargado cuando no hay información disponible.
-    Nunca inventa datos. Usa un mensaje estándar en el idioma del usuario.
-    """
+@mcp.tool()
+async def consulta_info(pregunta: str) -> str:
+    """Consulta información general en la Base de Conocimientos del hotel."""
     try:
-        lang = detect_language(mensaje)
-        reply = "No dispongo de ese dato en este momento. Estoy contactando con el encargado."
-        return enforce_language(mensaje, reply, lang)
+        lang = detect_language(pregunta)
+        tool = await kb_client.get_tool("Base_de_conocimientos_del_hotel")
+        raw_reply = await tool.ainvoke({"input": pregunta})
+        return enforce_language(pregunta, raw_reply, lang)
     except Exception as e:
-        logger.error(f"❌ Error en InternoAgent: {e}", exc_info=True)
-        return "Ha ocurrido un error interno consultando al encargado."
-
+        return f"⚠️ Error en InfoAgent: {e}"
 
 if __name__ == "__main__":
-    print("✅ InternoAgent iniciado correctamente")
+    print("✅ InfoAgent conectado directamente a la KB")
     mcp.run(transport="stdio", show_banner=False)
