@@ -1,6 +1,4 @@
 .env
-__pycache__/
-*.pyc
-*.log
 /logs
-nota.ogg
+__pycache__/
+/*.pyc

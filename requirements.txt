@@ -7,8 +7,8 @@ fastmcp>=2.12.3
 mcp
 supabase
 langchain-community
-python-dotenv
 datetime
-fastapi 
-uvicorn 
+fastapi
+uvicorn
 requests
+openai

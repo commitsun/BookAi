@@ -3,7 +3,7 @@ import json
 import logging
 from langchain.tools import tool as base_tool
 from core.mcp_client import mcp_client
-from core.message_composition.reply_utils import normalize_reply
+from core.utils.normalize_reply import normalize_reply
 
 
 # =====================================================

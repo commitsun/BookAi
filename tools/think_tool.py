@@ -1,6 +1,6 @@
 from langchain.tools import tool
 from langchain_openai import ChatOpenAI
-from core.message_composition.utils_prompt import load_prompt
+from utils.utils_prompt import load_prompt
 
 think_prompt = load_prompt("think_prompt.txt")
 llm_think = ChatOpenAI(model="gpt-4o-mini", temperature=0)

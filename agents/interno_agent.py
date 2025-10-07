@@ -1,6 +1,6 @@
 from fastmcp import FastMCP
 from core.language import enforce_language, detect_language
-from core.message_composition.utils_prompt import load_prompt
+from utils.utils_prompt import load_prompt
 from dotenv import load_dotenv
 
 load_dotenv()
