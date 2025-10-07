@@ -1,42 +1,86 @@
 import os
-from supabase import create_client
-from langchain_openai import OpenAIEmbeddings
+import logging
+from supabase import create_client, Client
 
-# =========
-# Conexión a Supabase
-# =========
+# ======================================================
+# ⚙️ Conexión a Supabase
+# ======================================================
 SUPABASE_URL = os.getenv("SUPABASE_URL")
 SUPABASE_KEY = os.getenv("SUPABASE_KEY")
 
-supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise ValueError("❌ Faltan variables SUPABASE_URL o SUPABASE_KEY en el archivo .env")
 
-# =========
-# Embeddings
-# =========
-embeddings = OpenAIEmbeddings(model="text-embedding-3-small")
+supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+logging.info("✅ Conexión con Supabase inicializada correctamente.")
 
-# =========
-# Guardar mensajes en Supabase
-# =========
-def save_message(conversation_id: str, role: str, content: str):
+
+# ======================================================
+# 💾 Guardar mensaje (sin embeddings)
+# ======================================================
+def save_message(conversation_id: str, role: str, content: str) -> None:
     """
-    Guarda un mensaje en Supabase con su embedding.
-    - conversation_id: ID artificial generado al inicio de la conversación
-    - role: "user" o "assistant"
+    Guarda un mensaje en la base de datos relacional de Supabase.
+    - conversation_id: número del usuario sin '+'
+    - role: 'user' o 'assistant'
     - content: texto del mensaje
     """
     try:
-        # 1. Generar embedding del mensaje
-        embedding_vector = embeddings.embed_query(content)
+        clean_id = str(conversation_id).replace("+", "").strip()
 
-        # 2. Insertar manualmente en Supabase
-        supabase.table("chat_history").insert({
-            "conversation_id": conversation_id,
+        data = {
+            "conversation_id": clean_id,
             "role": role,
             "content": content,
-            "metadata": {"conversation_id": conversation_id, "role": role},
-            "embedding": embedding_vector
-        }).execute()
+        }
+
+        supabase.table("chat_history").insert(data).execute()
+        logging.info(f"💾 Mensaje guardado correctamente en conversación {clean_id}")
 
     except Exception as e:
-        print(f"⚠️ Error guardando mensaje en Supabase: {e}")
+        logging.error(f"⚠️ Error guardando mensaje en Supabase: {e}", exc_info=True)
+
+
+# ======================================================
+# 🧠 Obtener historial de conversación
+# ======================================================
+def get_conversation_history(conversation_id: str, limit: int = 10):
+    """
+    Recupera los últimos mensajes de una conversación, ordenados por fecha.
+    - conversation_id: número del usuario (sin '+')
+    - limit: cantidad máxima de mensajes a devolver (por defecto 10)
+    """
+    try:
+        clean_id = str(conversation_id).replace("+", "").strip()
+
+        response = (
+            supabase.table("chat_history")
+            .select("role, content, created_at")
+            .eq("conversation_id", clean_id)
+            .order("created_at", desc=False)
+            .limit(limit)
+            .execute()
+        )
+
+        messages = response.data or []
+        logging.info(f"🧩 Historial recuperado ({len(messages)} mensajes) para {clean_id}")
+        return messages
+
+    except Exception as e:
+        logging.error(f"⚠️ Error obteniendo historial: {e}", exc_info=True)
+        return []
+
+
+# ======================================================
+# 🧹 Borrar historial (útil para pruebas o depuración)
+# ======================================================
+def clear_conversation(conversation_id: str) -> None:
+    """
+    Elimina todos los mensajes de una conversación.
+    """
+    try:
+        clean_id = str(conversation_id).replace("+", "").strip()
+        supabase.table("chat_history").delete().eq("conversation_id", clean_id).execute()
+        logging.info(f"🧹 Conversación {clean_id} eliminada correctamente.")
+    except Exception as e:
+        logging.error(f"⚠️ Error eliminando conversación {conversation_id}: {e}", exc_info=True)

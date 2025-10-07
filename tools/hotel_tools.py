@@ -6,9 +6,6 @@ from core.mcp_client import mcp_client
 from core.utils.normalize_reply import normalize_reply
 
 
-# =====================================================
-# 🧩 Decorador híbrido con compatibilidad universal
-# =====================================================
 def hybrid_tool(name=None, description=None):
     """
     Decorador híbrido compatible con todas las versiones de LangChain.
