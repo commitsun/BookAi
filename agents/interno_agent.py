@@ -6,8 +6,6 @@ from utils.utils_prompt import load_prompt
 
 # ✅ Cargar entorno
 load_dotenv()
-
-# ✅ Configurar logs
 logger = logging.getLogger("InternoAgent")
 
 # ✅ Inicializar agente
@@ -17,7 +15,7 @@ mcp = FastMCP("InternoAgent")
 INTERNAL_PROMPT = load_prompt("interno_prompt.txt")
 
 
-@mcp.tool()
+@mcp.tool(name="Base de conocimientos")
 async def consulta_encargado(mensaje: str) -> str:
     """
     Responde en nombre del encargado cuando no hay información disponible.

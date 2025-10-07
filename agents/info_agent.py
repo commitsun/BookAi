@@ -6,22 +6,17 @@ from core.language import enforce_language, detect_language
 from utils.utils_prompt import load_prompt
 from langchain_mcp_adapters.client import MCPClient
 
-# ✅ Config global
 load_dotenv()
 logger = logging.getLogger("InfoAgent")
 
-# ✅ Inicializar agente MCP
 mcp = FastMCP("InfoAgent")
-
-# ✅ Prompt contextual
 INFO_PROMPT = load_prompt("info_prompt.txt")
 
-# ✅ Cliente MCP hacia la base de conocimientos
 MCP_URL = os.getenv("ENDPOINT_MCP")
 kb_client = MCPClient(transport="streamable_http", url=MCP_URL)
 
 
-@mcp.tool()
+@mcp.tool(name="Base de conocimientos")
 async def consulta_info(pregunta: str) -> str:
     """
     Consulta información general en la Base de Conocimientos del hotel.
@@ -29,6 +24,8 @@ async def consulta_info(pregunta: str) -> str:
     """
     try:
         lang = detect_language(pregunta)
+
+        # 🔹 Permite compatibilidad con tu nuevo nombre
         tool = await kb_client.get_tool("Base_de_conocimientos_del_hotel")
 
         if not tool:
