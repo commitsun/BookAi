@@ -2,42 +2,43 @@ import requests
 from io import BytesIO
 from openai import OpenAI
 
-# ------------------------------------------------------------------
-# 🎧 Descarga y transcripción de audio
-# ------------------------------------------------------------------
+
 def download_media_bytes(media_id: str, token: str) -> BytesIO | None:
     """
-    Descarga un archivo multimedia (audio, imagen, etc.) desde la API de Meta.
-    Devuelve el contenido como BytesIO o None si hay error.
+    Descarga el audio de WhatsApp (OGG/OPUS) directamente desde la API de Meta.
+    Devuelve BytesIO con los datos binarios.
     """
     try:
         url = f"https://graph.facebook.com/v19.0/{media_id}"
         headers = {"Authorization": f"Bearer {token}"}
         r = requests.get(url, headers=headers)
+
         if r.status_code != 200:
-            print(f"❌ Error obteniendo URL de media {media_id}: {r.text}")
+            print(f"❌ Error obteniendo URL del media: {r.text}")
             return None
 
         media_url = r.json().get("url")
         if not media_url:
-            print("❌ No se encontró URL de media.")
+            print("❌ No se encontró la URL del media en la respuesta.")
             return None
 
+        # Descargar el archivo .ogg
         r = requests.get(media_url, headers=headers)
         if r.status_code == 200:
+            print(f"✅ Audio descargado correctamente ({len(r.content)} bytes)")
             return BytesIO(r.content)
 
-        print(f"❌ Error descargando media {media_id}: {r.text}")
+        print(f"❌ Error descargando el archivo: {r.text}")
         return None
 
     except Exception as e:
-        print("⚠️ Error al descargar media:", e)
+        print(f"⚠️ Error descargando media: {e}")
         return None
 
 
 def transcribe_audio(media_id: str, token: str, openai_key: str) -> str:
     """
-    Descarga y transcribe un audio de WhatsApp usando OpenAI Whisper.
+    Descarga y transcribe el audio de WhatsApp usando Whisper (sin conversión).
     """
     try:
         audio_bytes = download_media_bytes(media_id, token)
@@ -45,15 +46,18 @@ def transcribe_audio(media_id: str, token: str, openai_key: str) -> str:
             return "[Error: no se pudo descargar el audio]"
 
         client = OpenAI(api_key=openai_key)
+
+        # Enviar el archivo directamente a Whisper
         transcript = client.audio.transcriptions.create(
             model="whisper-1",
-            file=audio_bytes,
-            prompt="Pregunta de un cliente sobre un hotel. Transcribe lo más claro posible."
+            file=("audio.ogg", audio_bytes, "audio/ogg"),
+            prompt="Transcribe de forma clara y precisa la voz de un cliente sobre un hotel."
         )
+
         text = transcript.text.strip()
         print(f"📝 Transcripción: {text}")
         return text or "[Audio vacío]"
 
     except Exception as e:
-        print("⚠️ Error al transcribir audio:", e)
+        print(f"⚠️ Error al transcribir con Whisper: {e}")
         return "[Error al transcribir el audio]"

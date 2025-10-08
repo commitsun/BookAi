@@ -1,45 +1,30 @@
 import os
-import logging
 from fastmcp import FastMCP
-from dotenv import load_dotenv
 from core.language import enforce_language, detect_language
 from utils.utils_prompt import load_prompt
+from dotenv import load_dotenv
 from langchain_mcp_adapters.client import MCPClient
 
 load_dotenv()
-logger = logging.getLogger("InfoAgent")
 
+info_prompt = load_prompt("info_prompt.txt")
 mcp = FastMCP("InfoAgent")
-INFO_PROMPT = load_prompt("info_prompt.txt")
 
-MCP_URL = os.getenv("ENDPOINT_MCP")
-kb_client = MCPClient(transport="streamable_http", url=MCP_URL)
+# Cliente MCP directo a la KB
+mcp_url = os.getenv("ENDPOINT_MCP")
+kb_client = MCPClient(transport="streamable_http", url=mcp_url)
 
-
-@mcp.tool(name="Base de conocimientos")
+@mcp.tool()
 async def consulta_info(pregunta: str) -> str:
-    """
-    Consulta información general en la Base de Conocimientos del hotel.
-    Usa el MCP remoto para recuperar datos actualizados sobre servicios, ubicación o políticas.
-    """
+    """Consulta información general en la Base de Conocimientos del hotel."""
     try:
         lang = detect_language(pregunta)
-
-        # 🔹 Permite compatibilidad con tu nuevo nombre
         tool = await kb_client.get_tool("Base_de_conocimientos_del_hotel")
-
-        if not tool:
-            reply = "No dispongo de esa información en este momento. Estoy consultando al encargado."
-            return enforce_language(pregunta, reply, lang)
-
         raw_reply = await tool.ainvoke({"input": pregunta})
         return enforce_language(pregunta, raw_reply, lang)
-
     except Exception as e:
-        logger.error(f"❌ Error en InfoAgent: {e}", exc_info=True)
-        return enforce_language(pregunta, "Ha ocurrido un error interno al consultar la información.", "es")
-
+        return f"⚠️ Error en InfoAgent: {e}"
 
 if __name__ == "__main__":
-    print("✅ InfoAgent iniciado correctamente y conectado a la KB")
+    print("✅ InfoAgent conectado directamente a la KB")
     mcp.run(transport="stdio", show_banner=False)
