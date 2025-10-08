@@ -44,20 +44,28 @@ def save_message(conversation_id: str, role: str, content: str) -> None:
 # ======================================================
 # 🧠 Obtener historial de conversación
 # ======================================================
-def get_conversation_history(conversation_id: str, limit: int = 10):
+def get_conversation_history(conversation_id: str, limit: int = 10, since=None):
     """
     Recupera los últimos mensajes de una conversación, ordenados por fecha.
     - conversation_id: número del usuario (sin '+')
-    - limit: cantidad máxima de mensajes a devolver (por defecto 10)
+    - limit: cantidad máxima de mensajes a devolver
+    - since: datetime opcional (solo mensajes posteriores a esa fecha)
     """
     try:
         clean_id = str(conversation_id).replace("+", "").strip()
 
-        response = (
+        query = (
             supabase.table("chat_history")
             .select("role, content, created_at")
             .eq("conversation_id", clean_id)
-            .order("created_at", desc=False)
+        )
+
+        # Si se pasa una fecha 'since', filtramos por created_at
+        if since is not None:
+            query = query.gte("created_at", since.isoformat())
+
+        response = (
+            query.order("created_at", desc=False)
             .limit(limit)
             .execute()
         )
@@ -69,6 +77,7 @@ def get_conversation_history(conversation_id: str, limit: int = 10):
     except Exception as e:
         logging.error(f"⚠️ Error obteniendo historial: {e}", exc_info=True)
         return []
+
 
 
 # ======================================================
