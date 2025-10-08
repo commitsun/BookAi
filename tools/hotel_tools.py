@@ -8,7 +8,7 @@ import random
 import re
 from langchain.tools import tool as base_tool
 from core.mcp_client import mcp_client
-from core.utils.normalize_reply import normalize_reply
+from core.utils.normalize_reply import normalize_reply, summarize_tool_output
 
 
 # =====================================================
@@ -40,7 +40,7 @@ def hybrid_tool(name=None, description=None, return_direct=False):
         "Usa esta herramienta cuando el cliente haga preguntas sobre qué "
         "ofrece el hotel, su ubicación o cómo llegar."
     ),
-    return_direct=True,  # ✅ Devolver salida directa al usuario
+    return_direct=True,  # ✅ Devuelve texto directo al usuario
 )
 async def hotel_information_tool(query: str) -> str:
     """Obtiene información general del hotel desde el InfoAgent (MCP)."""
@@ -53,10 +53,14 @@ async def hotel_information_tool(query: str) -> str:
         if not info_tool:
             return "No dispongo de esa información en este momento."
 
+        # 🧩 Consultar la base de conocimientos
         raw_reply = await info_tool.ainvoke({"input": query})
-        out = normalize_reply(raw_reply, query, source="InfoAgent")
-        logging.info(f"🔧 hotel_information_tool (direct): {out[:160]}...")
-        return out
+        cleaned = normalize_reply(raw_reply, query, source="InfoAgent")
+
+        # 💬 Reformular con tono natural y amable
+        final_text = summarize_tool_output(query, cleaned)
+        logging.info(f"🔧 hotel_information_tool → {final_text[:160]}...")
+        return final_text
 
     except Exception as e:
         logging.error(f"❌ Error en hotel_information_tool: {e}", exc_info=True)
@@ -76,7 +80,7 @@ async def hotel_information_tool(query: str) -> str:
         "Usa esta herramienta para preguntas sobre precios, disponibilidad, "
         "tarifas, promociones o para realizar una reserva."
     ),
-    return_direct=True,  # ✅ Esta tool genera la respuesta final
+    return_direct=True,
 )
 async def availability_pricing_tool(query: str) -> str:
     """Consulta disponibilidad y precios del hotel (vía DispoPreciosAgent)."""
@@ -108,15 +112,12 @@ async def availability_pricing_tool(query: str) -> str:
             return "Sistema de reservas no disponible temporalmente. Contactando con el encargado."
 
         # 🔹 Herramienta de disponibilidad
-        dispo_tool = next(
-            (t for t in tools if t.name == "Disponibilidad_y_precios"), None
-        )
+        dispo_tool = next((t for t in tools if t.name == "Disponibilidad_y_precios"), None)
         if not dispo_tool:
             return "No se pudo acceder al módulo de disponibilidad y precios. Contactando con el encargado."
 
         # 🔹 Fechas por defecto si no se detectan en el texto
         today = datetime.date.today()
-        # Heurística simple: si el usuario no da fechas, mostramos ejemplo +2 semanas (2 noches)
         checkin = today + datetime.timedelta(days=17)
         checkout = checkin + datetime.timedelta(days=2)
 
@@ -131,6 +132,7 @@ async def availability_pricing_tool(query: str) -> str:
             "key": token,
         }
 
+        # 🔹 Consultar disponibilidad y precios
         raw_reply = await dispo_tool.ainvoke(params)
         rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
 
@@ -146,7 +148,7 @@ async def availability_pricing_tool(query: str) -> str:
             for r in rooms
         )
 
-        # 🔹 Detectar tipo solicitado (estándar / doble con supletoria / etc.)
+        # 🔹 Detectar tipo solicitado
         ql = query.lower()
         preferida = None
         if "estándar" in ql or "estandar" in ql or "standard" in ql:
@@ -154,34 +156,25 @@ async def availability_pricing_tool(query: str) -> str:
         elif "supletoria" in ql:
             preferida = next((r for r in rooms if "Supletoria" in r["roomTypeName"]), None)
 
-        # 🔹 Si el usuario pidió “reservar / confirmar / book”
+        # 🔹 Si el usuario pidió reservar
         if any(x in ql for x in ("reserv", "confirm", "book")):
-            if preferida:
-                logging.info("🟢 Reserva directa sobre tipo solicitado detectado.")
-                return (
-                    f"✅ Reserva confirmada: habitación {preferida['roomTypeName'].lower()} "
-                    f"del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
-                    f"para {occupancy} persona(s), {preferida['price']}€ por noche. "
-                    f"¡Gracias por elegirnos! 🏨✨"
-                )
-            else:
-                seleccion = random.choice(rooms)
-                logging.info("🟡 Reserva directa sin tipo específico, se elige una opción disponible.")
-                return (
-                    f"✅ Reserva confirmada: habitación {seleccion['roomTypeName'].lower()} "
-                    f"del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
-                    f"para {occupancy} persona(s), {seleccion['price']}€ por noche. "
-                    f"¡Gracias por elegirnos! 🏨✨"
-                )
+            seleccion = preferida or random.choice(rooms)
+            logging.info("🟢 Reserva directa detectada.")
+            return (
+                f"✅ Reserva confirmada: habitación {seleccion['roomTypeName'].lower()} "
+                f"del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
+                f"para {occupancy} persona(s), {seleccion['price']}€ por noche. "
+                f"¡Gracias por elegirnos! 🏨✨"
+            )
 
-        # 🔹 Solo consulta de disponibilidad
+        # 🔹 Solo consulta informativa
         respuesta = (
             f"Disponibilidad del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
             f"para {occupancy} persona(s):\n"
             f"{opciones}\n\n"
             "Si lo deseas, puedo confirmar la reserva de la opción que prefieras."
         )
-        logging.info(f"🔧 availability_pricing_tool (direct): {respuesta[:160]}...")
+        logging.info(f"🔧 availability_pricing_tool → {respuesta[:160]}...")
         return respuesta
 
     except Exception as e:
@@ -198,7 +191,7 @@ async def availability_pricing_tool(query: str) -> str:
         "Escalación a soporte humano para casos complejos, errores en otras herramientas, "
         "o consultas que requieren intervención del staff del hotel."
     ),
-    return_direct=True,  # ✅ Devolver salida directa al usuario
+    return_direct=True,
 )
 async def guest_support_tool(query: str) -> str:
     """Escala la consulta al encargado del hotel (InternoAgent)."""
@@ -212,9 +205,11 @@ async def guest_support_tool(query: str) -> str:
             return "Estoy contactando con el encargado del hotel. Te responderemos lo antes posible."
 
         raw_reply = await support_tool.ainvoke({"input": query})
-        out = normalize_reply(raw_reply, query, source="InternoAgent")
-        logging.info(f"🔧 guest_support_tool (direct): {out[:160]}...")
-        return out
+        cleaned = normalize_reply(raw_reply, query, source="InternoAgent")
+
+        final_text = summarize_tool_output(query, cleaned)
+        logging.info(f"🔧 guest_support_tool → {final_text[:160]}...")
+        return final_text
 
     except Exception as e:
         logging.error(f"❌ Error en guest_support_tool: {e}", exc_info=True)
@@ -225,12 +220,12 @@ async def guest_support_tool(query: str) -> str:
 
 
 # =====================================================
-# 💭 Reflexión / análisis (Think Tool)
+# 💭 Reflexión / análisis interno
 # =====================================================
 @hybrid_tool(
     name="think_tool",
     description="Reflexiona sobre la situación actual antes de tomar una decisión o elegir una herramienta.",
-    return_direct=False,  # ❌ No devuelve texto final al usuario
+    return_direct=False,
 )
 def think_tool(situation: str) -> str:
     """Analiza internamente la situación antes de actuar."""

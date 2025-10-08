@@ -1,69 +1,96 @@
+# =====================================================
+# 🧠 normalize_reply.py — Limpieza y post-procesamiento de respuestas
+# =====================================================
 import json
-import logging
 import re
-from core.language import enforce_language
+import logging
+from langchain_openai import ChatOpenAI
 
-_last_reply_cache = {}
-
-def normalize_reply(raw_reply, user_question, language=None, source="Unknown") -> str:
+# -----------------------------------------------------
+# 🔹 Limpieza básica de respuesta cruda (sin LLM)
+# -----------------------------------------------------
+def normalize_reply(raw_reply, query=None, source=None):
     """
-    Limpia y normaliza respuestas crudas (strings, dicts, listas o JSON anidados),
-    extrayendo contenido legible y eliminando ruido estructural.
+    Normaliza respuestas crudas que vienen desde MCP o agentes secundarios.
+    - Elimina envoltorios JSON
+    - Limpia Markdown, metadatos y duplicados
     """
-    global _last_reply_cache
-
-    def extract_page_content(text):
-        """Extrae el contenido humano desde un JSON anidado o texto crudo."""
-        try:
-            if isinstance(text, str):
-                # Intentar decodificar si parece JSON
-                if text.strip().startswith("{") and "pageContent" in text:
-                    data = json.loads(text)
-                    return data.get("pageContent", text)
-                # Si hay secuencias escapadas
-                cleaned = re.sub(r"\\[nrt]", " ", text)
-                cleaned = re.sub(r"\s{2,}", " ", cleaned)
-                return cleaned.strip()
-            elif isinstance(text, dict):
-                return text.get("pageContent") or text.get("text") or str(text)
-            else:
-                return str(text)
-        except Exception as e:
-            logging.warning(f"⚠️ Error extrayendo contenido: {e}")
-            return str(text)
-
-    # ---- 1️⃣ Unificar la respuesta según tipo ----
-    if isinstance(raw_reply, list):
-        parts = [extract_page_content(item) for item in raw_reply]
-        reply = "\n\n".join(p for p in parts if p and isinstance(p, str))
-    elif isinstance(raw_reply, dict):
-        reply = extract_page_content(raw_reply)
-    else:
-        reply = extract_page_content(raw_reply)
-
-    # ---- 2️⃣ Limpiar formato visual ----
-    reply = reply.replace("\\n", "\n").replace("\\t", " ").replace("\\", "")
-    reply = re.sub(r"\n{3,}", "\n\n", reply).strip()
-
-    # ---- 3️⃣ Evitar duplicados ----
-    cache_key = source
-    if _last_reply_cache.get(cache_key) == reply:
-        return "No dispongo de ese dato en este momento."
-    _last_reply_cache[cache_key] = reply
-
-    # ---- 4️⃣ Detectar respuestas finales ----
-    lower_reply = reply.lower()
-    final_markers = [
-        "✅", "disponibilidad del", "reserva confirmada", "🏨", "€/noche"
-    ]
-    if any(marker in lower_reply for marker in final_markers):
-        logging.info(f"🟢 normalize_reply: respuesta final detectada desde {source}, no se reescribe.")
-        return reply
-
-    # ---- 5️⃣ Aplicar reescritura controlada ----
     try:
-        final_reply = enforce_language(user_question, reply, language)
-        return final_reply
+        if not raw_reply:
+            return ""
+
+        # Si viene como JSON con "pageContent"
+        if isinstance(raw_reply, str):
+            try:
+                obj = json.loads(raw_reply)
+                if isinstance(obj, dict) and "pageContent" in obj:
+                    return obj["pageContent"]
+            except Exception:
+                pass
+
+        # Si es lista de resultados con "pageContent"
+        if isinstance(raw_reply, list):
+            parts = []
+            for item in raw_reply:
+                if isinstance(item, dict) and "text" in item:
+                    try:
+                        data = json.loads(item["text"])
+                        parts.append(data.get("pageContent", item["text"]))
+                    except Exception:
+                        parts.append(item["text"])
+                elif isinstance(item, dict) and "pageContent" in item:
+                    parts.append(item["pageContent"])
+                elif isinstance(item, str):
+                    parts.append(item)
+            return "\n".join(parts)
+
+        # Si ya es texto limpio
+        if isinstance(raw_reply, str):
+            cleaned = re.sub(r"\s+", " ", raw_reply)
+            return cleaned.strip()
+
+        return str(raw_reply)
+
     except Exception as e:
-        logging.error(f"⚠️ Error aplicando enforce_language: {e}")
-        return reply
+        logging.error(f"⚠️ Error en normalize_reply: {e}")
+        return str(raw_reply)
+
+
+# -----------------------------------------------------
+# 💬 Post-procesamiento con LLM (estilo n8n)
+# -----------------------------------------------------
+def summarize_tool_output(query: str, raw_output: str, temperature: float = 0.0) -> str:
+    """
+    Reformula la salida cruda de una tool en una respuesta natural y amigable.
+    Equivale al "LLM Post-Processor" de n8n.
+    """
+    try:
+        if not raw_output or len(raw_output.strip()) == 0:
+            return "Lo siento, no encontré información relevante en este momento."
+
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=temperature)
+
+        prompt = f"""
+Eres el asistente virtual del hotel. Debes responder de manera amable,
+natural y útil al huésped, usando la información a continuación.
+
+Consulta del huésped:
+"{query}"
+
+Información encontrada:
+{raw_output}
+
+Instrucciones:
+- Responde en el mismo idioma que la consulta.
+- Redacta una sola respuesta breve (2–4 frases).
+- No muestres formato JSON ni listas técnicas.
+- Si la información incluye “no disponible”, responde educadamente explicando la situación.
+"""
+
+        response = llm.invoke(prompt)
+        return response.content.strip()
+
+    except Exception as e:
+        logging.error(f"⚠️ Error en summarize_tool_output: {e}", exc_info=True)
+        # fallback simple
+        return raw_output.strip()
