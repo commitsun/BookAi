@@ -2,7 +2,7 @@ from abc import ABC, abstractmethod
 from openai import OpenAI
 from core.main_agent import HotelAIHybrid
 from channels_wrapper.utils.text_utils import fragment_text_intelligently, sleep_typing
-
+import logging
 
 class BaseChannel(ABC):
     """
@@ -46,7 +46,7 @@ class BaseChannel(ABC):
         # Extraer datos esenciales del mensaje entrante
         user_id, msg_id, msg_type, user_msg = self.extract_message_data(payload)
         if not user_id or not msg_id:
-            print("⚠️ Mensaje inválido o incompleto, se ignora.")
+            logging.debug("📦 Webhook ignorado: evento sin mensaje válido (status update o vacío).")
             return
 
         # Evitar procesar mensajes duplicados
@@ -78,11 +78,17 @@ class BaseChannel(ABC):
         # --------------------------------------------------------
         # 🤖 Ejecutar el agente híbrido principal
         # --------------------------------------------------------
-        agent = HotelAIHybrid()
-        reply = await agent.process_message(
+        # ✅ Usa el agente compartido inyectado desde main.py
+        if not hasattr(self, "agent") or self.agent is None:
+            raise RuntimeError(
+                "El canal no tiene un agente asignado. Asegúrate de inyectarlo desde ChannelManager o main.py"
+            )
+
+        reply = await self.agent.process_message(
             user_message=user_msg,
-            conversation_id=conversation_id,  # ✅ se pasa el número del usuario
+            conversation_id=conversation_id,
         )
+
 
         # Añadir respuesta del asistente al historial
         self.conversations[conversation_id].append({"role": "assistant", "content": reply})
