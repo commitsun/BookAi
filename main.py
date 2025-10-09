@@ -1,5 +1,5 @@
 # =====================================================
-# 🏨 HotelAI — Orquestador con Escalación en Pausa
+# 🏨 HotelAI — Orquestador con Escalación Elegante
 # =====================================================
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -14,7 +14,9 @@ from channels_wrapper.manager import ChannelManager
 from core.main_agent import HotelAIHybrid
 from channels_wrapper.telegram.telegram_channel import register_routes as register_telegram_channel
 
-# --- Entorno WhatsApp / Telegram ---
+# =====================================================
+# 🌍 Entorno
+# =====================================================
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
@@ -27,25 +29,24 @@ app = FastAPI(title="HotelAI - Multi-Channel Hybrid Bot")
 logging.basicConfig(level=logging.INFO)
 
 # =====================================================
-# 🧠 Agente híbrido
+# 🧠 Agente híbrido principal
 # =====================================================
 hybrid_agent = HotelAIHybrid()
 
 # =====================================================
-# 🗂️ Pendientes de escalación (memoria en proceso)
-#  conversation_id -> {"question": str, "ts": float, "channel": "whatsapp"}
+# 🗂️ Pendientes de escalación (en memoria temporal)
 # =====================================================
 pending_escalations: dict[str, dict] = {}
 
 # =====================================================
-# 📣 Notificador global al encargado (Telegram)
+# 📣 Notificar al encargado (Telegram)
 # =====================================================
 async def notify_encargado(mensaje: str):
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_ENCARGADO_CHAT_ID:
         logging.warning("⚠️ Variables Telegram no configuradas.")
         return
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-    data = {"chat_id": TELEGRAM_ENCARGADO_CHAT_ID, "text": mensaje}
+    data = {"chat_id": TELEGRAM_ENCARGADO_CHAT_ID, "text": mensaje, "parse_mode": "Markdown"}
     try:
         async with aiohttp.ClientSession() as session:
             async with session.post(url, json=data, timeout=15) as resp:
@@ -54,48 +55,7 @@ async def notify_encargado(mensaje: str):
         logging.error(f"❌ Error enviando aviso a Telegram: {e}", exc_info=True)
 
 # =====================================================
-# 📝 Marcar conversación como pendiente (no respondemos al huésped)
-# =====================================================
-async def mark_pending(conversation_id: str, user_message: str):
-    pending_escalations[conversation_id] = {
-        "question": user_message,
-        "ts": time.time(),
-        "channel": "whatsapp",
-    }
-    aviso = (
-        f"📩 El cliente {conversation_id} preguntó:\n{user_message}\n\n"
-        "✍️ Responde con el formato:\n"
-        "RESPUESTA {ID_SIN_MAS}: tu texto aquí\n\n"
-        "Ejemplo:\nRESPUESTA 34600000000: Sí, tenemos cuna disponible y es gratuita."
-    )
-    await notify_encargado(aviso)
-
-# =====================================================
-# 🔁 Resolver respuesta del encargado → formatear → enviar al huésped
-# =====================================================
-async def resolve_from_encargado(conversation_id: str, raw_text: str):
-    if conversation_id not in pending_escalations:
-        # No está pendiente, igual lo reenvíamos directamente
-        logging.info(f"ℹ️ {conversation_id} no estaba pendiente. Reenviando igualmente.")
-    # Reformatear con el agente (tono del hotel, mismo idioma del cliente)
-    try:
-        # Le pasamos como prompt el texto del encargado para pulirlo
-        formatted = await hybrid_agent.process_message(
-            user_message=raw_text,
-            conversation_id=conversation_id
-        )
-    except Exception:
-        formatted = raw_text  # fallback
-
-    # Enviar al huésped por WhatsApp
-    send_whatsapp_text(conversation_id, formatted)
-
-    # Cerrar pendiente (si existía)
-    pending_escalations.pop(conversation_id, None)
-    logging.info(f"✅ Conversación {conversation_id} resuelta y enviada al huésped.")
-
-# =====================================================
-# ✉️ Envío WhatsApp “raw” (para usar fuera del canal)
+# ✉️ Envío WhatsApp “raw”
 # =====================================================
 def send_whatsapp_text(user_id: str, text: str):
     if not WHATSAPP_TOKEN or not WHATSAPP_PHONE_ID:
@@ -119,7 +79,68 @@ def send_whatsapp_text(user_id: str, text: str):
         logging.error(f"⚠️ Error enviando WhatsApp: {e}", exc_info=True)
 
 # =====================================================
-# 🔌 Canales
+# 📝 Marcar conversación como pendiente
+# =====================================================
+async def mark_pending(conversation_id: str, user_message: str):
+    """Marca conversación como pendiente, avisa al cliente y notifica al encargado."""
+    pending_escalations[conversation_id] = {
+        "question": user_message,
+        "ts": time.time(),
+        "channel": "whatsapp",
+    }
+
+    # 🕓 Avisar al cliente
+    send_whatsapp_text(
+        conversation_id,
+        "🕓 Estamos consultando esta información con el encargado del hotel. "
+        "Te responderemos en unos minutos. Gracias por tu paciencia."
+    )
+
+    # 📢 Avisar al encargado
+    aviso = (
+        f"📩 *El cliente {conversation_id} preguntó:*\n"
+        f"“{user_message}”\n\n"
+        "✉️ Escribe tu respuesta directamente aquí y el sistema la enviará al cliente."
+    )
+    await notify_encargado(aviso)
+
+# =====================================================
+# 🔁 Resolver respuesta del encargado → formatear → enviar
+# =====================================================
+async def resolve_from_encargado(conversation_id: str, raw_text: str):
+    """Procesa la respuesta del encargado, la reformatea y la envía al huésped."""
+    logging.info(f"✉️ Resolviendo respuesta manual para {conversation_id}")
+
+    if conversation_id not in pending_escalations:
+        await notify_encargado("⚠️ No había conversación pendiente, pero la respuesta se enviará igualmente.")
+
+    try:
+        # Reformatear con tono cálido y profesional
+        formatted = await hybrid_agent.process_message(
+            f"El encargado del hotel responde al cliente con este texto:\n\n{raw_text}\n\n"
+            f"Reformula la respuesta con tono amable, profesional y natural, "
+            f"sin alterar el contenido original."
+        )
+    except Exception as e:
+        logging.error(f"❌ Error al reformatear respuesta: {e}")
+        formatted = raw_text
+
+    # 📤 Enviar al huésped
+    send_whatsapp_text(conversation_id, formatted)
+
+    # 🧹 Limpiar pendientes
+    pending_escalations.pop(conversation_id, None)
+    logging.info(f"✅ Conversación {conversation_id} resuelta y enviada.")
+
+    # ✅ Confirmar al encargado
+    confirmacion = (
+        f"✅ Tu respuesta fue enviada correctamente al cliente *{conversation_id}*.\n\n"
+        f"🧾 *Mensaje final enviado:*\n{formatted}"
+    )
+    await notify_encargado(confirmacion)
+
+# =====================================================
+# 🔌 Registro de canales
 # =====================================================
 manager = ChannelManager()
 for name, channel in manager.channels.items():
@@ -127,12 +148,12 @@ for name, channel in manager.channels.items():
     channel.register_routes(app)
     logging.info(f"✅ Canal '{name}' registrado y conectado al agente.")
 
-# Canal interno del encargado (Telegram)
+# Canal interno (Telegram encargado)
 register_telegram_channel(app)
-logging.info("✅ Canal interno Telegram (encargado) registrado.")
+logging.info("✅ Canal interno Telegram registrado.")
 
 # =====================================================
-# 🩺 Salud
+# 🩺 Healthcheck
 # =====================================================
 @app.get("/health")
 async def health():
@@ -143,7 +164,7 @@ async def health():
     }
 
 # =====================================================
-# 💬 Endpoint genérico
+# 💬 Endpoint API genérico
 # =====================================================
 @app.post("/api/message")
 async def api_message(request: Request):
@@ -154,10 +175,9 @@ async def api_message(request: Request):
         if not user_message:
             return JSONResponse({"error": "Mensaje vacío"}, status_code=400)
 
-        # Procesar con el agente
         response = await hybrid_agent.process_message(user_message, conversation_id)
 
-        # ¿Debemos escalar en pausa? (mismas reglas que WhatsApp)
+        # Detección de necesidad de escalación
         if any(p in response.lower() for p in [
             "contactar con el encargado",
             "no dispongo",
@@ -166,19 +186,9 @@ async def api_message(request: Request):
             "error",
         ]):
             await mark_pending(conversation_id, user_message)
-            # No devolvemos respuesta “al cliente”; aquí solo informamos a quien consume la API
             return JSONResponse({"response": "🕓 Consultando con el encargado..."})
 
         return JSONResponse({"response": response})
     except Exception as e:
         logging.error(f"⚠️ Error en /api/message: {e}", exc_info=True)
         return JSONResponse({"error": str(e)}, status_code=500)
-
-# =====================================================
-# 🧩 Hooks que usarán los canales
-# =====================================================
-# Disponibles para import desde otros módulos:
-# - mark_pending(conversation_id, user_message)
-# - resolve_from_encargado(conversation_id, raw_text)
-# - notify_encargado(mensaje)
-# - send_whatsapp_text(user_id, text)
