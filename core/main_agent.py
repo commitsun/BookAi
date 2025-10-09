@@ -44,7 +44,7 @@ class HotelAIHybrid:
         self.memory = memory_manager or _global_memory
 
         # ⚙️ Configuración de modelo
-        self.model_name = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+        self.model_name = os.getenv("OPENAI_MODEL")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
         logging.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
@@ -159,10 +159,14 @@ class HotelAIHybrid:
             # 🧩 Extracción flexible del output
             output = (
                 result.get("output")
-                or result.get("response")
                 or result.get("final_output")
-                or ""
+                or result.get("response")
+                or result.get("intermediate_steps", [{}])[-1][1]
+                if isinstance(result.get("intermediate_steps", []), list)
+                and len(result.get("intermediate_steps", [])) > 0
+                else ""
             )
+
 
             # 🔁 Fallback: intentar recuperar de intermediate_steps
             if (not output or not output.strip()) and "intermediate_steps" in result:
