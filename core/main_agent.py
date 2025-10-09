@@ -4,7 +4,7 @@
 import os
 import json
 import logging
-from typing import Dict, Any, List, Optional
+from typing import Optional
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -156,34 +156,44 @@ class HotelAIHybrid:
                 "chat_history": chat_history,
             })
 
-            # 🧩 Extracción flexible del output
-            output = (
-                result.get("output")
-                or result.get("final_output")
-                or result.get("response")
-                or result.get("intermediate_steps", [{}])[-1][1]
-                if isinstance(result.get("intermediate_steps", []), list)
-                and len(result.get("intermediate_steps", [])) > 0
-                else ""
-            )
+            # =====================================================
+            # 🧩 Extracción más robusta del output final
+            # =====================================================
+            output = None
 
+            # 1️⃣ Intenta los campos típicos de LangChain
+            for key in ["output", "final_output", "response"]:
+                val = result.get(key)
+                if isinstance(val, str) and val.strip():
+                    output = val.strip()
+                    break
 
-            # 🔁 Fallback: intentar recuperar de intermediate_steps
+            # 2️⃣ Si sigue vacío, busca en intermediate_steps
             if (not output or not output.strip()) and "intermediate_steps" in result:
                 steps = result.get("intermediate_steps", [])
                 if isinstance(steps, list) and len(steps) > 0:
                     last_step = steps[-1]
                     if isinstance(last_step, (list, tuple)) and len(last_step) > 1:
                         candidate = last_step[1]
-                        if isinstance(candidate, str):
-                            output = candidate
+                        if isinstance(candidate, str) and candidate.strip():
+                            output = candidate.strip()
                         elif isinstance(candidate, dict):
                             output = json.dumps(candidate, ensure_ascii=False)
 
-            if not output or len(output.strip()) == 0:
-                output = "Ha ocurrido un error procesando tu solicitud. Estoy contactando con el encargado."
+            # 3️⃣ Si nada aún, intenta rescatar texto del resultado completo
+            if not output or not output.strip():
+                raw_dump = json.dumps(result, ensure_ascii=False)
+                if len(raw_dump) > 20:
+                    output = raw_dump[:1500]  # evita respuestas vacías o loops
 
-            logging.info(f"🤖 Respuesta generada: {output[:160]}...")
+            # 4️⃣ Último fallback — solo si sigue totalmente vacío
+            if not output or not output.strip():
+                output = (
+                    "Ha ocurrido un error procesando tu solicitud. "
+                    "Estoy contactando con el encargado del hotel."
+                )
+
+            logging.info(f"🤖 Respuesta generada (post-procesada): {output[:160]}...")
 
         except Exception as e:
             logging.error(f"❌ Error en agente: {e}", exc_info=True)

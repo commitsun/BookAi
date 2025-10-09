@@ -1,59 +1,74 @@
-# =====================================================
-# 🧠 normalize_reply.py — Limpieza y post-procesamiento de respuestas
-# =====================================================
 import json
 import re
 import logging
 from langchain_openai import ChatOpenAI
 
+
 # -----------------------------------------------------
-# 🔹 Limpieza básica de respuesta cruda (sin LLM)
+# 🔹 Limpieza robusta de respuesta cruda (sin LLM)
 # -----------------------------------------------------
 def normalize_reply(raw_reply, query=None, source=None):
     """
     Normaliza respuestas crudas que vienen desde MCP o agentes secundarios.
-    - Elimina envoltorios JSON
-    - Limpia Markdown, metadatos y duplicados
+    - Soporta dicts, JSON, listas o strings planos.
+    - Evita devolver valores vacíos que activen el fallback.
+    - Conserva el texto incluso si el formato no es estándar.
     """
     try:
-        if not raw_reply:
+        # 🔸 Caso nulo
+        if raw_reply is None:
             return ""
 
-        # Si viene como JSON con "pageContent"
+        # 🔸 Si viene como dict (p. ej. {"text": "..."} o {"pageContent": "..."})
+        if isinstance(raw_reply, dict):
+            for key in ["pageContent", "text", "content", "response"]:
+                if key in raw_reply and isinstance(raw_reply[key], str):
+                    val = raw_reply[key].strip()
+                    if val:
+                        return val
+            # Devuelve el JSON como texto si no hay campos reconocibles
+            return json.dumps(raw_reply, ensure_ascii=False)
+
+        # 🔸 Si es JSON string
         if isinstance(raw_reply, str):
             try:
                 obj = json.loads(raw_reply)
-                if isinstance(obj, dict) and "pageContent" in obj:
-                    return obj["pageContent"]
+                if isinstance(obj, dict):
+                    for key in ["pageContent", "text", "content", "response"]:
+                        if key in obj and isinstance(obj[key], str):
+                            val = obj[key].strip()
+                            if val:
+                                return val
+                    # Si no hay campos reconocibles, devuelve JSON completo
+                    return json.dumps(obj, ensure_ascii=False)
             except Exception:
-                pass
+                pass  # no era JSON válido, se trata como texto normal
 
-        # Si es lista de resultados con "pageContent"
+        # 🔸 Si es lista (varios resultados o fragmentos)
         if isinstance(raw_reply, list):
             parts = []
             for item in raw_reply:
-                if isinstance(item, dict) and "text" in item:
-                    try:
-                        data = json.loads(item["text"])
-                        parts.append(data.get("pageContent", item["text"]))
-                    except Exception:
-                        parts.append(item["text"])
-                elif isinstance(item, dict) and "pageContent" in item:
-                    parts.append(item["pageContent"])
+                if isinstance(item, dict):
+                    for key in ["pageContent", "text", "content"]:
+                        if key in item and item[key]:
+                            parts.append(str(item[key]).strip())
+                            break
                 elif isinstance(item, str):
-                    parts.append(item)
-            return "\n".join(parts)
+                    parts.append(item.strip())
+            if parts:
+                return "\n".join(parts).strip()
 
-        # Si ya es texto limpio
+        # 🔸 Si es texto plano
         if isinstance(raw_reply, str):
-            cleaned = re.sub(r"\s+", " ", raw_reply)
-            return cleaned.strip()
+            cleaned = re.sub(r"\s+", " ", raw_reply).strip()
+            return cleaned or raw_reply
 
+        # 🔸 Fallback final: convierte cualquier cosa a texto
         return str(raw_reply)
 
     except Exception as e:
-        logging.error(f"⚠️ Error en normalize_reply: {e}")
-        return str(raw_reply)
+        logging.error(f"⚠️ Error en normalize_reply: {e}", exc_info=True)
+        return str(raw_reply) or "Respuesta no disponible"
 
 
 # -----------------------------------------------------
@@ -61,7 +76,7 @@ def normalize_reply(raw_reply, query=None, source=None):
 # -----------------------------------------------------
 def summarize_tool_output(query: str, raw_output: str, temperature: float = 0.0) -> str:
     """
-    Reformula la salida cruda de una tool en una respuesta natural y amigable.
+    Reformula la salida cruda de una tool en una respuesta natural y amable.
     Equivale al "LLM Post-Processor" de n8n.
     """
     try:
@@ -71,26 +86,26 @@ def summarize_tool_output(query: str, raw_output: str, temperature: float = 0.0)
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=temperature)
 
         prompt = f"""
-Eres el asistente virtual del hotel. Debes responder de manera amable,
-natural y útil al huésped, usando la información a continuación.
+            Eres el asistente virtual del hotel. Responde de forma amable,
+            natural y útil al huésped, usando la información a continuación.
 
-Consulta del huésped:
-"{query}"
+            Consulta del huésped:
+            "{query}"
 
-Información encontrada:
-{raw_output}
+            Información encontrada:
+            {raw_output}
 
-Instrucciones:
-- Responde en el mismo idioma que la consulta.
-- Redacta una sola respuesta breve (2–4 frases).
-- No muestres formato JSON ni listas técnicas.
-- Si la información incluye “no disponible”, responde educadamente explicando la situación.
-"""
+            Instrucciones:
+            - Responde en el mismo idioma que la consulta.
+            - Da una respuesta breve (2–4 frases), clara y natural.
+            - No uses formato JSON ni listas técnicas.
+            - Si la información indica “no disponible”, responde con una frase educada explicando la situación.
+            """
 
         response = llm.invoke(prompt)
         return response.content.strip()
 
     except Exception as e:
         logging.error(f"⚠️ Error en summarize_tool_output: {e}", exc_info=True)
-        # fallback simple
+        # fallback simple: devuelve la respuesta sin reformular
         return raw_output.strip()
