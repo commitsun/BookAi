@@ -15,6 +15,14 @@ class BaseChannel(ABC):
         self.conversations = {}
         self.processed_ids = set()
 
+        # ✅ Fallback: crear un agente híbrido si no se inyecta desde main.py
+        try:
+            self.agent = HotelAIHybrid()
+            logging.info("🤖 BaseChannel inicializado con agente HotelAIHybrid interno.")
+        except Exception as e:
+            logging.warning(f"⚠️ No se pudo inicializar HotelAIHybrid automáticamente: {e}")
+            self.agent = None
+
     # ============================================================
     # Métodos abstractos (implementados en subclases específicas)
     # ============================================================
@@ -43,22 +51,19 @@ class BaseChannel(ABC):
         - Llama al agente principal (HotelAIHybrid)
         - Fragmenta y envía la respuesta al usuario
         """
-        # Extraer datos esenciales del mensaje entrante
         user_id, msg_id, msg_type, user_msg = self.extract_message_data(payload)
         if not user_id or not msg_id:
             logging.debug("📦 Webhook ignorado: evento sin mensaje válido (status update o vacío).")
             return
 
-        # Evitar procesar mensajes duplicados
+        # Evitar duplicados
         if msg_id in self.processed_ids:
-            print(f"🔁 Mensaje duplicado ignorado: {msg_id}")
+            logging.debug(f"🔁 Mensaje duplicado ignorado: {msg_id}")
             return
         self.processed_ids.add(msg_id)
 
-        # Limpiar número del usuario (conversation_id)
         conversation_id = str(user_id).replace("+", "").strip()
 
-        # Crear historial local si no existe
         if conversation_id not in self.conversations:
             self.conversations[conversation_id] = [
                 {
@@ -71,26 +76,25 @@ class BaseChannel(ABC):
                 }
             ]
 
-        # Añadir mensaje del usuario al historial
         self.conversations[conversation_id].append({"role": "user", "content": user_msg})
-        print(f"📩 Mensaje recibido de {conversation_id}: {user_msg}")
+        logging.info(f"📩 Mensaje recibido de {conversation_id}: {user_msg}")
 
         # --------------------------------------------------------
-        # 🤖 Ejecutar el agente híbrido principal
+        # 🤖 Procesar con agente híbrido
         # --------------------------------------------------------
-        # ✅ Usa el agente compartido inyectado desde main.py
-        if not hasattr(self, "agent") or self.agent is None:
-            raise RuntimeError(
-                "El canal no tiene un agente asignado. Asegúrate de inyectarlo desde ChannelManager o main.py"
-            )
+        if not self.agent:
+            logging.error("❌ No hay agente asignado. No se puede procesar el mensaje.")
+            return
 
         reply = await self.agent.process_message(
             user_message=user_msg,
             conversation_id=conversation_id,
         )
 
+        if not reply or not reply.strip():
+            logging.warning(f"⚠️ El agente devolvió respuesta vacía para {conversation_id}.")
+            return
 
-        # Añadir respuesta del asistente al historial
         self.conversations[conversation_id].append({"role": "assistant", "content": reply})
 
         # --------------------------------------------------------
@@ -100,4 +104,4 @@ class BaseChannel(ABC):
         for frag in fragments:
             sleep_typing(frag)
             self.send_message(conversation_id, frag)
-            print(f"🚀 Enviado a {conversation_id}: {frag[:60]}...")
+            logging.info(f"🚀 Enviado a {conversation_id}: {frag[:60]}...")

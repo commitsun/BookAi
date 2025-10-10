@@ -13,3 +13,4 @@ uvicorn
 requests
 openai
 httpx
+aiohttp
