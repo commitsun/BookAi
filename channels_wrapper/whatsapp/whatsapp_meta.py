@@ -11,6 +11,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.base_channel import BaseChannel
 from channels_wrapper.utils.media_utils import transcribe_audio
+from channels_wrapper.utils.text_utils import fragment_text_intelligently, sleep_typing
 from core.escalation_manager import mark_pending
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
@@ -18,7 +19,8 @@ WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
 VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
 OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-BUFFER_WAIT_SECONDS = 8  # ⏳ Ventana de escritura del cliente antes de procesar
+BUFFER_WAIT_SECONDS = 8   # ⏳ Ventana de escritura del cliente antes de procesar
+FRAGMENT_THRESHOLD = 300  # ✂️ Fragmentar respuestas largas
 
 
 class WhatsAppChannel(BaseChannel):
@@ -147,7 +149,7 @@ class WhatsAppChannel(BaseChannel):
             logging.error(f"⚠️ Error en timer/process para {conversation_id}: {e}", exc_info=True)
 
     async def _process_block(self, conversation_id: str, user_block: str):
-        """Llama al agente con el bloque unido y envía la respuesta (una sola), salvo cancelación."""
+        """Llama al agente con el bloque unido y envía la respuesta (con posible fragmentación), salvo cancelación."""
         from main import hybrid_agent  # Usar el agente global inyectado en main.py
 
         try:
@@ -176,8 +178,16 @@ class WhatsAppChannel(BaseChannel):
                 logging.info(f"🕓 Escalando conversación con {conversation_id}")
                 return
 
-            # ✅ Enviar UNA SOLA respuesta (sin fragmentar)
-            self.send_message(conversation_id, response)
+            # ✂️ Enviar con fragmentación solo si es largo
+            if len(response) >= FRAGMENT_THRESHOLD:
+                fragments = fragment_text_intelligently(response)
+                for frag in fragments:
+                    sleep_typing(frag)
+                    self.send_message(conversation_id, frag)
+                    logging.info(f"🚀 Enviado (fragmento) a {conversation_id}: {frag[:80]}...")
+            else:
+                self.send_message(conversation_id, response)
+
             self._append_to_conversation(conversation_id, "assistant", response)
 
         except asyncio.CancelledError:
