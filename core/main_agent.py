@@ -15,6 +15,14 @@ from core.language import detect_language, enforce_language
 from core.utils.utils_prompt import load_prompt
 from core.memory_manager import MemoryManager  # 🧠 Memoria híbrida RAM + DB
 
+# ===============================================
+# 🔍 LangSmith Observability (BookAI Project)
+# ===============================================
+os.environ["LANGCHAIN_TRACING_V2"] = "true"
+os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
+os.environ["LANGCHAIN_PROJECT"] = "BookAI"
+# Recuerda: LANGCHAIN_API_KEY debe estar en .env
+
 
 # =====================================================
 # 🧠 Instancia global de memoria (RAM + Supabase)
@@ -48,7 +56,7 @@ class HotelAIHybrid:
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
         logging.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
-        # 🤖 Inicializar modelo LLM
+        # 🤖 Inicializar modelo LLM con LangSmith tracing activado
         self.llm = ChatOpenAI(
             model=self.model_name,
             temperature=self.temperature,
@@ -115,7 +123,7 @@ class HotelAIHybrid:
         executor = AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
+            verbose=True,  # 👈 Muestra reasoning y tools en LangSmith
             handle_parsing_errors=True,
             max_iterations=max_iterations,
             return_intermediate_steps=return_intermediate_steps,
