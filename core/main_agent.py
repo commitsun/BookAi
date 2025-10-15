@@ -4,7 +4,7 @@
 import os
 import json
 import logging
-from typing import Optional
+from typing import Optional, List
 
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
@@ -12,7 +12,6 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 
 from tools.hotel_tools import get_all_hotel_tools
-from core.language import detect_language, enforce_language
 from core.utils.utils_prompt import load_prompt
 from core.memory_manager import MemoryManager  # 🧠 Memoria híbrida RAM + DB
 
@@ -40,8 +39,8 @@ class HotelAIHybrid:
     - Usa main_prompt.txt como System Message obligatorio.
     - Tools dinámicas (LangChain Tools Agent)
     - Memoria híbrida (RAM + DB)
-    - Multi-idioma y manejo automático de errores
-    - Tono suave y humano; no inventa información externa.
+    - Multi-idioma nativo (una sola llamada al LLM)
+    - Tono humano y conciso; no inventa información externa.
     """
 
     def __init__(
@@ -52,7 +51,8 @@ class HotelAIHybrid:
     ):
         self.memory = memory_manager or _global_memory
 
-        self.model_name = os.getenv("OPENAI_MODEL")
+        # Modelo principal (por .env). Fallback por seguridad.
+        self.model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
         logging.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
@@ -122,76 +122,57 @@ class HotelAIHybrid:
     # -------------------------------------------------
     # 🧠 Instrucciones internas previas al input (tono + política)
     # -------------------------------------------------
-    def _inject_smart_instructions(self, user_message: str, language: str) -> str:
-        is_es = (language or "").lower().startswith("es")
-
-        if is_es:
-            instructions = (
-                "[INSTRUCCIONES INTERNAS — NO MOSTRAR]\n"
-                "- Responde en español de España, con tono cercano y profesional.\n"
-                "- Si hay varias preguntas, respóndelas una a una, de forma breve y clara en un único mensaje.\n"
-                "- Usa solo información del hotel o de la conversación. No inventes datos externos.\n"
-                "- Si no consta en la base o no lo sabes, di naturalmente: "
-                "\"No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.\"\n"
-                "- Para solicitudes absurdas (p. ej., dragones), responde con cortesía y sentido común.\n"
-                "- Evita muletillas y cierres largos. Mantén la respuesta concisa.\n"
-                "- Emojis: solo cuando aporten claridad (máx. 1).\n"
-                "[FIN]\n"
-            )
-            prefix = "Mensaje del cliente:\n"
-        else:
-            instructions = (
-                "[INTERNAL INSTRUCTIONS — DO NOT SHOW]\n"
-                "- Answer in the user's language, warm and professional.\n"
-                "- If multiple questions, answer them briefly in a single message.\n"
-                "- Use hotel info or conversation context only. Do not invent external facts.\n"
-                "- If unknown, say naturally: "
-                "\"I don’t have that detail right now. I can check and confirm if you’d like.\"\n"
-                "- Handle absurd requests politely.\n"
-                "- Keep it concise; avoid long closings. One emoji max if helpful.\n"
-                "[END]\n"
-            )
-            prefix = "Customer message:\n"
-
-        return f"{instructions}\n{prefix}{user_message}"
+    def _inject_smart_instructions(self, user_message: str) -> str:
+        return (
+            "[INSTRUCCIONES INTERNAS — NO MOSTRAR]\n"
+            "- Responde SIEMPRE en el mismo idioma que el cliente (detéctalo a partir del mensaje).\n"
+            "- Si hay varias preguntas, respóndelas en un único mensaje, claro, breve y ordenado.\n"
+            "- Usa solo información del hotel o de la conversación. No inventes datos externos.\n"
+            "- Si no consta en la base o no lo sabes, di naturalmente: "
+            "\"No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.\"\n"
+            "- Para solicitudes absurdas, responde con cortesía y sentido común.\n"
+            "- Evita muletillas y cierres largos. Un emoji como máximo si aporta claridad.\n"
+            "- SALUDOS/AGRADECIMIENTOS/CHARLA TRIVIAL: usa la herramienta 'other' y pásale una "
+            "respuesta corta, profesional y en el idioma del cliente. La tool devolverá ese mismo texto.\n"
+            "- CONSULTAS EXTERNAS (p.ej., restaurantes cercanos, farmacias, playas, taxis): "
+            "no inventes. Si se requiere dato externo o la KB no lo tiene, escala.\n"
+            "[FIN]\n\n"
+            f"Mensaje del cliente:\n{user_message}"
+        )
 
     # -------------------------------------------------
-    # ✨ Post-procesado suave (determinista)
+    # ✨ Post-procesado suave (determinista, sin LLM)
     # -------------------------------------------------
-    def _postprocess_response(self, user_message: str, raw_reply: str, language: str) -> str:
+    def _postprocess_response(self, raw_reply: str) -> str:
         if not raw_reply:
             return raw_reply
 
         reply = raw_reply.strip()
         lower = reply.lower()
-        is_es = (language or "").lower().startswith("es")
 
-        # Eliminar coletillas repetidas
-        tails = [
+        # Eliminar coletillas repetidas comunes
+        tails: List[str] = [
             "si necesitas más información, estaré encantado de ayudarte",
             "si necesita más información, estaré encantado de ayudarle",
             "si necesitas algo más, estaré encantado de ayudarte",
             "estoy aquí para ayudarte",
+            "i'm here to help",
+            "if you need anything else",
         ]
         for t in tails:
             if t in lower:
-                reply = reply[:lower.find(t)].rstrip(". ").strip()
+                idx = lower.find(t)
+                reply = reply[:idx].rstrip(". ").strip()
+                lower = reply.lower()
 
-        # Suavizar negativas muy secas
-        if is_es:
-            harsh_map = {
-                "no dispongo de ese dato en este momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
-                "no dispongo de ese dato por el momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
-                "actualmente no hay disponibilidad": "Ahora mismo no contamos con eso. Si te sirve, puedo proponerte alternativas.",
-                "no hay": "Ahora mismo no contamos con ello.",
-            }
-        else:
-            harsh_map = {
-                "i don’t have that information at this moment": "I don’t have that detail right now. I can check and confirm if you’d like.",
-                "not available at the moment": "It’s not available right now. I can suggest alternatives if helpful.",
-                "no": "Not at the moment.",
-            }
-
+        # Suavizado simple de negaciones duras
+        harsh_map = {
+            "no dispongo de ese dato en este momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
+            "no dispongo de ese dato por el momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
+            "actualmente no hay disponibilidad": "Ahora mismo no contamos con eso. Si te sirve, puedo proponerte alternativas.",
+            "i don’t have that information at this moment": "I don’t have that detail right now. I can check and confirm if you’d like.",
+            "not available at the moment": "It’s not available right now. I can suggest alternatives if helpful.",
+        }
         l = reply.lower()
         for k, v in harsh_map.items():
             if k in l:
@@ -202,7 +183,7 @@ class HotelAIHybrid:
         return reply.replace("..", ".").strip()
 
     # -------------------------------------------------
-    # 💬 Procesamiento principal de mensajes
+    # 💬 Procesamiento principal de mensajes (una sola llamada al LLM)
     # -------------------------------------------------
     async def process_message(self, user_message: str, conversation_id: str = None) -> str:
         if not conversation_id:
@@ -210,8 +191,7 @@ class HotelAIHybrid:
             conversation_id = "unknown"
 
         clean_id = str(conversation_id).replace("+", "").strip()
-        language = detect_language(user_message)
-        logging.info(f"📩 Mensaje recibido de {clean_id} ({language}): {user_message}")
+        logging.info(f"📩 Mensaje recibido de {clean_id}: {user_message}")
 
         # Contexto previo desde memoria híbrida
         history = self.memory.get_context(clean_id, limit=10)
@@ -221,11 +201,10 @@ class HotelAIHybrid:
             for m in history
         ]
 
-        # Instrucciones internas (sin segunda llamada LLM)
-        smart_input = self._inject_smart_instructions(user_message, language)
+        smart_input = self._inject_smart_instructions(user_message)
 
         try:
-            # Una sola llamada al agente (router + tools)
+            # Una sola llamada (router + tools + redacción final)
             result = await self.agent_executor.ainvoke({
                 "input": smart_input,
                 "chat_history": chat_history,
@@ -239,6 +218,7 @@ class HotelAIHybrid:
                     output = val.strip()
                     break
 
+            # Fallback: intentar extraer del último intermediate_step
             if (not output or not output.strip()) and "intermediate_steps" in result:
                 steps = result.get("intermediate_steps", [])
                 if isinstance(steps, list) and steps:
@@ -250,10 +230,12 @@ class HotelAIHybrid:
                         elif isinstance(candidate, dict):
                             output = json.dumps(candidate, ensure_ascii=False)
 
+            # Fallback adicional: volcado recortado
             if not output or not output.strip():
                 raw_dump = json.dumps(result, ensure_ascii=False)
                 output = raw_dump[:1500] if len(raw_dump) > 20 else None
 
+            # Último recurso
             if not output or not output.strip():
                 output = (
                     "Ha ocurrido un imprevisto al procesar tu solicitud. "
@@ -270,14 +252,14 @@ class HotelAIHybrid:
             )
 
         # Post-proceso suave (determinista)
-        softened = self._postprocess_response(user_message, output, language)
-
-        # Ajuste de idioma final
-        final_response = enforce_language(user_message, softened, language)
+        final_response = self._postprocess_response(output)
 
         # Persistencia en memoria
-        self.memory.save(clean_id, "user", user_message)
-        self.memory.save(clean_id, "assistant", final_response)
+        try:
+            self.memory.save(clean_id, "user", user_message)
+            self.memory.save(clean_id, "assistant", final_response)
+        except Exception as e:
+            logging.warning(f"⚠️ No se pudo persistir en memoria: {e}")
 
         logging.info(
             f"💾 Memoria actualizada para {clean_id} "

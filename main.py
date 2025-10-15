@@ -66,10 +66,12 @@ async def api_message(request: Request):
 
         response = await hybrid_agent.process_message(user_message, conversation_id)
 
-        # Si la IA no puede responder, escalar al encargado
+                # Si la IA no puede responder, escalar al encargado
         if any(p in response.lower() for p in [
             "contactar con el encargado",
-            "no dispongo",
+            "consultarlo con el encargado",
+            "voy a consultarlo con el encargado",
+            "un momento por favor",
             "permíteme contactar",
             "he contactado con el encargado",
             "error",
@@ -78,6 +80,7 @@ async def api_message(request: Request):
             return JSONResponse({
                 "response": "🕓 Consultando con el encargado..."
             })
+
 
         return JSONResponse({"response": response})
 

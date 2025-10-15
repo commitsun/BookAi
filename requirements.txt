@@ -14,3 +14,5 @@ requests
 openai
 httpx
 aiohttp
+langdetect
+deep-translator

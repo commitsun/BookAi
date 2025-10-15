@@ -166,17 +166,21 @@ class WhatsAppChannel(BaseChannel):
                 logging.warning(f"⚠️ El agente devolvió respuesta vacía para {conversation_id}.")
                 return
 
-            # Escalación automática (fallback a encargado) — preservado
+            # Escalación automática (fallback a encargado)
             if any(p in response.lower() for p in [
                 "contactar con el encargado",
-                "no dispongo",
+                "consultarlo con el encargado",
+                "voy a consultarlo con el encargado",
+                "un momento por favor",
                 "permíteme contactar",
                 "he contactado con el encargado",
+                "no dispongo",  
                 "error",
             ]):
                 await mark_pending(conversation_id, user_block)
                 logging.info(f"🕓 Escalando conversación con {conversation_id}")
                 return
+
 
             # ✂️ Enviar con fragmentación solo si es largo
             if len(response) >= FRAGMENT_THRESHOLD:
