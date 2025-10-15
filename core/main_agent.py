@@ -1,9 +1,8 @@
-# =====================================================
-# 🧠 HotelAIHybrid — Agente principal estilo n8n (usa main_prompt)
-# =====================================================
+# core/main_agent.py
 import os
 import json
 import logging
+import re
 from typing import Optional, List
 
 from langchain_openai import ChatOpenAI
@@ -13,34 +12,42 @@ from langchain_core.messages import HumanMessage, AIMessage
 
 from tools.hotel_tools import get_all_hotel_tools
 from core.utils.utils_prompt import load_prompt
-from core.memory_manager import MemoryManager  # 🧠 Memoria híbrida RAM + DB
+from core.memory_manager import MemoryManager
+from core.language_manager import language_manager
+from core.escalation_manager import mark_pending
 
 # ===============================================
-# 🔍 LangSmith Observability (BookAI Project)
+# (Opcional) LangSmith
 # ===============================================
-os.environ["LANGCHAIN_TRACING_V2"] = "true"
-os.environ["LANGCHAIN_ENDPOINT"] = "https://api.smith.langchain.com"
-os.environ["LANGCHAIN_PROJECT"] = "BookAI"
-# LANGCHAIN_API_KEY debe estar en .env
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
+os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
+os.environ.setdefault("LANGCHAIN_PROJECT", "BookAI")
 
-
-# =====================================================
-# 🧠 Instancia global de memoria (RAM + Supabase)
-# =====================================================
+# ===============================================
+# Memoria híbrida
+# ===============================================
 _global_memory = MemoryManager(max_runtime_messages=8)
 
+LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
+ESCALATE_MARKERS = (
+    "__ESCALATE__",  # marcador explícito desde tools
+    "contactar con el encargado",
+    "consultarlo con el encargado",
+    "voy a consultarlo con el encargado",
+    "un momento por favor",
+    "permíteme contactar",
+    "he contactado con el encargado",
+    "no dispongo",
+    "error",
+)
 
-# =====================================================
-# 🏨 Agente híbrido principal del sistema HotelAI
-# =====================================================
+
 class HotelAIHybrid:
     """
-    Sistema IA principal del hotel, con arquitectura tipo n8n.
-    - Usa main_prompt.txt como System Message obligatorio.
-    - Tools dinámicas (LangChain Tools Agent)
-    - Memoria híbrida (RAM + DB)
-    - Multi-idioma nativo (una sola llamada al LLM)
-    - Tono humano y conciso; no inventa información externa.
+    Agente principal del hotel:
+    - Router + Tools (LangChain)
+    - Idioma dinámico (detecta, persiste como [lang:xx] en role='system', fuerza salida)
+    - Escalación automática (mark_pending) si se detecta intención de escalado
     """
 
     def __init__(
@@ -51,7 +58,6 @@ class HotelAIHybrid:
     ):
         self.memory = memory_manager or _global_memory
 
-        # Modelo principal (por .env). Fallback por seguridad.
         self.model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
         logging.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
@@ -72,11 +78,9 @@ class HotelAIHybrid:
             return_intermediate_steps=return_intermediate_steps,
         )
 
-        logging.info("✅ HotelAIHybrid listo con arquitectura n8n usando main_prompt.txt.")
+        logging.info("✅ HotelAIHybrid listo (idioma persistente + escalación automática).")
 
-    # -------------------------------------------------
-    # 🧾 Carga de prompt principal desde /prompts
-    # -------------------------------------------------
+    # ---------------------- Prompt principal ----------------------
     def _load_main_prompt(self) -> str:
         try:
             prompt_text = load_prompt("main_prompt.txt")
@@ -91,14 +95,11 @@ class HotelAIHybrid:
                 "Verifica /prompts/main_prompt.txt."
             )
 
-    # -------------------------------------------------
-    # 🧩 Construcción del agente con tools dinámicas
-    # -------------------------------------------------
+    # ---------------------- Agent executor ------------------------
     def _create_agent_executor(self, max_iterations: int, return_intermediate_steps: bool):
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.system_message),
             MessagesPlaceholder(variable_name="chat_history"),
-            # 👇 Inyectamos instrucciones internas delante del input (una sola llamada al LLM)
             ("user", "{input}"),
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
@@ -119,38 +120,58 @@ class HotelAIHybrid:
         )
         return executor
 
-    # -------------------------------------------------
-    # 🧠 Instrucciones internas previas al input (tono + política)
-    # -------------------------------------------------
-    def _inject_smart_instructions(self, user_message: str) -> str:
+    # ---------------------- Idioma persistente --------------------
+    def _extract_lang_from_history(self, history: List[dict]) -> Optional[str]:
+        # Busca el tag [lang:xx] en el historial (cualquier role), del más reciente al más antiguo
+        for msg in reversed(history):
+            content = (msg or {}).get("content", "")
+            if not isinstance(content, str):
+                continue
+            m = LANG_TAG_RE.match(content.strip())
+            if m:
+                return m.group(1).lower()
+        return None
+
+    def _persist_lang_tag(self, conversation_id: str, lang: str):
+        # Importante: role='system' (válido para la constraint de Supabase)
+        try:
+            tag = f"[lang:{(lang or 'es').lower()}]"
+            self.memory.save(conversation_id, "system", tag)
+        except Exception as e:
+            logging.warning(f"⚠️ No se pudo persistir tag de idioma: {e}")
+
+    def _get_or_detect_language(self, user_message: str, conversation_id: str, combined_history: List[dict]) -> str:
+        saved = self._extract_lang_from_history(combined_history)
+        if saved:
+            return saved
+        detected = language_manager.detect_language(user_message)
+        self._persist_lang_tag(conversation_id, detected)
+        return detected
+
+    # ---------------------- Instrucciones internas ----------------
+    def _inject_smart_instructions(self, user_message: str, lang_code: str) -> str:
         return (
             "[INSTRUCCIONES INTERNAS — NO MOSTRAR]\n"
-            "- Responde SIEMPRE en el mismo idioma que el cliente (detéctalo a partir del mensaje).\n"
+            f"- RESPONDE SIEMPRE en el idioma ISO 639-1: {lang_code}\n"
             "- Si hay varias preguntas, respóndelas en un único mensaje, claro, breve y ordenado.\n"
             "- Usa solo información del hotel o de la conversación. No inventes datos externos.\n"
             "- Si no consta en la base o no lo sabes, di naturalmente: "
             "\"No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.\"\n"
-            "- Para solicitudes absurdas, responde con cortesía y sentido común.\n"
             "- Evita muletillas y cierres largos. Un emoji como máximo si aporta claridad.\n"
             "- SALUDOS/AGRADECIMIENTOS/CHARLA TRIVIAL: usa la herramienta 'other' y pásale una "
             "respuesta corta, profesional y en el idioma del cliente. La tool devolverá ese mismo texto.\n"
-            "- CONSULTAS EXTERNAS (p.ej., restaurantes cercanos, farmacias, playas, taxis): "
-            "no inventes. Si se requiere dato externo o la KB no lo tiene, escala.\n"
+            "- CONSULTAS EXTERNAS (restaurantes, farmacias, taxis, etc.): no inventes. Si se requiere dato externo o la KB no lo tiene, escala.\n"
             "[FIN]\n\n"
             f"Mensaje del cliente:\n{user_message}"
         )
 
-    # -------------------------------------------------
-    # ✨ Post-procesado suave (determinista, sin LLM)
-    # -------------------------------------------------
+    # ---------------------- Post-proceso determinista -------------
     def _postprocess_response(self, raw_reply: str) -> str:
         if not raw_reply:
             return raw_reply
-
         reply = raw_reply.strip()
         lower = reply.lower()
 
-        # Eliminar coletillas repetidas comunes
         tails: List[str] = [
             "si necesitas más información, estaré encantado de ayudarte",
             "si necesita más información, estaré encantado de ayudarle",
@@ -165,7 +186,6 @@ class HotelAIHybrid:
                 reply = reply[:idx].rstrip(". ").strip()
                 lower = reply.lower()
 
-        # Suavizado simple de negaciones duras
         harsh_map = {
             "no dispongo de ese dato en este momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
             "no dispongo de ese dato por el momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
@@ -182,9 +202,14 @@ class HotelAIHybrid:
 
         return reply.replace("..", ".").strip()
 
-    # -------------------------------------------------
-    # 💬 Procesamiento principal de mensajes (una sola llamada al LLM)
-    # -------------------------------------------------
+    # ---------------------- Escalación automática -----------------
+    def _should_escalate(self, text: str) -> bool:
+        if not text:
+            return False
+        t = text.lower()
+        return any(marker in t for marker in ESCALATE_MARKERS)
+
+    # ---------------------- Loop principal ------------------------
     async def process_message(self, user_message: str, conversation_id: str = None) -> str:
         if not conversation_id:
             logging.warning("⚠️ conversation_id no recibido — usando ID temporal.")
@@ -193,24 +218,23 @@ class HotelAIHybrid:
         clean_id = str(conversation_id).replace("+", "").strip()
         logging.info(f"📩 Mensaje recibido de {clean_id}: {user_message}")
 
-        # Contexto previo desde memoria híbrida
-        history = self.memory.get_context(clean_id, limit=10)
+        history = self.memory.get_context(clean_id, limit=12)
         chat_history = [
             HumanMessage(content=m["content"]) if m["role"] == "user"
             else AIMessage(content=m["content"])
             for m in history
+            if m.get("role") in ("user", "assistant")
         ]
 
-        smart_input = self._inject_smart_instructions(user_message)
+        user_lang = self._get_or_detect_language(user_message, clean_id, history)
+        smart_input = self._inject_smart_instructions(user_message, user_lang)
 
         try:
-            # Una sola llamada (router + tools + redacción final)
             result = await self.agent_executor.ainvoke({
                 "input": smart_input,
                 "chat_history": chat_history,
             })
 
-            # Extracción robusta del output final
             output = None
             for key in ["output", "final_output", "response"]:
                 val = result.get(key)
@@ -218,7 +242,6 @@ class HotelAIHybrid:
                     output = val.strip()
                     break
 
-            # Fallback: intentar extraer del último intermediate_step
             if (not output or not output.strip()) and "intermediate_steps" in result:
                 steps = result.get("intermediate_steps", [])
                 if isinstance(steps, list) and steps:
@@ -230,19 +253,13 @@ class HotelAIHybrid:
                         elif isinstance(candidate, dict):
                             output = json.dumps(candidate, ensure_ascii=False)
 
-            # Fallback adicional: volcado recortado
-            if not output or not output.strip():
-                raw_dump = json.dumps(result, ensure_ascii=False)
-                output = raw_dump[:1500] if len(raw_dump) > 20 else None
-
-            # Último recurso
             if not output or not output.strip():
                 output = (
                     "Ha ocurrido un imprevisto al procesar tu solicitud. "
                     "Voy a consultarlo y te confirmo en breve."
                 )
 
-            logging.info(f"🤖 Respuesta generada (antes de post-proceso): {output[:160]}...")
+            logging.info(f"🤖 Respuesta generada (antes post-proceso): {output[:160]}...")
 
         except Exception as e:
             logging.error(f"❌ Error en agente: {e}", exc_info=True)
@@ -251,12 +268,34 @@ class HotelAIHybrid:
                 "Voy a consultarlo y te confirmo en breve."
             )
 
-        # Post-proceso suave (determinista)
-        final_response = self._postprocess_response(output)
+        # Escalación automática (opción A)
+        if self._should_escalate(output):
+            try:
+                await mark_pending(clean_id, user_message)
+            except Exception as e:
+                logging.error(f"❌ Error en mark_pending: {e}", exc_info=True)
 
-        # Persistencia en memoria
+            wait_base = "Un momento por favor, voy a consultarlo con el encargado."
+            wait_phrase = "🕓 " + language_manager.short_phrase(wait_base, user_lang)
+
+            # Persistir aviso breve
+            try:
+                if not self._extract_lang_from_history(history):
+                    self._persist_lang_tag(clean_id, user_lang)
+                self.memory.save(clean_id, "assistant", wait_phrase)
+            except Exception as e:
+                logging.warning(f"⚠️ No se pudo persistir aviso de escalación: {e}")
+
+            return wait_phrase
+
+        # Respuesta normal
+        final_response = self._postprocess_response(output)
+        final_response = language_manager.ensure_language(final_response, user_lang)
+
         try:
             self.memory.save(clean_id, "user", user_message)
+            if not self._extract_lang_from_history(history):
+                self._persist_lang_tag(clean_id, user_lang)
             self.memory.save(clean_id, "assistant", final_response)
         except Exception as e:
             logging.warning(f"⚠️ No se pudo persistir en memoria: {e}")
