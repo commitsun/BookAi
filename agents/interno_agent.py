@@ -1,6 +1,7 @@
 import logging
 import os
 import json
+import re
 import requests
 from fastmcp import FastMCP
 from supabase import create_client
@@ -12,7 +13,6 @@ from core.config import Settings as C
 log = logging.getLogger("InternoAgent")
 mcp = FastMCP("InternoAgent")
 
-# Intentar inicializar Supabase solo si hay credenciales
 supabase = None
 try:
     if C.SUPABASE_URL and C.SUPABASE_KEY:
@@ -26,20 +26,56 @@ except Exception as e:
 TELEGRAM_BOT_TOKEN = C.TELEGRAM_BOT_TOKEN
 TELEGRAM_CHAT_ID = C.TELEGRAM_CHAT_ID
 
+# =====================================================
+# 📄 Expresión para detectar bloques estructurados
+# =====================================================
+SUPERVISOR_BLOCK_RE = re.compile(r"(?i)^estado\s*:", re.MULTILINE)
+
 
 # =====================================================
-# 📩 Función principal: Notificar al encargado
+# 📩 Función principal: enviar mensaje a Telegram
 # =====================================================
 def notify_encargado(text: str):
-    """Envía un mensaje al encargado del hotel por Telegram."""
+    """Envía un mensaje al encargado del hotel por Telegram con formato enriquecido."""
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
         log.error("❌ Falta configuración de Telegram (TOKEN o CHAT_ID).")
         return
 
+    # --- 🔍 formateo inteligente ---
+    formatted = None
+    try:
+        # Bloques tipo “Estado: ... Motivo: ...”
+        if SUPERVISOR_BLOCK_RE.search(text):
+            formatted = (
+                "🚨 *Alerta del sistema HotelAI*\n"
+                "```text\n" + text.strip() + "\n```"
+            )
+        # Mensajes tipo Interno({...})
+        elif text.strip().startswith("Interno("):
+            inner = text.strip()[8:-1]
+            formatted = (
+                "🚨 *Alerta del sistema HotelAI*\n"
+                "```json\n" + inner.strip() + "\n```"
+            )
+        # Si parece JSON crudo
+        elif text.strip().startswith("{"):
+            formatted = (
+                "🚨 *Alerta del sistema HotelAI*\n"
+                "```json\n" + text.strip() + "\n```"
+            )
+        # fallback genérico
+        else:
+            formatted = (
+                "🚨 *Notificación interna HotelAI*\n"
+                "```\n" + text.strip() + "\n```"
+            )
+    except Exception:
+        formatted = f"🚨 *Alerta del sistema HotelAI*\n\n{text}"
+
     url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
     payload = {
         "chat_id": TELEGRAM_CHAT_ID,
-        "text": f"🚨 *Alerta del sistema HotelAI*\n\n{text}",
+        "text": formatted,
         "parse_mode": "Markdown",
     }
 
@@ -54,7 +90,7 @@ def notify_encargado(text: str):
 
 
 # =====================================================
-# 💾 Guardar incidencia en Supabase (modo temporal)
+# 💾 Guardar incidencia en Supabase
 # =====================================================
 def save_incident(payload: str, origin: str = "Sistema"):
     """
