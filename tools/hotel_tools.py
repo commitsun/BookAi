@@ -9,6 +9,8 @@ import re
 from langchain.tools import tool as base_tool
 from core.mcp_client import mcp_client
 from core.utils.normalize_reply import normalize_reply, summarize_tool_output
+from tools.supervisor_input_tool import supervisor_input_tool
+from tools.supervisor_output_tool import supervisor_output_tool
 
 # =====================================================
 # ⚙️ Decorador híbrido compatible (LangChain <-> HotelAI)
@@ -258,4 +260,6 @@ def get_all_hotel_tools():
         guest_support_tool,
         think_tool,
         other_tool,  
+        supervisor_output_tool,
+        supervisor_input_tool
     ]

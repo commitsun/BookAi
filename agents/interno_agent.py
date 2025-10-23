@@ -1,151 +1,126 @@
-# agents/interno_agent.py
-import re
 import logging
+import os
+import json
 import requests
 from fastmcp import FastMCP
 from supabase import create_client
-from langchain_openai import ChatOpenAI
 from core.config import Settings as C
 
+# =====================================================
+# CONFIGURACIÓN BÁSICA
+# =====================================================
 log = logging.getLogger("InternoAgent")
 mcp = FastMCP("InternoAgent")
 
-# Base de datos y modelo
-supabase = create_client(C.SUPABASE_URL, C.SUPABASE_KEY)
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+# Intentar inicializar Supabase solo si hay credenciales
+supabase = None
+try:
+    if C.SUPABASE_URL and C.SUPABASE_KEY:
+        supabase = create_client(C.SUPABASE_URL, C.SUPABASE_KEY)
+        log.info("✅ Supabase inicializado correctamente.")
+    else:
+        log.warning("⚠️ Supabase deshabilitado (faltan credenciales).")
+except Exception as e:
+    log.error(f"❌ Error inicializando Supabase: {e}")
+
+TELEGRAM_BOT_TOKEN = C.TELEGRAM_BOT_TOKEN
+TELEGRAM_CHAT_ID = C.TELEGRAM_CHAT_ID
+
 
 # =====================================================
-# 💾 Funciones auxiliares (Supabase)
+# 📩 Función principal: Notificar al encargado
 # =====================================================
-def save_pending_query(conversation_id: str, question: str):
-    """Guarda una nueva consulta pendiente en Supabase."""
+def notify_encargado(text: str):
+    """Envía un mensaje al encargado del hotel por Telegram."""
+    if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
+        log.error("❌ Falta configuración de Telegram (TOKEN o CHAT_ID).")
+        return
+
+    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+    payload = {
+        "chat_id": TELEGRAM_CHAT_ID,
+        "text": f"🚨 *Alerta del sistema HotelAI*\n\n{text}",
+        "parse_mode": "Markdown",
+    }
+
     try:
-        existing = (
-            supabase.table("pending_queries")
-            .select("id")
-            .eq("conversation_id", conversation_id)
-            .eq("question", question)
-            .eq("status", "pending")
-            .execute()
-        )
-        if existing.data:
-            log.info(f"⚠️ Consulta pendiente ya existente para {conversation_id}")
-            return existing.data[0]["id"]
+        r = requests.post(url, json=payload, timeout=10)
+        if r.status_code == 200:
+            log.info("📨 Notificación enviada al encargado vía Telegram.")
+        else:
+            log.error(f"⚠️ Error al enviar notificación Telegram: {r.text}")
+    except Exception as e:
+        log.error(f"❌ Error enviando notificación a Telegram: {e}", exc_info=True)
+
+
+# =====================================================
+# 💾 Guardar incidencia en Supabase (modo temporal)
+# =====================================================
+def save_incident(payload: str, origin: str = "Sistema"):
+    """
+    Guarda el incidente si Supabase está disponible.
+    Si no existe la tabla o hay error, solo se loguea (modo temporal).
+    """
+    try:
+        if not supabase:
+            log.warning("⚠️ [InternoAgent] Supabase no disponible, guardado omitido.")
+            log.warning(f"📋 Incidente (solo log): {payload}")
+            return
+
+        if isinstance(payload, str):
+            try:
+                data = json.loads(payload)
+            except Exception:
+                data = {"raw": payload}
+        else:
+            data = payload
 
         res = (
-            supabase.table("pending_queries")
-            .insert({"conversation_id": conversation_id, "question": question, "status": "pending"})
+            supabase.table("incidents")
+            .insert({"origin": origin, "payload": json.dumps(data, ensure_ascii=False)})
             .execute()
         )
-        inserted_id = res.data[0]["id"]
-        log.info(f"💾 Consulta guardada (ID {inserted_id}) para {conversation_id}")
-        return inserted_id
+        log.info(f"💾 Incidente registrado en Supabase: {res.data}")
     except Exception as e:
-        log.error(f"❌ Error guardando pregunta: {e}", exc_info=True)
-        return None
+        log.error(f"⚠️ [InternoAgent] No se pudo guardar en Supabase (modo temporal): {e}")
+        log.warning(f"📋 Incidente logueado:\n{payload}")
 
-
-def mark_query_as_answered(conversation_id: str, answer: str):
-    """Marca como respondida la última pregunta pendiente."""
-    try:
-        query = (
-            supabase.table("pending_queries")
-            .select("id")
-            .eq("conversation_id", conversation_id)
-            .eq("status", "pending")
-            .order("id", desc=True)
-            .limit(1)
-            .execute()
-        )
-        if not query.data:
-            log.warning(f"⚠️ No hay consultas pendientes para {conversation_id}")
-            return None
-        query_id = query.data[0]["id"]
-        supabase.table("pending_queries").update(
-            {"answer": answer, "status": "answered"}
-        ).eq("id", query_id).execute()
-        log.info(f"✅ Consulta {query_id} marcada como respondida.")
-        return query_id
-    except Exception as e:
-        log.error(f"❌ Error actualizando respuesta: {e}", exc_info=True)
-        return None
 
 # =====================================================
-# 📲 Comunicación con Telegram
-# =====================================================
-def send_to_encargado(conversation_id: str, message: str):
-    """Envía la pregunta del cliente al encargado por Telegram."""
-    text = (
-        f"👤 *Nueva consulta del cliente*\n"
-        f"🆔 ID: `{conversation_id}`\n"
-        f"❓ *Pregunta:* {message}\n\n"
-        f"Por favor, responde con el formato:\n"
-        f"`RESPUESTA {conversation_id}: <tu respuesta>`"
-    )
-    try:
-        url = f"https://api.telegram.org/bot{C.TELEGRAM_BOT_TOKEN}/sendMessage"
-        payload = {"chat_id": C.TELEGRAM_CHAT_ID, "text": text, "parse_mode": "Markdown"}
-        res = requests.post(url, json=payload)
-        if res.status_code == 200:
-            log.info(f"📨 Enviado al encargado (cliente {conversation_id})")
-        else:
-            log.error(f"⚠️ Error enviando a Telegram: {res.text}")
-    except Exception as e:
-        log.error(f"❌ Error enviando a Telegram: {e}", exc_info=True)
-
-
-def send_to_client(conversation_id: str, message: str):
-    """Simula envío de mensaje al cliente (por ahora solo log)."""
-    log.info(f"📤 Respuesta enviada al cliente {conversation_id}: {message}")
-
-# =====================================================
-# 🧠 Herramientas MCP
+# 🧠 MCP Tool — Llamable desde otros agentes MCP
 # =====================================================
 @mcp.tool()
-async def escalate_to_encargado(mensaje: str, conversation_id: str) -> str:
-    """Escala la consulta al encargado vía Telegram."""
-    try:
-        save_pending_query(conversation_id, mensaje)
-        send_to_encargado(conversation_id, mensaje)
-        return (
-            "He contactado con el encargado del hotel para confirmar esa información. "
-            "En cuanto tenga respuesta te la haré llegar. 🕐"
-        )
-    except Exception as e:
-        log.error(f"❌ Error en escalate_to_encargado: {e}", exc_info=True)
-        return "No pude contactar con el encargado. Inténtalo más tarde."
+async def notificar_interno(payload: str):
+    """Herramienta MCP oficial: recibe alertas desde otros agentes (Input/Output)."""
+    log.info(f"📥 InternoAgent MCP recibió alerta: {payload}")
+    save_incident(payload, origin="Supervisor/MCP")
+    notify_encargado(payload)
+    return "✅ Alerta transmitida al encargado."
 
-@mcp.tool()
-async def process_encargado_reply(raw_text: str) -> str:
-    """Procesa respuestas del encargado recibidas por Telegram."""
-    match = re.match(r"RESPUESTA\s+(\+?\d+):\s*(.*)", raw_text.strip(), re.IGNORECASE)
-    if not match:
-        return "Formato incorrecto. Usa: RESPUESTA <id_cliente>: <texto>"
-
-    conversation_id, answer = match.groups()
-    mark_query_as_answered(conversation_id, answer)
-
-    # Reformula la respuesta con el modelo
-    try:
-        prompt = (
-            "Eres el asistente del hotel. Reformula el mensaje del encargado "
-            "para el cliente en tono amable y profesional, sin mencionar al encargado."
-        )
-        llm_reply = llm.invoke([
-            {"role": "system", "content": prompt},
-            {"role": "user", "content": answer},
-        ])
-        friendly = llm_reply.content.strip()
-    except Exception as e:
-        log.error(f"⚠️ Error reformulando: {e}")
-        friendly = answer
-
-    send_to_client(conversation_id, friendly)
-    return f"✅ Respuesta enviada al cliente {conversation_id}."
 
 # =====================================================
-# 🚀 Inicio del agente
+# 🔗 Wrapper compatible con HotelAIHybrid
+# =====================================================
+async def process_tool_call(payload: str):
+    """Wrapper para llamadas directas desde el HotelAIHybrid."""
+    try:
+        log.info(f"📨 InternoAgent (wrapper) recibió: {payload}")
+
+        # Limpieza del payload si viene con prefijo 'Interno({...})'
+        cleaned = payload
+        if isinstance(payload, str) and payload.strip().startswith("Interno("):
+            cleaned = payload.strip()[8:-1]  # eliminar 'Interno(' y ')'
+            cleaned = cleaned.strip("` \n")
+
+        save_incident(cleaned, origin="HotelAIHybrid")
+        notify_encargado(cleaned)
+    except Exception as e:
+        log.error(f"❌ Error en process_tool_call: {e}", exc_info=True)
+
+
+# =====================================================
+# 🚀 Ejecución directa (modo agente MCP)
 # =====================================================
 if __name__ == "__main__":
-    print("✅ InternoAgent operativo con Supabase + Telegram")
+    print("✅ InternoAgent operativo (modo temporal sin tabla Supabase)")
     mcp.run(transport="stdio", show_banner=False)

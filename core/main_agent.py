@@ -1,4 +1,3 @@
-# core/main_agent.py
 import os
 import json
 import logging
@@ -11,43 +10,41 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
 
 from tools.hotel_tools import get_all_hotel_tools
+from tools.supervisor_input_tool import supervisor_input_tool
+from tools.supervisor_output_tool import supervisor_output_tool
+
 from core.utils.utils_prompt import load_prompt
 from core.memory_manager import MemoryManager
 from core.language_manager import language_manager
 from core.escalation_manager import mark_pending
+from agents.interno_agent import process_tool_call as interno_notify
+
 
 # ===============================================
-# (Opcional) LangSmith
+# CONFIGURACIÓN Y LOGGING
 # ===============================================
-os.environ.setdefault("LANGCHAIN_TRACING_V2", "true")
-os.environ.setdefault("LANGCHAIN_ENDPOINT", "https://api.smith.langchain.com")
+os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGCHAIN_PROJECT", "BookAI")
 
+log = logging.getLogger("HotelAIHybrid")
+logging.getLogger("langchain").setLevel(logging.WARNING)
+logging.getLogger("langchain_core").setLevel(logging.WARNING)
+logging.getLogger("httpx").setLevel(logging.WARNING)
+
 # ===============================================
-# Memoria híbrida
+# MEMORIA
 # ===============================================
 _global_memory = MemoryManager(max_runtime_messages=8)
-
 LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
-ESCALATE_MARKERS = (
-    "__ESCALATE__",  # marcador explícito desde tools
-    "contactar con el encargado",
-    "consultarlo con el encargado",
-    "voy a consultarlo con el encargado",
-    "un momento por favor",
-    "permíteme contactar",
-    "he contactado con el encargado",
-    "no dispongo",
-    "error",
-)
 
 
 class HotelAIHybrid:
     """
     Agente principal del hotel:
-    - Router + Tools (LangChain)
-    - Idioma dinámico (detecta, persiste como [lang:xx] en role='system', fuerza salida)
-    - Escalación automática (mark_pending) si se detecta intención de escalado
+      - Supervisión completa (entrada y salida)
+      - Idioma persistente
+      - Escalación automática con InternoAgent
+      - Silencioso (no responde si hay bloqueo)
     """
 
     def __init__(
@@ -57,10 +54,9 @@ class HotelAIHybrid:
         return_intermediate_steps: bool = True,
     ):
         self.memory = memory_manager or _global_memory
-
         self.model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
-        logging.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
+        log.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
         self.llm = ChatOpenAI(
             model=self.model_name,
@@ -69,8 +65,9 @@ class HotelAIHybrid:
             max_tokens=1500,
         )
 
+        # tools de negocio (los supervisores se llaman fuera)
         self.tools = get_all_hotel_tools()
-        logging.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
+        log.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
 
         self.system_message = self._load_main_prompt()
         self.agent_executor = self._create_agent_executor(
@@ -78,230 +75,177 @@ class HotelAIHybrid:
             return_intermediate_steps=return_intermediate_steps,
         )
 
-        logging.info("✅ HotelAIHybrid listo (idioma persistente + escalación automática).")
+        log.info("✅ HotelAIHybrid listo (supervisado y estable).")
 
-    # ---------------------- Prompt principal ----------------------
+    # -----------------------------------------------
     def _load_main_prompt(self) -> str:
-        try:
-            prompt_text = load_prompt("main_prompt.txt")
-            if not prompt_text or len(prompt_text.strip()) == 0:
-                raise FileNotFoundError("El archivo main_prompt.txt está vacío o no se pudo leer.")
-            logging.info("📜 main_prompt.txt cargado correctamente.")
-            return prompt_text
-        except Exception as e:
-            logging.error(f"❌ Error al cargar main_prompt.txt: {e}")
-            raise RuntimeError(
-                "El agente no puede iniciarse sin main_prompt.txt. "
-                "Verifica /prompts/main_prompt.txt."
-            )
+        text = load_prompt("main_prompt.txt")
+        if not text or not text.strip():
+            raise RuntimeError("El archivo main_prompt.txt no se pudo cargar.")
+        return text
 
-    # ---------------------- Agent executor ------------------------
     def _create_agent_executor(self, max_iterations: int, return_intermediate_steps: bool):
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.system_message),
-            MessagesPlaceholder(variable_name="chat_history"),
+            MessagesPlaceholder("chat_history"),
             ("user", "{input}"),
-            MessagesPlaceholder(variable_name="agent_scratchpad"),
+            MessagesPlaceholder("agent_scratchpad"),
         ])
-
-        agent = create_openai_tools_agent(
-            llm=self.llm,
-            tools=self.tools,
-            prompt=prompt,
-        )
-
-        executor = AgentExecutor(
+        agent = create_openai_tools_agent(self.llm, self.tools, prompt)
+        return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=True,
+            verbose=False,
             handle_parsing_errors=True,
             max_iterations=max_iterations,
             return_intermediate_steps=return_intermediate_steps,
         )
-        return executor
 
-    # ---------------------- Idioma persistente --------------------
+    # -----------------------------------------------
+    # idioma
     def _extract_lang_from_history(self, history: List[dict]) -> Optional[str]:
-        # Busca el tag [lang:xx] en el historial (cualquier role), del más reciente al más antiguo
         for msg in reversed(history):
-            content = (msg or {}).get("content", "")
-            if not isinstance(content, str):
+            if not isinstance(msg.get("content"), str):
                 continue
-            m = LANG_TAG_RE.match(content.strip())
+            m = LANG_TAG_RE.match(msg["content"].strip())
             if m:
                 return m.group(1).lower()
         return None
 
-    def _persist_lang_tag(self, conversation_id: str, lang: str):
-        # Importante: role='system' (válido para la constraint de Supabase)
+    def _persist_lang_tag(self, cid: str, lang: str):
         try:
-            tag = f"[lang:{(lang or 'es').lower()}]"
-            self.memory.save(conversation_id, "system", tag)
+            self.memory.save(cid, "system", f"[lang:{(lang or 'es').lower()}]")
         except Exception as e:
-            logging.warning(f"⚠️ No se pudo persistir tag de idioma: {e}")
+            log.warning(f"⚠️ No se pudo guardar tag idioma: {e}")
 
-    def _get_or_detect_language(self, user_message: str, conversation_id: str, combined_history: List[dict]) -> str:
-        saved = self._extract_lang_from_history(combined_history)
+    def _get_or_detect_language(self, msg: str, cid: str, history: List[dict]) -> str:
+        saved = self._extract_lang_from_history(history)
         if saved:
             return saved
-        detected = language_manager.detect_language(user_message)
-        self._persist_lang_tag(conversation_id, detected)
-        return detected
+        det = language_manager.detect_language(msg)
+        self._persist_lang_tag(cid, det)
+        return det
 
-    # ---------------------- Instrucciones internas ----------------
-    def _inject_smart_instructions(self, user_message: str, lang_code: str) -> str:
+    # -----------------------------------------------
+    def _inject_smart_instructions(self, msg: str, lang: str) -> str:
         return (
             "[INSTRUCCIONES INTERNAS — NO MOSTRAR]\n"
-            f"- RESPONDE SIEMPRE en el idioma ISO 639-1: {lang_code}\n"
-            "- Si hay varias preguntas, respóndelas en un único mensaje, claro, breve y ordenado.\n"
-            "- Usa solo información del hotel o de la conversación. No inventes datos externos.\n"
-            "- Si no consta en la base o no lo sabes, di naturalmente: "
+            f"- RESPONDE en idioma {lang}.\n"
+            "- Usa solo información del hotel.\n"
+            "- Si no dispones de un dato, di: "
             "\"No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.\"\n"
-            "- Evita muletillas y cierres largos. Un emoji como máximo si aporta claridad.\n"
-            "- SALUDOS/AGRADECIMIENTOS/CHARLA TRIVIAL: usa la herramienta 'other' y pásale una "
-            "respuesta corta, profesional y en el idioma del cliente. La tool devolverá ese mismo texto.\n"
-            "- CONSULTAS EXTERNAS (restaurantes, farmacias, taxis, etc.): no inventes. Si se requiere dato externo o la KB no lo tiene, escala.\n"
             "[FIN]\n\n"
-            f"Mensaje del cliente:\n{user_message}"
+            f"Mensaje del cliente:\n{msg}"
         )
 
-    # ---------------------- Post-proceso determinista -------------
-    def _postprocess_response(self, raw_reply: str) -> str:
-        if not raw_reply:
-            return raw_reply
-        reply = raw_reply.strip()
-        lower = reply.lower()
-
-        tails: List[str] = [
-            "si necesitas más información, estaré encantado de ayudarte",
-            "si necesita más información, estaré encantado de ayudarle",
-            "si necesitas algo más, estaré encantado de ayudarte",
-            "estoy aquí para ayudarte",
-            "i'm here to help",
-            "if you need anything else",
-        ]
-        for t in tails:
-            if t in lower:
-                idx = lower.find(t)
-                reply = reply[:idx].rstrip(". ").strip()
-                lower = reply.lower()
-
-        harsh_map = {
-            "no dispongo de ese dato en este momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
-            "no dispongo de ese dato por el momento": "No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.",
-            "actualmente no hay disponibilidad": "Ahora mismo no contamos con eso. Si te sirve, puedo proponerte alternativas.",
-            "i don’t have that information at this moment": "I don’t have that detail right now. I can check and confirm if you’d like.",
-            "not available at the moment": "It’s not available right now. I can suggest alternatives if helpful.",
-        }
-        l = reply.lower()
-        for k, v in harsh_map.items():
-            if k in l:
-                i = l.find(k)
-                reply = reply[:i] + v + reply[i + len(k):]
-                break
-
-        return reply.replace("..", ".").strip()
-
-    # ---------------------- Escalación automática -----------------
-    def _should_escalate(self, text: str) -> bool:
+    # -----------------------------------------------
+    def _postprocess(self, text: str) -> str:
         if not text:
-            return False
-        t = text.lower()
-        return any(marker in t for marker in ESCALATE_MARKERS)
+            return ""
+        text = text.strip().replace("..", ".")
+        tails = ["estoy aquí para ayudarte", "i'm here to help"]
+        for t in tails:
+            if t in text.lower():
+                text = text[:text.lower().find(t)].strip()
+        return text
 
-    # ---------------------- Loop principal ------------------------
-    async def process_message(self, user_message: str, conversation_id: str = None) -> str:
+    # -----------------------------------------------
+    async def process_message(self, user_message: str, conversation_id: str = None) -> str | None:
         if not conversation_id:
-            logging.warning("⚠️ conversation_id no recibido — usando ID temporal.")
             conversation_id = "unknown"
 
-        clean_id = str(conversation_id).replace("+", "").strip()
-        logging.info(f"📩 Mensaje recibido de {clean_id}: {user_message}")
+        cid = str(conversation_id).replace("+", "").strip()
+        log.info(f"📩 Mensaje recibido de {cid}: {user_message}")
 
-        history = self.memory.get_context(clean_id, limit=12)
-        chat_history = [
-            HumanMessage(content=m["content"]) if m["role"] == "user"
-            else AIMessage(content=m["content"])
-            for m in history
-            if m.get("role") in ("user", "assistant")
+        # ================= SUPERVISOR INPUT =================
+        try:
+            log.info("🧠 [Supervisor INPUT] Evaluando mensaje...")
+            si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
+            log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
+
+            if isinstance(si_result, str) and si_result != "Aprobado":
+                log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando y bloqueando envío.")
+                await interno_notify(si_result)
+                await mark_pending(cid, user_message)
+                return ""
+        except Exception as e:
+            log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
+            payload = {
+                "estado": "No Aprobado",
+                "motivo": f"Error interno del supervisor_input_tool: {e}",
+                "prueba": user_message,
+                "sugerencia": "Revisión manual."
+            }
+            await interno_notify(f"Interno({json.dumps(payload, ensure_ascii=False)})")
+            return ""
+
+        # ================= AGENTE PRINCIPAL =================
+        hist = self.memory.get_context(cid, limit=12)
+        chat_hist = [
+            HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
+            for m in hist if m.get("role") in ("user", "assistant")
         ]
-
-        user_lang = self._get_or_detect_language(user_message, clean_id, history)
-        smart_input = self._inject_smart_instructions(user_message, user_lang)
+        lang = self._get_or_detect_language(user_message, cid, hist)
+        input_msg = self._inject_smart_instructions(user_message, lang)
 
         try:
             result = await self.agent_executor.ainvoke({
-                "input": smart_input,
-                "chat_history": chat_history,
+                "input": input_msg,
+                "chat_history": chat_hist,
             })
-
             output = None
             for key in ["output", "final_output", "response"]:
-                val = result.get(key)
-                if isinstance(val, str) and val.strip():
-                    output = val.strip()
+                v = result.get(key)
+                if isinstance(v, str) and v.strip():
+                    output = v.strip()
                     break
-
-            if (not output or not output.strip()) and "intermediate_steps" in result:
-                steps = result.get("intermediate_steps", [])
-                if isinstance(steps, list) and steps:
-                    last_step = steps[-1]
-                    if isinstance(last_step, (list, tuple)) and len(last_step) > 1:
-                        candidate = last_step[1]
-                        if isinstance(candidate, str) and candidate.strip():
-                            output = candidate.strip()
-                        elif isinstance(candidate, dict):
-                            output = json.dumps(candidate, ensure_ascii=False)
-
-            if not output or not output.strip():
+            if not output:
                 output = (
                     "Ha ocurrido un imprevisto al procesar tu solicitud. "
                     "Voy a consultarlo y te confirmo en breve."
                 )
-
-            logging.info(f"🤖 Respuesta generada (antes post-proceso): {output[:160]}...")
-
+            log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
         except Exception as e:
-            logging.error(f"❌ Error en agente: {e}", exc_info=True)
-            output = (
-                "Ha ocurrido un imprevisto al procesar tu solicitud. "
-                "Voy a consultarlo y te confirmo en breve."
-            )
+            log.error(f"❌ Error en ejecución del agente: {e}", exc_info=True)
+            output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
 
-        # Escalación automática (opción A)
-        if self._should_escalate(output):
-            try:
-                await mark_pending(clean_id, user_message)
-            except Exception as e:
-                logging.error(f"❌ Error en mark_pending: {e}", exc_info=True)
-
-            wait_base = "Un momento por favor, voy a consultarlo con el encargado."
-            wait_phrase = "🕓 " + language_manager.short_phrase(wait_base, user_lang)
-
-            # Persistir aviso breve
-            try:
-                if not self._extract_lang_from_history(history):
-                    self._persist_lang_tag(clean_id, user_lang)
-                self.memory.save(clean_id, "assistant", wait_phrase)
-            except Exception as e:
-                logging.warning(f"⚠️ No se pudo persistir aviso de escalación: {e}")
-
-            return wait_phrase
-
-        # Respuesta normal
-        final_response = self._postprocess_response(output)
-        final_response = language_manager.ensure_language(final_response, user_lang)
-
+        # ================= SUPERVISOR OUTPUT =================
         try:
-            self.memory.save(clean_id, "user", user_message)
-            if not self._extract_lang_from_history(history):
-                self._persist_lang_tag(clean_id, user_lang)
-            self.memory.save(clean_id, "assistant", final_response)
-        except Exception as e:
-            logging.warning(f"⚠️ No se pudo persistir en memoria: {e}")
+            log.info("🧾 [Supervisor OUTPUT] Auditando respuesta...")
+            so_result = supervisor_output_tool.invoke({
+                "input_usuario": user_message,
+                "respuesta_agente": output,
+            })
+            log.info(f"📊 [Supervisor OUTPUT] salida:\n{so_result}")
 
-        logging.info(
-            f"💾 Memoria actualizada para {clean_id} "
-            f"({len(self.memory.runtime_memory.get(clean_id, []))} mensajes en RAM)"
-        )
-        return final_response
+            if isinstance(so_result, str):
+                if "Estado: Aprobado" in so_result:
+                    log.info("✅ [Supervisor OUTPUT] Aprobado.")
+                elif "Estado: Revisión Necesaria" in so_result or "Estado: Rechazado" in so_result:
+                    log.warning("⚠️ [Supervisor OUTPUT] No apto. Escalando y bloqueando envío.")
+                    await interno_notify(so_result)
+                    await mark_pending(cid, user_message)
+                    return ""
+        except Exception as e:
+            log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
+            payload = {
+                "estado": "Revisión Necesaria",
+                "motivo": f"Error interno del supervisor_output_tool: {e}",
+                "prueba": output,
+                "sugerencia": "Revisión manual."
+            }
+            await interno_notify(f"Interno({json.dumps(payload, ensure_ascii=False)})")
+            return ""
+
+        # ================= POSTPROCESO =================
+        final_resp = language_manager.ensure_language(self._postprocess(output), lang)
+        try:
+            self.memory.save(cid, "user", user_message)
+            if not self._extract_lang_from_history(hist):
+                self._persist_lang_tag(cid, lang)
+            self.memory.save(cid, "assistant", final_resp)
+        except Exception as e:
+            log.warning(f"⚠️ No se pudo persistir en memoria: {e}")
+
+        log.info(f"💾 Memoria actualizada para {cid}")
+        return final_resp
