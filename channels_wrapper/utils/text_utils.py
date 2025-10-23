@@ -1,15 +1,10 @@
+# channels_wrapper/utils/text_utils.py
 import re
 import random
-import time
+import asyncio
 
-# ------------------------------------------------------------------
-# 🧠 Fragmentación de texto
-# ------------------------------------------------------------------
 def fragment_text_intelligently(text: str, max_fragments: int = 4) -> list[str]:
-    """
-    Fragmenta texto largo en partes más pequeñas sin cortar frases a mitad.
-    Ideal para enviar respuestas por partes en canales como WhatsApp o Telegram.
-    """
+    """Fragmenta texto largo en partes naturales sin cortar frases."""
     text = re.sub(r'\n{2,}', '\n', text.strip())
     raw_parts = re.split(r'(?:(?<=\n)\d+\.|\n-|\n•|\n(?=[A-Z]))', text)
     fragments, buffer = [], ""
@@ -18,8 +13,6 @@ def fragment_text_intelligently(text: str, max_fragments: int = 4) -> list[str]:
         p = part.strip()
         if not p:
             continue
-
-        # Listas o ítems
         if re.match(r'^(\d+\.|-|•)\s', p):
             if buffer:
                 fragments.append(buffer.strip())
@@ -27,7 +20,6 @@ def fragment_text_intelligently(text: str, max_fragments: int = 4) -> list[str]:
             fragments.append(p)
             continue
 
-        # Fragmentación de párrafos largos
         if len(p) > 500:
             subparts = re.split(r'(?<=[.!?])\s+', p)
             temp_chunk = ""
@@ -49,7 +41,6 @@ def fragment_text_intelligently(text: str, max_fragments: int = 4) -> list[str]:
     if buffer:
         fragments.append(buffer.strip())
 
-    # Limitar cantidad de fragmentos
     if len(fragments) > max_fragments:
         merged, temp = [], ""
         for f in fragments:
@@ -61,24 +52,24 @@ def fragment_text_intelligently(text: str, max_fragments: int = 4) -> list[str]:
         if temp:
             merged.append(temp)
         fragments = merged[:max_fragments]
-
     return fragments
 
 
-# ------------------------------------------------------------------
-# ⏳ Simulación de escritura / delay humano
-# ------------------------------------------------------------------
-def simulate_typing_delay(text: str):
-    """
-    Devuelve un tiempo de espera "humano" según la longitud del texto.
-    Útil para hacer más natural el envío de mensajes.
-    """
-    base = random.uniform(1.0, 2.0)
-    length_factor = min(len(text) / 100, 3)
+def _simulate_typing_delay_seconds(text: str) -> float:
+    base = random.uniform(0.8, 1.6)
+    length_factor = min(len(text) / 120, 3)
     return base + length_factor
 
 
-def sleep_typing(text: str):
-    """Bloquea el hilo simulando un tiempo de escritura humano."""
-    delay = simulate_typing_delay(text)
-    time.sleep(delay)
+async def sleep_typing_async(text: str):
+    await asyncio.sleep(_simulate_typing_delay_seconds(text))
+
+
+async def send_fragmented_async(send_callable, user_id: str, reply: str):
+    """Envía mensaje largo en fragmentos con delays humanos."""
+    frags = fragment_text_intelligently(reply)
+    for frag in frags:
+        await sleep_typing_async(frag)
+        maybe_coro = send_callable(user_id, frag)
+        if asyncio.iscoroutine(maybe_coro):
+            await maybe_coro

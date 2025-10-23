@@ -1,45 +1,33 @@
-import os
-import json
+# channels_wrapper/whatsapp/whatsapp_meta.py
 import asyncio
 import logging
 import requests
 from collections import defaultdict
-from typing import Dict, List
-
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
-
+from typing import Dict, List
+from core.config import Settings as C
 from channels_wrapper.base_channel import BaseChannel
 from channels_wrapper.utils.media_utils import transcribe_audio
-from channels_wrapper.utils.text_utils import fragment_text_intelligently, sleep_typing
+from channels_wrapper.utils.text_utils import send_fragmented_async
 from core.escalation_manager import mark_pending
 
-WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+log = logging.getLogger("whatsapp")
 
-BUFFER_WAIT_SECONDS = 8   # ⏳ Ventana de escritura del cliente antes de procesar
-FRAGMENT_THRESHOLD = 300  # ✂️ Fragmentar respuestas largas
+BUFFER_WAIT_SECONDS = 8
+FRAGMENT_THRESHOLD = 300
 
 
 class WhatsAppChannel(BaseChannel):
-    """Canal WhatsApp (Meta Graph API) — manejo limpio de mensajes con buffer + timer + cancelación."""
+    """Canal WhatsApp (Meta Graph API) con buffer, timers y cancelación."""
     def __init__(self, openai_api_key: str = None):
-        super().__init__(openai_api_key=openai_api_key or OPENAI_API_KEY)
-
-        # 🧃 Buffers de entrada por usuario
+        super().__init__(openai_api_key=openai_api_key or C.OPENAI_API_KEY)
         self._buffers: Dict[str, List[str]] = defaultdict(list)
-        # ⏱️ Timers por usuario (para esperar a que el cliente termine de escribir)
         self._timer_tasks: Dict[str, asyncio.Task] = {}
-        # ⚙️ Tareas de procesamiento activas por usuario (para poder cancelarlas)
         self._processing_tasks: Dict[str, asyncio.Task] = {}
-        # 🔒 Locks por usuario para evitar condiciones de carrera
         self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
-    # =====================================================
-    # Registro del webhook
-    # =====================================================
+    # Webhooks
     def register_routes(self, app):
         @app.get("/webhook")
         @app.get("/webhook/whatsapp")
@@ -47,172 +35,88 @@ class WhatsAppChannel(BaseChannel):
             params = request.query_params
             if (
                 params.get("hub.mode") == "subscribe"
-                and params.get("hub.verify_token") == VERIFY_TOKEN
+                and params.get("hub.verify_token") == C.WHATSAPP_VERIFY_TOKEN
             ):
-                logging.info("✅ Webhook WhatsApp verificado.")
+                log.info("✅ Webhook WhatsApp verificado.")
                 return PlainTextResponse(params.get("hub.challenge"), status_code=200)
             return PlainTextResponse("Error de verificación", status_code=403)
 
         @app.post("/webhook")
         @app.post("/webhook/whatsapp")
         async def whatsapp_webhook(request: Request):
-            logging.info("⚡️ [Webhook] POST recibido desde WhatsApp")
             try:
                 data = await request.json()
-                # Procesar en segundo plano para responder rápido a Meta
                 asyncio.create_task(self._process_in_background(data))
                 return JSONResponse({"status": "ok"})
             except Exception as e:
-                logging.error(f"❌ Error procesando webhook: {e}", exc_info=True)
+                log.error(f"❌ Error procesando webhook: {e}", exc_info=True)
                 return JSONResponse({"status": "error", "detail": str(e)})
 
-    # =====================================================
-    # 🧠 Lógica: buffer + timer + cancelación
-    # =====================================================
+    # Buffer y timers
     async def _process_in_background(self, data: dict):
         try:
             user_id, msg_id, msg_type, user_message = self.extract_message_data(data)
-            if not user_id or not msg_id:
-                logging.debug("📦 Webhook ignorado: evento sin mensaje válido (status update o vacío).")
+            if not user_id or not msg_id or not user_message:
                 return
-
-            # Deduplicación
             if msg_id in self.processed_ids:
-                logging.debug(f"🔁 Mensaje duplicado ignorado: {msg_id}")
                 return
             self.processed_ids.add(msg_id)
-
-            # Mensajes vacíos o no soportados
-            if not user_message:
-                logging.warning("⚠️ Mensaje vacío o inválido.")
-                return
-
-            conversation_id = str(user_id).replace("+", "").strip()
-
-            async with self._locks[conversation_id]:
-                # 🛑 Si hay una respuesta en curso, la cancelamos porque el cliente ha enviado algo nuevo
-                proc_task = self._processing_tasks.get(conversation_id)
+            cid = str(user_id).replace("+", "").strip()
+            async with self._locks[cid]:
+                proc_task = self._processing_tasks.get(cid)
                 if proc_task and not proc_task.done():
-                    logging.info(f"🛑 Cancelando procesamiento en curso para {conversation_id} por nuevo mensaje.")
                     proc_task.cancel()
-
-                # 🧃 Acumular en el buffer
-                self._buffers[conversation_id].append(user_message)
-                self._append_to_conversation(conversation_id, "user", user_message)
-                logging.info(f"📩 Buffer[{conversation_id}] ← {user_message!r} (len={len(self._buffers[conversation_id])})")
-
-                # ⏱️ Reiniciar / arrancar temporizador
-                await self._restart_timer_locked(conversation_id)
-
+                self._buffers[cid].append(user_message)
+                self._append(cid, "user", user_message)
+                await self._restart_timer_locked(cid)
         except Exception as e:
-            logging.error(f"💥 Error en background WhatsApp: {e}", exc_info=True)
+            log.error(f"💥 Error en background: {e}", exc_info=True)
 
-    async def _restart_timer_locked(self, conversation_id: str):
-        """Reinicia el temporizador para este usuario; al expirar, procesa el buffer."""
-        # Cancelar timer anterior si existe
-        prev_timer = self._timer_tasks.get(conversation_id)
-        if prev_timer and not prev_timer.done():
-            prev_timer.cancel()
+    async def _restart_timer_locked(self, cid: str):
+        prev = self._timer_tasks.get(cid)
+        if prev and not prev.done():
+            prev.cancel()
+        self._timer_tasks[cid] = asyncio.create_task(self._timer_then_process(cid))
 
-        # Lanzar nuevo timer
-        self._timer_tasks[conversation_id] = asyncio.create_task(
-            self._timer_then_process(conversation_id)
-        )
-        logging.debug(f"⏳ Timer reiniciado para {conversation_id} ({BUFFER_WAIT_SECONDS}s).")
-
-    async def _timer_then_process(self, conversation_id: str):
-        """Espera la ventana y luego procesa el bloque acumulado."""
+    async def _timer_then_process(self, cid: str):
         try:
             await asyncio.sleep(BUFFER_WAIT_SECONDS)
-
-            # Recoger y vaciar el buffer de forma atómica
-            async with self._locks[conversation_id]:
-                messages = self._buffers.get(conversation_id, [])
+            async with self._locks[cid]:
+                messages = self._buffers.get(cid, [])
                 if not messages:
                     return
-                # Limpiamos buffer para no reusar si se cancela luego
-                self._buffers[conversation_id] = []
-
-            # Formatear bloque coherente (una sola cadena)
-            user_block = self._format_buffer_for_agent(messages)
-            logging.info(f"🧾 Bloque a procesar [{conversation_id}]: {user_block!r}")
-
-            # Procesar en tarea cancelable
-            task = asyncio.create_task(self._process_block(conversation_id, user_block))
-            self._processing_tasks[conversation_id] = task
+                self._buffers[cid] = []
+            user_block = self._format_buffer(messages)
+            task = asyncio.create_task(self._process_block(cid, user_block))
+            self._processing_tasks[cid] = task
             await task
-
         except asyncio.CancelledError:
-            logging.debug(f"⏹️ Timer cancelado para {conversation_id}.")
             return
         except Exception as e:
-            logging.error(f"⚠️ Error en timer/process para {conversation_id}: {e}", exc_info=True)
+            log.error(f"Error en timer/process: {e}", exc_info=True)
 
-    async def _process_block(self, conversation_id: str, user_block: str):
-        """Llama al agente con el bloque unido y envía la respuesta (con posible fragmentación), salvo cancelación."""
-        from main import hybrid_agent  # Usar el agente global inyectado en main.py
-
+    async def _process_block(self, cid: str, user_block: str):
         try:
-            if not hybrid_agent:
-                logging.error("❌ No hay hybrid_agent disponible.")
+            if not self.agent:
+                log.error("❌ No hay agente asignado.")
                 return
-
-            # Guardar en historial ligero y procesar
-            self._append_to_conversation(conversation_id, "user", user_block)
-
-            response = await hybrid_agent.process_message(user_block, conversation_id)
-
+            self._append(cid, "user", user_block)
+            response = await self.agent.process_message(user_block, cid)
             if not response or not response.strip():
-                logging.warning(f"⚠️ El agente devolvió respuesta vacía para {conversation_id}.")
                 return
-
-            # Escalación automática (fallback a encargado)
-            if any(p in response.lower() for p in [
-                "contactar con el encargado",
-                "consultarlo con el encargado",
-                "voy a consultarlo con el encargado",
-                "un momento por favor",
-                "permíteme contactar",
-                "he contactado con el encargado",
-                "no dispongo",  
-                "error",
-            ]):
-                await mark_pending(conversation_id, user_block)
-                logging.info(f"🕓 Escalando conversación con {conversation_id}")
+            # Escalación
+            if any(p in response.lower() for p in ["encargado", "consultarlo", "permíteme contactar", "no dispongo"]):
+                await mark_pending(cid, user_block)
                 return
-
-
-            # ✂️ Enviar con fragmentación solo si es largo
-            if len(response) >= FRAGMENT_THRESHOLD:
-                fragments = fragment_text_intelligently(response)
-                for frag in fragments:
-                    sleep_typing(frag)
-                    self.send_message(conversation_id, frag)
-                    logging.info(f"🚀 Enviado (fragmento) a {conversation_id}: {frag[:80]}...")
-            else:
-                self.send_message(conversation_id, response)
-
-            self._append_to_conversation(conversation_id, "assistant", response)
-
+            await send_fragmented_async(self.send_message, cid, response)
+            self._append(cid, "assistant", response)
         except asyncio.CancelledError:
-            logging.info(f"🛑 Procesamiento cancelado para {conversation_id} (nuevo mensaje llegó).")
-            # No enviamos nada, simplemente salimos
             raise
         except Exception as e:
-            logging.error(f"💥 Error procesando bloque para {conversation_id}: {e}", exc_info=True)
+            log.error(f"Error procesando bloque: {e}", exc_info=True)
 
-    # =====================================================
-    # 🧾 Formateo del buffer antes de enviar al agente
-    # =====================================================
-    def _format_buffer_for_agent(self, parts: List[str]) -> str:
-        """
-        Une los trozos en un único bloque fluido.
-        Reglas:
-        - Mantener orden.
-        - Limpiar espacios.
-        - Insertar punto final si no hay . ? !
-        """
-        cleaned: List[str] = []
+    def _format_buffer(self, parts: List[str]) -> str:
+        cleaned = []
         for p in parts:
             if not p:
                 continue
@@ -220,18 +124,15 @@ class WhatsAppChannel(BaseChannel):
             if not s:
                 continue
             if s[-1] not in ".?!":
-                s = s + "."
+                s += "."
             cleaned.append(s)
         return " ".join(cleaned)
 
-    # =====================================================
     # Envío a WhatsApp
-    # =====================================================
     def send_message(self, user_id: str, text: str):
-        """Envía mensaje a WhatsApp."""
-        url = f"https://graph.facebook.com/v19.0/{WHATSAPP_PHONE_ID}/messages"
+        url = f"https://graph.facebook.com/v19.0/{C.WHATSAPP_PHONE_ID}/messages"
         headers = {
-            "Authorization": f"Bearer {WHATSAPP_TOKEN}",
+            "Authorization": f"Bearer {C.WHATSAPP_TOKEN}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -240,73 +141,47 @@ class WhatsAppChannel(BaseChannel):
             "type": "text",
             "text": {"body": text},
         }
-        logging.info(f"🚀 WhatsApp → {user_id}: {text[:120]}...")
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=10)
-            logging.debug(f"📬 META RESPUESTA ({r.status_code}): {r.text}")
+            log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
         except Exception as e:
-            logging.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
+            log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
 
-    # =====================================================
-    # Parser de payload Meta (robusto)
-    # =====================================================
+    # Parser de payload
     def extract_message_data(self, payload: dict):
-        """Extrae user_id, msg_id, tipo y texto del mensaje entrante (robusto)."""
         try:
             entries = payload.get("entry", [])
             if not entries:
-                logging.warning("⚠️ Payload sin 'entry'.")
                 return None, None, None, None
-
             changes = entries[0].get("changes", [])
             if not changes:
-                logging.warning("⚠️ Payload sin 'changes'.")
                 return None, None, None, None
-
             value = changes[0].get("value", {})
             messages = value.get("messages", [])
-
-            # Si no hay 'messages', puede ser un 'status update' (entregas, lecturas)
             if not messages:
-                statuses = value.get("statuses", [])
-                if statuses:
-                    logging.info("ℹ️ Webhook de estado (no mensaje de usuario).")
-                else:
-                    logging.warning("⚠️ Webhook sin mensajes ni estados.")
                 return None, None, None, None
-
             msg = messages[0]
             msg_type = msg.get("type")
             user_id = msg.get("from")
             msg_id = msg.get("id")
-
-            # Extraer contenido según tipo
             if msg_type == "text":
                 user_msg = msg.get("text", {}).get("body", "").strip()
-
             elif msg_type == "interactive":
-                # Cuando el usuario responde a botones o listas
-                interactive = msg.get("interactive", {})
-                if "button_reply" in interactive:
-                    user_msg = interactive["button_reply"].get("title", "")
-                elif "list_reply" in interactive:
-                    user_msg = interactive["list_reply"].get("title", "")
+                inter = msg.get("interactive", {})
+                if "button_reply" in inter:
+                    user_msg = inter["button_reply"].get("title", "")
+                elif "list_reply" in inter:
+                    user_msg = inter["list_reply"].get("title", "")
                 else:
                     user_msg = "[Respuesta interactiva]"
-
             elif msg_type == "audio":
                 media_id = msg.get("audio", {}).get("id")
-                user_msg = transcribe_audio(media_id, WHATSAPP_TOKEN, OPENAI_API_KEY)
-
+                user_msg = transcribe_audio(media_id, C.WHATSAPP_TOKEN, C.OPENAI_API_KEY)
             elif msg_type == "image":
                 user_msg = msg.get("image", {}).get("caption", "Imagen recibida.")
-
             else:
                 user_msg = f"[Tipo de mensaje no soportado: {msg_type}]"
-
-            logging.info(f"💬 WhatsApp → {user_id} [{msg_type}]: {user_msg}")
-            return user_id, msg_id, msg_type, user_msg or None
-
+            return user_id, msg_id, msg_type, user_msg
         except Exception as e:
-            logging.error(f"⚠️ Error extrayendo datos del mensaje: {e}", exc_info=True)
+            log.error(f"Error extrayendo datos: {e}", exc_info=True)
             return None, None, None, None
