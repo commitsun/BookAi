@@ -165,18 +165,26 @@ class HotelAIHybrid:
 
             if isinstance(si_result, str) and si_result != "Aprobado":
                 log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando y bloqueando envío.")
-                await interno_notify(si_result)
+
+                # 🔧 formato de alerta legible
+                audit_text = (
+                    "Estado: Revisión Necesaria\n"
+                    "Motivo: Salida no conforme al formato esperado ('Aprobado' o 'Interno({...})').\n"
+                    f"Prueba: {user_message}\n"
+                    "Sugerencia: Revisión manual por el encargado humano."
+                )
+                await interno_notify(audit_text)
                 await mark_pending(cid, user_message)
                 return ""
         except Exception as e:
             log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
-            payload = {
-                "estado": "No Aprobado",
-                "motivo": f"Error interno del supervisor_input_tool: {e}",
-                "prueba": user_message,
-                "sugerencia": "Revisión manual."
-            }
-            await interno_notify(f"Interno({json.dumps(payload, ensure_ascii=False)})")
+            audit_text = (
+                "Estado: Revisión Necesaria\n"
+                f"Motivo: Error interno del supervisor_input_tool: {e}\n"
+                f"Prueba: {user_message}\n"
+                "Sugerencia: Revisión manual por el encargado humano."
+            )
+            await interno_notify(audit_text)
             return ""
 
         # ================= AGENTE PRINCIPAL =================
@@ -228,13 +236,13 @@ class HotelAIHybrid:
                     return ""
         except Exception as e:
             log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
-            payload = {
-                "estado": "Revisión Necesaria",
-                "motivo": f"Error interno del supervisor_output_tool: {e}",
-                "prueba": output,
-                "sugerencia": "Revisión manual."
-            }
-            await interno_notify(f"Interno({json.dumps(payload, ensure_ascii=False)})")
+            audit_text = (
+                "Estado: Revisión Necesaria\n"
+                f"Motivo: Error interno del supervisor_output_tool: {e}\n"
+                f"Prueba: {output}\n"
+                "Sugerencia: Revisión manual por el encargado humano."
+            )
+            await interno_notify(audit_text)
             return ""
 
         # ================= POSTPROCESO =================

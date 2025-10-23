@@ -25,9 +25,6 @@ Motivo: [Razón principal del resultado]
 Prueba: [Fragmento o evidencia del contenido que justifica la decisión]
 Sugerencia: [Recomendación breve y concreta para mejorar la respuesta]
 
-markdown
-Copiar código
-
 #### Criterios de Estado:
 - **Aprobado:** La respuesta es precisa, coherente, relevante, amable y profesional.  
 - **Revisión Necesaria:** La respuesta es mayormente correcta, pero contiene un error menor de tono, contexto o forma.  
@@ -60,8 +57,6 @@ Motivo: La respuesta es clara, relevante y coherente con la consulta.
 Prueba: “Tenemos varias opciones con jacuzzi privado.”
 Sugerencia: Ninguna, respuesta óptima.
 
-less
-Copiar código
 
 #### Ejemplo 2:
 **Input del usuario:** “A qué hora puedo hacer el check-in?”  
@@ -72,8 +67,6 @@ Motivo: Preciso y con buena proyección de servicio.
 Prueba: “La entrada es desde las 14:00.”
 Sugerencia: Ninguna.
 
-less
-Copiar código
 
 #### Ejemplo 3:
 **Input del usuario:** “Tienen spa?”  
@@ -84,8 +77,6 @@ Motivo: Respuesta completamente fuera de contexto.
 Prueba: “El desayuno se sirve de 7 a 10 am.”
 Sugerencia: Reemplazar por una respuesta enfocada en el spa, indicando horario y servicios disponibles.
 
-markdown
-Copiar código
 
 #### Ejemplo 4:
 **Input del usuario:** “Puedo pagar con dólares?”  
@@ -96,8 +87,6 @@ Motivo: Información posiblemente incorrecta o no verificada.
 Prueba: “Solo en billetes nuevos y si el monto excede 50 USD.”
 Sugerencia: Verificar esta política antes de responder o reformular de forma más general: “Sí, aceptamos pagos en dólares estadounidenses.”
 
-diff
-Copiar código
 
 ***
 
