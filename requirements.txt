@@ -1,18 +1,30 @@
-langchain
-langchain-openai
-langchain-mcp-adapters
-langgraph
-python-dotenv
-fastmcp>=2.12.3
-mcp
-supabase
-langchain-community
-datetime
+# === LangChain + LangGraph stack (totalmente compatible, octubre 2025) ===
+langchain==0.3.7
+langchain-core==0.3.36
+langchain-community==0.3.6
+langchain-openai==0.2.5
+langchain-text-splitters==0.3.4
+langgraph==0.2.33
+langchain-mcp-adapters==0.1.6
+
+
+# === FastMCP & entorno MCP ===
+fastmcp==2.12.3
+mcp>=1.12.4,<2.0.0
+
+# === Framework base ===
 fastapi
 uvicorn
-requests
-openai
-httpx
+python-dotenv
 aiohttp
-langdetect
+httpx
+requests
+
+# === Infraestructura ===
+supabase
+openai
 deep-translator
+langdetect
+
+# === Extra ===
+datetime
