@@ -1,0 +1,43 @@
+name: 🚀 Deploy to EC2
+
+on:
+  push:
+    branches:
+      - main   
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧰 Checkout repo
+        uses: actions/checkout@v4
+
+      - name: 🧱 Setup SSH
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
+          chmod 600 ~/.ssh/ec2_key
+          cat >> ~/.ssh/config <<EOF
+          Host ec2
+            HostName ${{ secrets.EC2_HOST }}
+            User ${{ secrets.EC2_USER }}
+            IdentityFile ~/.ssh/ec2_key
+            StrictHostKeyChecking no
+          EOF
+
+      - name: 🔄 Sync repo to EC2
+        run: |
+          rsync -avz --delete \
+            -e "ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no" \
+            ./ ec2:/home/ec2-user/BookAI
+
+      - name: 🐳 Rebuild Docker container on EC2
+        run: |
+          ssh ec2 << 'EOF'
+            cd ~/BookAI
+            echo "🔄 Pulling latest changes and rebuilding containers..."
+            docker compose down
+            docker compose build --no-cache
+            docker compose up -d
+          EOF
