@@ -41,13 +41,13 @@ jobs:
             cd ~/BookAI
 
             echo "🧹 Stopping old containers..."
-            docker compose down || true
+            docker-compose down || true
 
             echo "🧱 Rebuilding Docker images..."
-            docker compose build --no-cache
+            docker-compose build --no-cache
 
             echo "🚀 Starting containers in detached mode..."
-            docker compose up -d
+            docker-compose up -d
 
             echo "✅ Deployment successful!"
           EOF
