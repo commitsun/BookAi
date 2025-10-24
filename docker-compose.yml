@@ -3,7 +3,7 @@ version: "3.9"
 services:
   hotelai-app:
     build: .
-    container_name: hotelai-app
+    container_name: bookai
     tty: true
     stdin_open: true
     env_file:
