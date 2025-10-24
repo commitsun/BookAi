@@ -43,7 +43,7 @@ jobs:
             echo "🧹 Stopping old containers..."
             docker-compose down || true
 
-            echo "🧱 Rebuilding Docker images..."
+            echo "🧱 Rebuilding Docker images... "
             docker-compose build --no-cache
 
             echo "🚀 Starting containers in detached mode..."
