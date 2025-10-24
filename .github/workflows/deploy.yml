@@ -40,13 +40,22 @@ jobs:
             set -e
             cd ~/BookAI
 
+            echo "🧩 Loading environment variables from AWS Parameter Store..."
+            export $(aws ssm get-parameters-by-path \
+              --path "/roomdoo/dev" \
+              --with-decryption \
+              --query "Parameters[*].{Name:Name,Value:Value}" \
+              --output text | awk '{sub(".*/","",$1); print $1"="$2}')
+
+            echo "✅ Environment variables loaded."
+
             echo "🧹 Stopping old containers..."
             docker-compose down || true
 
-            echo "🧱 Rebuilding Docker images... "
+            echo "🧱 Rebuilding Docker images..."
             docker-compose build --no-cache
 
-            echo "🚀 Starting containers in detached mode..."
+            echo "🚀 Starting containers..."
             docker-compose up -d
 
             echo "✅ Deployment successful!"
