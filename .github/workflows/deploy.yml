@@ -16,13 +16,13 @@ jobs:
       - name: 🔐 Configure SSH access
         run: |
           mkdir -p ~/.ssh
-          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/ec2_key
-          chmod 600 ~/.ssh/ec2_key
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
           cat > ~/.ssh/config <<EOF
           Host ec2
             HostName ${{ secrets.EC2_HOST }}
             User ${{ secrets.EC2_USER }}
-            IdentityFile ~/.ssh/ec2_key
+            IdentityFile ~/.ssh/id_ed25519
             StrictHostKeyChecking no
           EOF
 
@@ -30,7 +30,7 @@ jobs:
         run: |
           echo "🔄 Syncing project files to EC2..."
           rsync -avz --delete \
-            -e "ssh -i ~/.ssh/ec2_key -o StrictHostKeyChecking=no" \
+            -e "ssh -o StrictHostKeyChecking=no" \
             ./ ec2:/home/ec2-user/BookAI
 
       - name: 🐳 Rebuild and restart Docker containers on EC2
