@@ -55,7 +55,7 @@ jobs:
             echo "🧱 Rebuilding Docker images..."
             docker-compose build --no-cache
 
-            echo "🚀 Starting containers..."
+            echo "🚀 Starting containers in detached mode..."
             docker-compose up -d
 
             echo "✅ Deployment successful!"
