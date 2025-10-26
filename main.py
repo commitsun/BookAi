@@ -115,3 +115,63 @@ async def api_message(request: Request):
     except Exception as e:
         logging.error(f"❌ Error en /api/message: {e}", exc_info=True)
         return JSONResponse({"error": "Error interno al procesar el mensaje"}, status_code=500)
+
+# =====================================================
+# 📞 Verificación del webhook de Meta (GET)
+# =====================================================
+VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
+
+@app.get("/webhook")
+async def verify_webhook(request: Request):
+    """
+    Meta (WhatsApp) envía una petición GET a este endpoint
+    para verificar que el servidor es válido.
+    """
+    try:
+        mode = request.query_params.get("hub.mode")
+        token = request.query_params.get("hub.verify_token")
+        challenge = request.query_params.get("hub.challenge")
+
+        if mode == "subscribe" and token == VERIFY_TOKEN:
+            logging.info("✅ Webhook verificado correctamente con Meta.")
+            return int(challenge)
+        else:
+            logging.warning(f"❌ Verificación fallida: token={token}, esperado={VERIFY_TOKEN}")
+            return JSONResponse({"error": "Invalid verification"}, status_code=403)
+    except Exception as e:
+        logging.error(f"⚠️ Error al verificar webhook: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
+
+# =====================================================
+# 💬 Recepción de mensajes desde WhatsApp (POST)
+# =====================================================
+@app.post("/webhook")
+async def whatsapp_webhook(request: Request):
+    """
+    Recibe los mensajes reales enviados por WhatsApp Cloud API.
+    """
+    try:
+        body = await request.json()
+        logging.info(f"📩 [WhatsApp] Webhook recibido: {body}")
+
+        # Aquí podrías extraer el mensaje y procesarlo con el agente híbrido
+        # Ejemplo simple:
+        entry = body.get("entry", [])
+        if entry:
+            changes = entry[0].get("changes", [])
+            if changes:
+                value = changes[0].get("value", {})
+                messages = value.get("messages", [])
+                if messages:
+                    msg = messages[0]
+                    sender = msg["from"]
+                    text = msg.get("text", {}).get("body", "")
+                    logging.info(f"💬 [WhatsApp] {sender}: {text}")
+
+                    response = await hybrid_agent.process_message(text, sender)
+                    logging.info(f"🤖 [Respuesta WhatsApp]: {response[:120]}...")
+
+        return JSONResponse({"status": "received"})
+    except Exception as e:
+        logging.error(f"❌ Error procesando webhook de WhatsApp: {e}", exc_info=True)
+        return JSONResponse({"error": str(e)}, status_code=500)
