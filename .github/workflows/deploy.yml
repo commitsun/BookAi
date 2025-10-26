@@ -30,8 +30,11 @@ jobs:
         run: |
           echo "🔄 Syncing project files to EC2..."
           rsync -avz --delete \
+            --exclude='.git' \
+            --exclude='__pycache__' \
+            --exclude='.github' \
             -e "ssh -o StrictHostKeyChecking=no" \
-            ./ ec2:/home/ec2-user/BookAI
+            ./ ec2:/home/ec2-user/BookAI || true
 
       - name: 🐳 Rebuild and restart Docker containers on EC2
         run: |
@@ -50,13 +53,13 @@ jobs:
             echo "✅ Environment variables loaded."
 
             echo "🧹 Stopping old containers..."
-            docker-compose down || true
+            docker compose down || true
 
             echo "🧱 Rebuilding Docker images..."
-            docker-compose build --no-cache
+            docker compose build --no-cache
 
             echo "🚀 Starting containers in detached mode..."
-            docker-compose up -d
+            docker compose up -d
 
             echo "✅ Deployment successful!"
           EOF
