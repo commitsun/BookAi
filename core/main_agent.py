@@ -20,6 +20,7 @@ from core.escalation_manager import mark_pending
 from agents.interno_agent import process_tool_call as interno_notify
 from core.observability import ls_context  # 🟢 NUEVO
 
+
 # ===============================================
 # CONFIGURACIÓN Y LOGGING
 # ===============================================
@@ -32,19 +33,22 @@ logging.getLogger("langchain_core").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ===============================================
-# MEMORIA
+# MEMORIA GLOBAL
 # ===============================================
 _global_memory = MemoryManager(max_runtime_messages=8)
 LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
 
 
+# ===============================================
+# CLASE PRINCIPAL
+# ===============================================
 class HotelAIHybrid:
     """
     Agente principal del hotel:
-      - Supervisión completa (entrada y salida)
-      - Idioma persistente
-      - Escalación automática con InternoAgent
-      - Silencioso (no responde si hay bloqueo)
+      - Supervisa entrada y salida con control de calidad.
+      - Usa la Base de Conocimientos y demás tools como fuente prioritaria.
+      - Mantiene el idioma del cliente de forma persistente.
+      - Escala automáticamente al encargado si el mensaje no pasa validación.
     """
 
     def __init__(
@@ -56,6 +60,7 @@ class HotelAIHybrid:
         self.memory = memory_manager or _global_memory
         self.model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
         self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
+
         log.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
         self.llm = ChatOpenAI(
@@ -65,7 +70,7 @@ class HotelAIHybrid:
             max_tokens=1500,
         )
 
-        # tools de negocio (los supervisores se llaman fuera)
+        # Tools del hotel (KB, precios, disponibilidad, etc.)
         self.tools = get_all_hotel_tools()
         log.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
 
@@ -79,18 +84,21 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     def _load_main_prompt(self) -> str:
+        """Carga el prompt principal desde prompts/main_prompt.txt"""
         text = load_prompt("main_prompt.txt")
         if not text or not text.strip():
             raise RuntimeError("El archivo main_prompt.txt no se pudo cargar.")
         return text
 
     def _create_agent_executor(self, max_iterations: int, return_intermediate_steps: bool):
+        """Crea el agente principal que integra tools + LLM."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.system_message),
             MessagesPlaceholder("chat_history"),
             ("user", "{input}"),
             MessagesPlaceholder("agent_scratchpad"),
         ])
+
         agent = create_openai_tools_agent(self.llm, self.tools, prompt)
         return AgentExecutor(
             agent=agent,
@@ -102,7 +110,7 @@ class HotelAIHybrid:
         )
 
     # -----------------------------------------------
-    # idioma
+    # Idioma persistente
     def _extract_lang_from_history(self, history: List[dict]) -> Optional[str]:
         for msg in reversed(history):
             if not isinstance(msg.get("content"), str):
@@ -113,12 +121,14 @@ class HotelAIHybrid:
         return None
 
     def _persist_lang_tag(self, cid: str, lang: str):
+        """Guarda el idioma del cliente en memoria persistente."""
         try:
             self.memory.save(cid, "system", f"[lang:{(lang or 'es').lower()}]")
         except Exception as e:
             log.warning(f"⚠️ No se pudo guardar tag idioma: {e}")
 
     def _get_or_detect_language(self, msg: str, cid: str, history: List[dict]) -> str:
+        """Obtiene o detecta el idioma del cliente según el historial."""
         saved = self._extract_lang_from_history(history)
         if saved:
             return saved
@@ -127,19 +137,8 @@ class HotelAIHybrid:
         return det
 
     # -----------------------------------------------
-    def _inject_smart_instructions(self, msg: str, lang: str) -> str:
-        return (
-            "[INSTRUCCIONES INTERNAS — NO MOSTRAR]\n"
-            f"- RESPONDE en idioma {lang}.\n"
-            "- Usa solo información del hotel.\n"
-            "- Si no dispones de un dato, di: "
-            "\"No dispongo de ese dato ahora mismo. Si quieres, lo consulto y te confirmo.\"\n"
-            "[FIN]\n\n"
-            f"Mensaje del cliente:\n{msg}"
-        )
-
-    # -----------------------------------------------
     def _postprocess(self, text: str) -> str:
+        """Limpia texto generado (elimina muletillas y cierres automáticos)."""
         if not text:
             return ""
         text = text.strip().replace("..", ".")
@@ -151,6 +150,7 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     async def process_message(self, user_message: str, conversation_id: str = None) -> str | None:
+        """Procesa un mensaje del cliente con supervisión y fallback."""
         if not conversation_id:
             conversation_id = "unknown"
 
@@ -198,27 +198,30 @@ class HotelAIHybrid:
                 HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
                 for m in hist if m.get("role") in ("user", "assistant")
             ]
+
             lang = self._get_or_detect_language(user_message, cid, hist)
-            input_msg = self._inject_smart_instructions(user_message, lang)
+            input_msg = user_message.strip()  # 👈 sin instrucciones extra
 
             try:
                 with ls_context(name="MainAgentExecution", tags=["agent", "llm"]):
+                    # El agente usará las tools automáticamente según el prompt principal.
                     result = await self.agent_executor.ainvoke({
                         "input": input_msg,
                         "chat_history": chat_hist,
                     })
+
                     output = None
                     for key in ["output", "final_output", "response"]:
                         v = result.get(key)
                         if isinstance(v, str) and v.strip():
                             output = v.strip()
                             break
+
                     if not output:
-                        output = (
-                            "Ha ocurrido un imprevisto al procesar tu solicitud. "
-                            "Voy a consultarlo y te confirmo en breve."
-                        )
+                        output = "No dispongo de ese dato en este momento."
+
                     log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
+
             except Exception as e:
                 log.error(f"❌ Error en ejecución del agente: {e}", exc_info=True)
                 output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
