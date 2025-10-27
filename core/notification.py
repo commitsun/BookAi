@@ -1,93 +1,79 @@
-# core/notification.py
-import os
+# =====================================================
+# 📣 core/notification.py
+# Sistema de notificación al encargado (Telegram)
+# =====================================================
+
 import logging
-import time
+import os
 import requests
-from typing import Optional, List
 
-# ===============================================
-# CONFIGURACIÓN GLOBAL
-# ===============================================
+# =====================================================
+# 🔧 Configuración desde variables de entorno (exactas según tu .env)
+# =====================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID o canal del encargado
-MAX_RETRIES = 3
-RETRY_DELAY = 2.5
-MAX_MESSAGE_LENGTH = 3900  # Límite seguro (Telegram máximo 4096)
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_ENCARGADO_CHAT_ID")  # 👈 nombre adaptado al .env actual
 
-# ===============================================
-# ENVÍO DE MENSAJES
-# ===============================================
-
-def _split_message(text: str, limit: int = MAX_MESSAGE_LENGTH) -> List[str]:
+# =====================================================
+# 📤 Notificador principal
+# =====================================================
+async def notify_encargado(message: str) -> bool:
     """
-    Divide el texto largo en fragmentos seguros para Telegram.
-    """
-    if not text:
-        return []
-    if len(text) <= limit:
-        return [text]
-    parts = []
-    while len(text) > limit:
-        split_index = text.rfind("\n", 0, limit)
-        if split_index == -1:
-            split_index = limit
-        parts.append(text[:split_index].strip())
-        text = text[split_index:].strip()
-    if text:
-        parts.append(text)
-    return parts
+    Envía un mensaje al encargado del hotel vía Telegram.
 
-
-def _sanitize_markdown(text: str) -> str:
-    """
-    Limpia caracteres conflictivos de Markdown para evitar errores en Telegram.
-    """
-    if not text:
-        return text
-    bad_chars = ["*", "_", "[", "]", "(", ")", "~", "`", ">", "#", "+", "-", "=", "|", "{", "}", ".", "!"]
-    clean = text
-    for c in bad_chars:
-        clean = clean.replace(c, f"\\{c}")
-    return clean
-
-
-def notify_encargado(message: str, parse_mode: str = "Markdown") -> bool:
-    """
-    Envía un mensaje al encargado (Telegram) con manejo de errores, reintentos y fragmentación.
-    Retorna True si al menos un mensaje se entrega correctamente.
+    - Usa TELEGRAM_BOT_TOKEN y TELEGRAM_ENCARGADO_CHAT_ID del .env.
+    - Devuelve True si se envía correctamente, False en caso contrario.
+    - Es totalmente compatible con `await`.
     """
     if not TELEGRAM_BOT_TOKEN or not TELEGRAM_CHAT_ID:
-        logging.error("❌ Falta TELEGRAM_BOT_TOKEN o TELEGRAM_CHAT_ID.")
+        logging.error("❌ Falta TELEGRAM_BOT_TOKEN o TELEGRAM_ENCARGADO_CHAT_ID.")
         return False
 
-    url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-
-    fragments = _split_message(message)
-    success = False
-
-    for i, fragment in enumerate(fragments):
-        sanitized = _sanitize_markdown(fragment)
+    try:
+        url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
         payload = {
             "chat_id": TELEGRAM_CHAT_ID,
-            "text": sanitized,
-            "parse_mode": parse_mode,
-            "disable_web_page_preview": True,
+            "text": message,
+            "parse_mode": "Markdown",
         }
 
-        for attempt in range(1, MAX_RETRIES + 1):
-            try:
-                r = requests.post(url, json=payload, timeout=10)
-                if r.status_code == 200:
-                    logging.info(f"📨 Telegram → Encargado ({len(fragment)} chars) OK (parte {i+1}/{len(fragments)})")
-                    success = True
-                    break
-                else:
-                    logging.warning(
-                        f"⚠️ Telegram falló HTTP {r.status_code} (intento {attempt}/{MAX_RETRIES}): {r.text}"
-                    )
-            except Exception as e:
-                logging.error(f"💥 Error enviando a Telegram (intento {attempt}): {e}", exc_info=True)
+        response = requests.post(url, json=payload, timeout=10)
+        status = response.status_code
 
-            time.sleep(RETRY_DELAY)
+        if status == 200:
+            logging.info(f"📤 Notificación enviada correctamente al encargado (HTTP {status})")
+            return True
+        else:
+            logging.warning(f"⚠️ Error enviando notificación (HTTP {status}): {response.text}")
+            return False
 
-    return success
+    except Exception as e:
+        logging.error(f"💥 Error crítico enviando mensaje a Telegram: {e}", exc_info=True)
+        return False
+
+
+# =====================================================
+# 🧩 Envío a múltiples encargados (opcional)
+# =====================================================
+async def notify_multiple_encargados(message: str, chat_ids: list[str]) -> None:
+    """
+    Envía el mismo mensaje a varios encargados de soporte (opcional).
+
+    - Usa el mismo bot definido por TELEGRAM_BOT_TOKEN.
+    - No interrumpe si alguno falla.
+    """
+    if not TELEGRAM_BOT_TOKEN:
+        logging.error("❌ Falta TELEGRAM_BOT_TOKEN.")
+        return
+
+    for cid in chat_ids:
+        try:
+            url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
+            payload = {
+                "chat_id": cid,
+                "text": message,
+                "parse_mode": "Markdown",
+            }
+            r = requests.post(url, json=payload, timeout=10)
+            logging.info(f"📨 Notificación enviada a {cid} (HTTP {r.status_code})")
+        except Exception as e:
+            logging.error(f"⚠️ Error notificando a {cid}: {e}", exc_info=True)

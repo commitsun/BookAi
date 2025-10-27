@@ -18,11 +18,10 @@ from core.memory_manager import MemoryManager
 from core.language_manager import language_manager
 from core.escalation_manager import mark_pending
 from agents.interno_agent import process_tool_call as interno_notify
-from core.observability import ls_context  # 🟢 NUEVO
-
+from core.observability import ls_context
 
 # ===============================================
-# CONFIGURACIÓN Y LOGGING
+# CONFIGURACIÓN
 # ===============================================
 os.environ.setdefault("LANGCHAIN_TRACING_V2", "false")
 os.environ.setdefault("LANGCHAIN_PROJECT", "BookAI")
@@ -33,7 +32,7 @@ logging.getLogger("langchain_core").setLevel(logging.WARNING)
 logging.getLogger("httpx").setLevel(logging.WARNING)
 
 # ===============================================
-# MEMORIA GLOBAL
+# MEMORIA
 # ===============================================
 _global_memory = MemoryManager(max_runtime_messages=8)
 LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
@@ -43,13 +42,7 @@ LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
 # CLASE PRINCIPAL
 # ===============================================
 class HotelAIHybrid:
-    """
-    Agente principal del hotel:
-      - Supervisa entrada y salida con control de calidad.
-      - Usa la Base de Conocimientos y demás tools como fuente prioritaria.
-      - Mantiene el idioma del cliente de forma persistente.
-      - Escala automáticamente al encargado si el mensaje no pasa validación.
-    """
+    """Agente principal del hotel con supervisión, KB y escalado controlado."""
 
     def __init__(
         self,
@@ -70,7 +63,6 @@ class HotelAIHybrid:
             max_tokens=1500,
         )
 
-        # Tools del hotel (KB, precios, disponibilidad, etc.)
         self.tools = get_all_hotel_tools()
         log.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
 
@@ -84,21 +76,18 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     def _load_main_prompt(self) -> str:
-        """Carga el prompt principal desde prompts/main_prompt.txt"""
         text = load_prompt("main_prompt.txt")
         if not text or not text.strip():
             raise RuntimeError("El archivo main_prompt.txt no se pudo cargar.")
         return text
 
     def _create_agent_executor(self, max_iterations: int, return_intermediate_steps: bool):
-        """Crea el agente principal que integra tools + LLM."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.system_message),
             MessagesPlaceholder("chat_history"),
             ("user", "{input}"),
             MessagesPlaceholder("agent_scratchpad"),
         ])
-
         agent = create_openai_tools_agent(self.llm, self.tools, prompt)
         return AgentExecutor(
             agent=agent,
@@ -121,14 +110,12 @@ class HotelAIHybrid:
         return None
 
     def _persist_lang_tag(self, cid: str, lang: str):
-        """Guarda el idioma del cliente en memoria persistente."""
         try:
             self.memory.save(cid, "system", f"[lang:{(lang or 'es').lower()}]")
         except Exception as e:
             log.warning(f"⚠️ No se pudo guardar tag idioma: {e}")
 
     def _get_or_detect_language(self, msg: str, cid: str, history: List[dict]) -> str:
-        """Obtiene o detecta el idioma del cliente según el historial."""
         saved = self._extract_lang_from_history(history)
         if saved:
             return saved
@@ -138,7 +125,7 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     def _postprocess(self, text: str) -> str:
-        """Limpia texto generado (elimina muletillas y cierres automáticos)."""
+        """Limpia texto generado (sin muletillas ni cierres redundantes)."""
         if not text:
             return ""
         text = text.strip().replace("..", ".")
@@ -150,14 +137,13 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     async def process_message(self, user_message: str, conversation_id: str = None) -> str | None:
-        """Procesa un mensaje del cliente con supervisión y fallback."""
+        """Procesa el mensaje del cliente con validaciones de entrada y salida."""
         if not conversation_id:
             conversation_id = "unknown"
 
         cid = str(conversation_id).replace("+", "").strip()
         log.info(f"📩 Mensaje recibido de {cid}: {user_message}")
 
-        # ==================== OBSERVABILIDAD GLOBAL ====================
         with ls_context(
             name="HotelAIHybrid.process_message",
             metadata={"conversation_id": cid, "input": user_message},
@@ -165,31 +151,19 @@ class HotelAIHybrid:
         ):
             # ================= SUPERVISOR INPUT =================
             try:
-                with ls_context(name="SupervisorInput", tags=["supervisor", "input"]):
-                    log.info("🧠 [Supervisor INPUT] Evaluando mensaje...")
-                    si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
-                    log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
+                si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
+                log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
 
-                    if isinstance(si_result, str) and si_result != "Aprobado":
-                        log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando y bloqueando envío.")
-                        audit_text = (
-                            "Estado: Revisión Necesaria\n"
-                            "Motivo: Salida no conforme al formato esperado ('Aprobado' o 'Interno({...})').\n"
-                            f"Prueba: {user_message}\n"
-                            "Sugerencia: Revisión manual por el encargado humano."
-                        )
-                        await interno_notify(audit_text)
-                        await mark_pending(cid, user_message)
-                        return ""
+                if isinstance(si_result, str) and si_result != "Aprobado":
+                    log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando.")
+                    await interno_notify(si_result)
+                    await mark_pending(cid, user_message)
+                    return ""
             except Exception as e:
                 log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
-                audit_text = (
-                    "Estado: Revisión Necesaria\n"
-                    f"Motivo: Error interno del supervisor_input_tool: {e}\n"
-                    f"Prueba: {user_message}\n"
-                    "Sugerencia: Revisión manual por el encargado humano."
+                await interno_notify(
+                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_input_tool: {e}\nPrueba: {user_message}\nSugerencia: Revisión manual."
                 )
-                await interno_notify(audit_text)
                 return ""
 
             # ================= AGENTE PRINCIPAL =================
@@ -198,61 +172,54 @@ class HotelAIHybrid:
                 HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
                 for m in hist if m.get("role") in ("user", "assistant")
             ]
-
             lang = self._get_or_detect_language(user_message, cid, hist)
-            input_msg = user_message.strip()  # 👈 sin instrucciones extra
 
             try:
-                with ls_context(name="MainAgentExecution", tags=["agent", "llm"]):
-                    # El agente usará las tools automáticamente según el prompt principal.
-                    result = await self.agent_executor.ainvoke({
-                        "input": input_msg,
-                        "chat_history": chat_hist,
-                    })
-
-                    output = None
-                    for key in ["output", "final_output", "response"]:
-                        v = result.get(key)
-                        if isinstance(v, str) and v.strip():
-                            output = v.strip()
-                            break
-
-                    if not output:
-                        output = "No dispongo de ese dato en este momento."
-
-                    log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
-
+                result = await self.agent_executor.ainvoke({
+                    "input": user_message.strip(),
+                    "chat_history": chat_hist,
+                })
+                output = None
+                for key in ["output", "final_output", "response"]:
+                    v = result.get(key)
+                    if isinstance(v, str) and v.strip():
+                        output = v.strip()
+                        break
+                if not output:
+                    output = "No dispongo de ese dato en este momento."
+                log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
             except Exception as e:
-                log.error(f"❌ Error en ejecución del agente: {e}", exc_info=True)
+                log.error(f"❌ Error ejecutando agente: {e}", exc_info=True)
                 output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
 
             # ================= SUPERVISOR OUTPUT =================
             try:
-                with ls_context(name="SupervisorOutput", tags=["supervisor", "output"]):
-                    log.info("🧾 [Supervisor OUTPUT] Auditando respuesta...")
-                    so_result = supervisor_output_tool.invoke({
-                        "input_usuario": user_message,
-                        "respuesta_agente": output,
-                    })
-                    log.info(f"📊 [Supervisor OUTPUT] salida:\n{so_result}")
+                so_result = supervisor_output_tool.invoke({
+                    "input_usuario": user_message,
+                    "respuesta_agente": output,
+                })
+                log.info(f"📊 [Supervisor OUTPUT] salida:\n{so_result}")
 
-                    if isinstance(so_result, str):
-                        if "Estado: Aprobado" in so_result:
-                            log.info("✅ [Supervisor OUTPUT] Aprobado.")
-                        elif "Estado: Revisión Necesaria" in so_result or "Estado: Rechazado" in so_result:
-                            log.warning("⚠️ [Supervisor OUTPUT] No apto. Escalando y bloqueando envío.")
-                            await interno_notify(so_result)
-                            await mark_pending(cid, user_message)
-                            return ""
+                if isinstance(so_result, str):
+                    estado = so_result.lower()
+                    if "estado: rechazado" in estado:
+                        log.warning("🚫 [Supervisor OUTPUT] Rechazado. Escalando al encargado.")
+                        await interno_notify(so_result)
+                        await mark_pending(cid, user_message)
+                        return ""
+                    elif "estado: revisión necesaria" in estado:
+                        log.warning("⚠️ [Supervisor OUTPUT] Revisión necesaria (no crítica). Logueando pero sin escalar.")
+                        await interno_notify(so_result)
+                    elif "estado: aprobado" in estado:
+                        log.info("✅ [Supervisor OUTPUT] Aprobado. Envío permitido.")
+                    else:
+                        log.info("ℹ️ [Supervisor OUTPUT] Estado no claro, pero contenido válido. Se permite envío.")
+
             except Exception as e:
                 log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
-                audit_text = (
-                    "Estado: Revisión Necesaria\n"
-                    f"Motivo: Error interno del supervisor_output_tool: {e}\n"
-                    f"Prueba: {output}\n"
-                    "Sugerencia: Revisión manual por el encargado humano."
+                await interno_notify(
+                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_output_tool: {e}\nPrueba: {output}\nSugerencia: Revisión manual."
                 )
-                await interno_notify(audit_text)
                 return ""
 
             # ================= POSTPROCESO =================
@@ -263,7 +230,7 @@ class HotelAIHybrid:
                     self._persist_lang_tag(cid, lang)
                 self.memory.save(cid, "assistant", final_resp)
             except Exception as e:
-                log.warning(f"⚠️ No se pudo persistir en memoria: {e}")
+                log.warning(f"⚠️ No se pudo guardar en memoria: {e}")
 
             log.info(f"💾 Memoria actualizada para {cid}")
             return final_resp

@@ -61,7 +61,7 @@ def _should_escalate_from_text(text: str) -> bool:
     return any(p in t for p in triggers)
 
 # =====================================================
-# 🧠 Información general del hotel
+# 🧠 Información general del hotel (optimizada para usar toda la KB)
 # =====================================================
 @hybrid_tool(
     name="hotel_information",
@@ -74,34 +74,64 @@ def _should_escalate_from_text(text: str) -> bool:
     return_direct=True,
 )
 async def hotel_information_tool(query: str) -> str:
-    """Obtiene información general del hotel desde el InfoAgent (MCP)."""
+    """
+    Obtiene información general del hotel desde el InfoAgent (MCP).
+    Prioriza SIEMPRE la respuesta de la KB aunque sea parcial.
+    Solo escala si la KB no devuelve absolutamente nada útil.
+    """
     try:
-        # Si la consulta es externa al hotel → escalación directa
-        if _looks_external_query(query):
+        q = (query or "").strip()
+        if not q:
+            return ESCALATE_SENTENCE
+
+        # 🔎 Evita consultas que no son sobre el hotel
+        if _looks_external_query(q):
             logging.info("↗️ Consulta externa detectada → escalación automática.")
             return ESCALATE_SENTENCE
 
+        # 🔗 Intentar obtener las herramientas disponibles del InfoAgent
         tools = await mcp_client.get_tools(server_name="InfoAgent")
+        if not tools:
+            logging.error("❌ No se encontraron herramientas del InfoAgent (MCP vacío).")
+            return ESCALATE_SENTENCE
+
+        logging.info(f"🔍 MCP tools disponibles en InfoAgent: {[t.name for t in tools]}")
+
         info_tool = next((t for t in tools if t.name == "Base_de_conocimientos_del_hotel"), None)
-
         if not info_tool:
+            logging.error("⚠️ No se encontró 'Base_de_conocimientos_del_hotel' en MCP.")
             return ESCALATE_SENTENCE
 
-        raw_reply = await info_tool.ainvoke({"input": query})
-        cleaned = normalize_reply(raw_reply, query, source="InfoAgent")
+        # 🧠 Consultar la base de conocimientos
+        raw_reply = await info_tool.ainvoke({"input": q})
+        cleaned = normalize_reply(raw_reply, q, source="InfoAgent").strip()
 
-        # Si KB no devuelve dato utilizable → escalación
-        if _should_escalate_from_text(cleaned):
-            logging.info("ℹ️ KB sin dato suficiente → escalación.")
+        if not cleaned:
+            logging.warning("⚠️ KB devolvió vacío o nulo → escalación.")
             return ESCALATE_SENTENCE
 
-        final_text = summarize_tool_output(query, cleaned)
-        logging.info(f"🔧 hotel_information_tool → {final_text[:160]}...")
+        # 🔬 Limpieza avanzada: eliminar texto técnico o redundante
+        cleaned = re.sub(r"\s*\(Fuente:[^)]+\)", "", cleaned)
+        cleaned = re.sub(r"\s*\[ID:[^\]]+\]", "", cleaned)
+        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+
+        # 🪄 Si la respuesta es corta pero parece válida, úsala igualmente
+        if len(cleaned) < 25 and not any(word in cleaned.lower() for word in ["no", "desconocido", "error"]):
+            logging.info(f"ℹ️ KB devolvió respuesta breve pero válida: '{cleaned}'")
+            return cleaned
+
+        # 🧩 Resumen final mejorado para el cliente
+        final_text = summarize_tool_output(q, cleaned)
+        if not final_text or len(final_text) < 10:
+            final_text = cleaned  # Fallback si el resumen queda demasiado corto
+
+        logging.info(f"🔧 hotel_information_tool → {final_text[:200]}...")
         return final_text
 
     except Exception as e:
-        logging.error(f"❌ Error en hotel_information_tool: {e}", exc_info=True)
+        logging.error(f"💥 Error en hotel_information_tool: {e}", exc_info=True)
         return ESCALATE_SENTENCE
+
 
 # =====================================================
 # 💰 Disponibilidad, precios y reservas
@@ -254,12 +284,11 @@ def other_tool(reply: str) -> str:
 # 🔁 Exportador general de herramientas
 # =====================================================
 def get_all_hotel_tools():
+    
     return [
         hotel_information_tool,
         availability_pricing_tool,
         guest_support_tool,
         think_tool,
-        other_tool,  
-        supervisor_output_tool,
-        supervisor_input_tool
+        other_tool
     ]

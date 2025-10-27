@@ -1,4 +1,3 @@
-# channels_wrapper/whatsapp/whatsapp_meta.py
 import asyncio
 import logging
 import requests
@@ -27,7 +26,9 @@ class WhatsAppChannel(BaseChannel):
         self._processing_tasks: Dict[str, asyncio.Task] = {}
         self._locks: Dict[str, asyncio.Lock] = defaultdict(asyncio.Lock)
 
+    # -----------------------------------------------------------
     # Webhooks
+    # -----------------------------------------------------------
     def register_routes(self, app):
         @app.get("/webhook")
         @app.get("/webhook/whatsapp")
@@ -52,7 +53,9 @@ class WhatsAppChannel(BaseChannel):
                 log.error(f"❌ Error procesando webhook: {e}", exc_info=True)
                 return JSONResponse({"status": "error", "detail": str(e)})
 
+    # -----------------------------------------------------------
     # Buffer y timers
+    # -----------------------------------------------------------
     async def _process_in_background(self, data: dict):
         try:
             user_id, msg_id, msg_type, user_message = self.extract_message_data(data)
@@ -95,26 +98,40 @@ class WhatsAppChannel(BaseChannel):
         except Exception as e:
             log.error(f"Error en timer/process: {e}", exc_info=True)
 
+    # -----------------------------------------------------------
+    # Procesamiento principal
+    # -----------------------------------------------------------
     async def _process_block(self, cid: str, user_block: str):
         try:
             if not self.agent:
                 log.error("❌ No hay agente asignado.")
                 return
+
             self._append(cid, "user", user_block)
             response = await self.agent.process_message(user_block, cid)
+
+            # 🟡 Si el agente no devuelve nada
             if not response or not response.strip():
+                log.warning(f"⚠️ Respuesta vacía para {cid}")
                 return
-            # Escalación
-            if any(p in response.lower() for p in ["encargado", "consultarlo", "permíteme contactar", "no dispongo"]):
-                await mark_pending(cid, user_block)
-                return
+
+            # 🟢 Enviar SIEMPRE la respuesta al cliente
             await send_fragmented_async(self.send_message, cid, response)
             self._append(cid, "assistant", response)
+            log.info(f"📩 Respuesta enviada a {cid}: {response[:100]}")
+
+            # 🔹 Escalación opcional (no bloquea el envío)
+            if any(p in response.lower() for p in ["encargado", "consultarlo", "permíteme contactar", "no dispongo"]):
+                asyncio.create_task(mark_pending(cid, user_block))
+
         except asyncio.CancelledError:
             raise
         except Exception as e:
             log.error(f"Error procesando bloque: {e}", exc_info=True)
 
+    # -----------------------------------------------------------
+    # Utilidades
+    # -----------------------------------------------------------
     def _format_buffer(self, parts: List[str]) -> str:
         cleaned = []
         for p in parts:
@@ -128,7 +145,9 @@ class WhatsAppChannel(BaseChannel):
             cleaned.append(s)
         return " ".join(cleaned)
 
+    # -----------------------------------------------------------
     # Envío a WhatsApp
+    # -----------------------------------------------------------
     def send_message(self, user_id: str, text: str):
         url = f"https://graph.facebook.com/v19.0/{C.WHATSAPP_PHONE_ID}/messages"
         headers = {
@@ -143,11 +162,16 @@ class WhatsAppChannel(BaseChannel):
         }
         try:
             r = requests.post(url, headers=headers, json=payload, timeout=10)
-            log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
+            if r.status_code != 200:
+                log.error(f"⚠️ Error WhatsApp ({r.status_code}): {r.text}")
+            else:
+                log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
         except Exception as e:
             log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
 
+    # -----------------------------------------------------------
     # Parser de payload
+    # -----------------------------------------------------------
     def extract_message_data(self, payload: dict):
         try:
             entries = payload.get("entry", [])
