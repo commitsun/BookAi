@@ -18,7 +18,7 @@ from core.memory_manager import MemoryManager
 from core.language_manager import language_manager
 from core.escalation_manager import mark_pending
 from agents.interno_agent import process_tool_call as interno_notify
-
+from core.observability import ls_context  # 🟢 NUEVO
 
 # ===============================================
 # CONFIGURACIÓN Y LOGGING
@@ -157,103 +157,110 @@ class HotelAIHybrid:
         cid = str(conversation_id).replace("+", "").strip()
         log.info(f"📩 Mensaje recibido de {cid}: {user_message}")
 
-        # ================= SUPERVISOR INPUT =================
-        try:
-            log.info("🧠 [Supervisor INPUT] Evaluando mensaje...")
-            si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
-            log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
+        # ==================== OBSERVABILIDAD GLOBAL ====================
+        with ls_context(
+            name="HotelAIHybrid.process_message",
+            metadata={"conversation_id": cid, "input": user_message},
+            tags=["main_agent", "hotel_ai"],
+        ):
+            # ================= SUPERVISOR INPUT =================
+            try:
+                with ls_context(name="SupervisorInput", tags=["supervisor", "input"]):
+                    log.info("🧠 [Supervisor INPUT] Evaluando mensaje...")
+                    si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
+                    log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
 
-            if isinstance(si_result, str) and si_result != "Aprobado":
-                log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando y bloqueando envío.")
-
-                # 🔧 formato de alerta legible
+                    if isinstance(si_result, str) and si_result != "Aprobado":
+                        log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando y bloqueando envío.")
+                        audit_text = (
+                            "Estado: Revisión Necesaria\n"
+                            "Motivo: Salida no conforme al formato esperado ('Aprobado' o 'Interno({...})').\n"
+                            f"Prueba: {user_message}\n"
+                            "Sugerencia: Revisión manual por el encargado humano."
+                        )
+                        await interno_notify(audit_text)
+                        await mark_pending(cid, user_message)
+                        return ""
+            except Exception as e:
+                log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
                 audit_text = (
                     "Estado: Revisión Necesaria\n"
-                    "Motivo: Salida no conforme al formato esperado ('Aprobado' o 'Interno({...})').\n"
+                    f"Motivo: Error interno del supervisor_input_tool: {e}\n"
                     f"Prueba: {user_message}\n"
                     "Sugerencia: Revisión manual por el encargado humano."
                 )
                 await interno_notify(audit_text)
-                await mark_pending(cid, user_message)
                 return ""
-        except Exception as e:
-            log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
-            audit_text = (
-                "Estado: Revisión Necesaria\n"
-                f"Motivo: Error interno del supervisor_input_tool: {e}\n"
-                f"Prueba: {user_message}\n"
-                "Sugerencia: Revisión manual por el encargado humano."
-            )
-            await interno_notify(audit_text)
-            return ""
 
-        # ================= AGENTE PRINCIPAL =================
-        hist = self.memory.get_context(cid, limit=12)
-        chat_hist = [
-            HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
-            for m in hist if m.get("role") in ("user", "assistant")
-        ]
-        lang = self._get_or_detect_language(user_message, cid, hist)
-        input_msg = self._inject_smart_instructions(user_message, lang)
+            # ================= AGENTE PRINCIPAL =================
+            hist = self.memory.get_context(cid, limit=12)
+            chat_hist = [
+                HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
+                for m in hist if m.get("role") in ("user", "assistant")
+            ]
+            lang = self._get_or_detect_language(user_message, cid, hist)
+            input_msg = self._inject_smart_instructions(user_message, lang)
 
-        try:
-            result = await self.agent_executor.ainvoke({
-                "input": input_msg,
-                "chat_history": chat_hist,
-            })
-            output = None
-            for key in ["output", "final_output", "response"]:
-                v = result.get(key)
-                if isinstance(v, str) and v.strip():
-                    output = v.strip()
-                    break
-            if not output:
-                output = (
-                    "Ha ocurrido un imprevisto al procesar tu solicitud. "
-                    "Voy a consultarlo y te confirmo en breve."
+            try:
+                with ls_context(name="MainAgentExecution", tags=["agent", "llm"]):
+                    result = await self.agent_executor.ainvoke({
+                        "input": input_msg,
+                        "chat_history": chat_hist,
+                    })
+                    output = None
+                    for key in ["output", "final_output", "response"]:
+                        v = result.get(key)
+                        if isinstance(v, str) and v.strip():
+                            output = v.strip()
+                            break
+                    if not output:
+                        output = (
+                            "Ha ocurrido un imprevisto al procesar tu solicitud. "
+                            "Voy a consultarlo y te confirmo en breve."
+                        )
+                    log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
+            except Exception as e:
+                log.error(f"❌ Error en ejecución del agente: {e}", exc_info=True)
+                output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
+
+            # ================= SUPERVISOR OUTPUT =================
+            try:
+                with ls_context(name="SupervisorOutput", tags=["supervisor", "output"]):
+                    log.info("🧾 [Supervisor OUTPUT] Auditando respuesta...")
+                    so_result = supervisor_output_tool.invoke({
+                        "input_usuario": user_message,
+                        "respuesta_agente": output,
+                    })
+                    log.info(f"📊 [Supervisor OUTPUT] salida:\n{so_result}")
+
+                    if isinstance(so_result, str):
+                        if "Estado: Aprobado" in so_result:
+                            log.info("✅ [Supervisor OUTPUT] Aprobado.")
+                        elif "Estado: Revisión Necesaria" in so_result or "Estado: Rechazado" in so_result:
+                            log.warning("⚠️ [Supervisor OUTPUT] No apto. Escalando y bloqueando envío.")
+                            await interno_notify(so_result)
+                            await mark_pending(cid, user_message)
+                            return ""
+            except Exception as e:
+                log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
+                audit_text = (
+                    "Estado: Revisión Necesaria\n"
+                    f"Motivo: Error interno del supervisor_output_tool: {e}\n"
+                    f"Prueba: {output}\n"
+                    "Sugerencia: Revisión manual por el encargado humano."
                 )
-            log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
-        except Exception as e:
-            log.error(f"❌ Error en ejecución del agente: {e}", exc_info=True)
-            output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
+                await interno_notify(audit_text)
+                return ""
 
-        # ================= SUPERVISOR OUTPUT =================
-        try:
-            log.info("🧾 [Supervisor OUTPUT] Auditando respuesta...")
-            so_result = supervisor_output_tool.invoke({
-                "input_usuario": user_message,
-                "respuesta_agente": output,
-            })
-            log.info(f"📊 [Supervisor OUTPUT] salida:\n{so_result}")
+            # ================= POSTPROCESO =================
+            final_resp = language_manager.ensure_language(self._postprocess(output), lang)
+            try:
+                self.memory.save(cid, "user", user_message)
+                if not self._extract_lang_from_history(hist):
+                    self._persist_lang_tag(cid, lang)
+                self.memory.save(cid, "assistant", final_resp)
+            except Exception as e:
+                log.warning(f"⚠️ No se pudo persistir en memoria: {e}")
 
-            if isinstance(so_result, str):
-                if "Estado: Aprobado" in so_result:
-                    log.info("✅ [Supervisor OUTPUT] Aprobado.")
-                elif "Estado: Revisión Necesaria" in so_result or "Estado: Rechazado" in so_result:
-                    log.warning("⚠️ [Supervisor OUTPUT] No apto. Escalando y bloqueando envío.")
-                    await interno_notify(so_result)
-                    await mark_pending(cid, user_message)
-                    return ""
-        except Exception as e:
-            log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
-            audit_text = (
-                "Estado: Revisión Necesaria\n"
-                f"Motivo: Error interno del supervisor_output_tool: {e}\n"
-                f"Prueba: {output}\n"
-                "Sugerencia: Revisión manual por el encargado humano."
-            )
-            await interno_notify(audit_text)
-            return ""
-
-        # ================= POSTPROCESO =================
-        final_resp = language_manager.ensure_language(self._postprocess(output), lang)
-        try:
-            self.memory.save(cid, "user", user_message)
-            if not self._extract_lang_from_history(hist):
-                self._persist_lang_tag(cid, lang)
-            self.memory.save(cid, "assistant", final_resp)
-        except Exception as e:
-            log.warning(f"⚠️ No se pudo persistir en memoria: {e}")
-
-        log.info(f"💾 Memoria actualizada para {cid}")
-        return final_resp
+            log.info(f"💾 Memoria actualizada para {cid}")
+            return final_resp

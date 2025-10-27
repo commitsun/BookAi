@@ -6,6 +6,7 @@ import requests
 from fastmcp import FastMCP
 from supabase import create_client
 from core.config import Settings as C
+from core.observability import ls_context  # 🟢 NUEVO
 
 # =====================================================
 # CONFIGURACIÓN BÁSICA
@@ -41,29 +42,24 @@ def notify_encargado(text: str):
         log.error("❌ Falta configuración de Telegram (TOKEN o CHAT_ID).")
         return
 
-    # --- 🔍 formateo inteligente ---
     formatted = None
     try:
-        # Bloques tipo “Estado: ... Motivo: ...”
         if SUPERVISOR_BLOCK_RE.search(text):
             formatted = (
                 "🚨 *Alerta del sistema HotelAI*\n"
                 "```text\n" + text.strip() + "\n```"
             )
-        # Mensajes tipo Interno({...})
         elif text.strip().startswith("Interno("):
             inner = text.strip()[8:-1]
             formatted = (
                 "🚨 *Alerta del sistema HotelAI*\n"
                 "```json\n" + inner.strip() + "\n```"
             )
-        # Si parece JSON crudo
         elif text.strip().startswith("{"):
             formatted = (
                 "🚨 *Alerta del sistema HotelAI*\n"
                 "```json\n" + text.strip() + "\n```"
             )
-        # fallback genérico
         else:
             formatted = (
                 "🚨 *Notificación interna HotelAI*\n"
@@ -93,10 +89,7 @@ def notify_encargado(text: str):
 # 💾 Guardar incidencia en Supabase
 # =====================================================
 def save_incident(payload: str, origin: str = "Sistema"):
-    """
-    Guarda el incidente si Supabase está disponible.
-    Si no existe la tabla o hay error, solo se loguea (modo temporal).
-    """
+    """Guarda el incidente si Supabase está disponible."""
     try:
         if not supabase:
             log.warning("⚠️ [InternoAgent] Supabase no disponible, guardado omitido.")
@@ -118,7 +111,7 @@ def save_incident(payload: str, origin: str = "Sistema"):
         )
         log.info(f"💾 Incidente registrado en Supabase: {res.data}")
     except Exception as e:
-        log.error(f"⚠️ [InternoAgent] No se pudo guardar en Supabase (modo temporal): {e}")
+        log.error(f"⚠️ [InternoAgent] No se pudo guardar en Supabase: {e}")
         log.warning(f"📋 Incidente logueado:\n{payload}")
 
 
@@ -127,11 +120,16 @@ def save_incident(payload: str, origin: str = "Sistema"):
 # =====================================================
 @mcp.tool()
 async def notificar_interno(payload: str):
-    """Herramienta MCP oficial: recibe alertas desde otros agentes (Input/Output)."""
-    log.info(f"📥 InternoAgent MCP recibió alerta: {payload}")
-    save_incident(payload, origin="Supervisor/MCP")
-    notify_encargado(payload)
-    return "✅ Alerta transmitida al encargado."
+    """Herramienta MCP oficial: recibe alertas desde otros agentes."""
+    with ls_context(
+        name="InternoAgent.notificar_interno",
+        metadata={"payload": payload},
+        tags=["interno", "alerta"],
+    ):
+        log.info(f"📥 InternoAgent MCP recibió alerta: {payload}")
+        save_incident(payload, origin="Supervisor/MCP")
+        notify_encargado(payload)
+        return "✅ Alerta transmitida al encargado."
 
 
 # =====================================================
@@ -139,24 +137,25 @@ async def notificar_interno(payload: str):
 # =====================================================
 async def process_tool_call(payload: str):
     """Wrapper para llamadas directas desde el HotelAIHybrid."""
-    try:
-        log.info(f"📨 InternoAgent (wrapper) recibió: {payload}")
+    with ls_context(
+        name="InternoAgent.process_tool_call",
+        metadata={"payload": payload},
+        tags=["interno", "wrapper"],
+    ):
+        try:
+            log.info(f"📨 InternoAgent (wrapper) recibió: {payload}")
 
-        # Limpieza del payload si viene con prefijo 'Interno({...})'
-        cleaned = payload
-        if isinstance(payload, str) and payload.strip().startswith("Interno("):
-            cleaned = payload.strip()[8:-1]  # eliminar 'Interno(' y ')'
-            cleaned = cleaned.strip("` \n")
+            cleaned = payload
+            if isinstance(payload, str) and payload.strip().startswith("Interno("):
+                cleaned = payload.strip()[8:-1]
+                cleaned = cleaned.strip("` \n")
 
-        save_incident(cleaned, origin="HotelAIHybrid")
-        notify_encargado(cleaned)
-    except Exception as e:
-        log.error(f"❌ Error en process_tool_call: {e}", exc_info=True)
+            save_incident(cleaned, origin="HotelAIHybrid")
+            notify_encargado(cleaned)
+        except Exception as e:
+            log.error(f"❌ Error en process_tool_call: {e}", exc_info=True)
 
 
-# =====================================================
-# 🚀 Ejecución directa (modo agente MCP)
-# =====================================================
 if __name__ == "__main__":
     print("✅ InternoAgent operativo (modo temporal sin tabla Supabase)")
     mcp.run(transport="stdio", show_banner=False)
