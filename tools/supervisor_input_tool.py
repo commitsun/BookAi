@@ -12,7 +12,7 @@ class _SISchema(BaseModel):
     mensaje_usuario: str = Field(..., description="Mensaje original del usuario a validar")
 
 _SUP_INPUT_PROMPT = load_prompt("supervisor_input_prompt.txt")
-_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+_llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
 
 def _run_supervisor_input(mensaje_usuario: str) -> str:
     """

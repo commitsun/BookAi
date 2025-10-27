@@ -6,7 +6,7 @@ from core.observability import ls_context
 log = logging.getLogger("SupervisorInputAgent")
 
 mcp = FastMCP("SupervisorInputAgent")
-llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.2)
 
 # Cargar prompt desde /prompts/supervisor_input_prompt.txt
 with open("prompts/supervisor_input_prompt.txt", "r", encoding="utf-8") as f:

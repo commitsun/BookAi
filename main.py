@@ -18,7 +18,7 @@ os.environ["PYTHONWARNINGS"] = "ignore"
 
 logging.basicConfig(
     level=logging.INFO,
-    format="%(asctime)s | %(levelname)s | %(message)s",
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
 # =====================================================
@@ -103,7 +103,7 @@ async def api_message(request: Request):
             "he contactado con el encargado",
             "error",
         ]
-        if any(p in response.lower() for p in trigger_phrases):
+        if any(p in (response or "").lower() for p in trigger_phrases):
             await mark_pending(conversation_id, user_message)
             logging.warning(f"🟡 Escalación detectada para {conversation_id}")
             return JSONResponse({"response": "🕓 Consultando con el encargado..."})
@@ -154,8 +154,6 @@ async def whatsapp_webhook(request: Request):
         body = await request.json()
         logging.info(f"📩 [WhatsApp] Webhook recibido: {body}")
 
-        # Aquí podrías extraer el mensaje y procesarlo con el agente híbrido
-        # Ejemplo simple:
         entry = body.get("entry", [])
         if entry:
             changes = entry[0].get("changes", [])
@@ -164,12 +162,14 @@ async def whatsapp_webhook(request: Request):
                 messages = value.get("messages", [])
                 if messages:
                     msg = messages[0]
-                    sender = msg["from"]
+                    sender = msg.get("from", "")
                     text = msg.get("text", {}).get("body", "")
-                    logging.info(f"💬 [WhatsApp] {sender}: {text}")
+                    if text:
+                        logging.info(f"💬 [WhatsApp] {sender}: {text}")
 
-                    response = await hybrid_agent.process_message(text, sender)
-                    logging.info(f"🤖 [Respuesta WhatsApp]: {response[:120]}...")
+                        # Procesar mensaje del huésped con el agente principal
+                        response = await hybrid_agent.process_message(text, sender)
+                        logging.info(f"🤖 [Respuesta WhatsApp]: {response[:120]}...")
 
         return JSONResponse({"status": "received"})
     except Exception as e:

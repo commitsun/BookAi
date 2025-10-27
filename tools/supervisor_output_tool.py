@@ -11,7 +11,7 @@ class _SOSchema(BaseModel):
     respuesta_agente: str = Field(..., description="Respuesta generada por el agente principal")
 
 _SUP_OUTPUT_PROMPT = load_prompt("supervisor_output_prompt.txt")
-_llm = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+_llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
 
 def _run_supervisor_output(input_usuario: str, respuesta_agente: str) -> str:
     """

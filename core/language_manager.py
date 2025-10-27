@@ -4,7 +4,7 @@ from functools import lru_cache
 from typing import Optional
 from langchain_openai import ChatOpenAI
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4o-mini")
+OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
 
 class LanguageManager:
     """

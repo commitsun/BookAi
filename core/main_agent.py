@@ -116,12 +116,29 @@ class HotelAIHybrid:
             log.warning(f"⚠️ No se pudo guardar tag idioma: {e}")
 
     def _get_or_detect_language(self, msg: str, cid: str, history: List[dict]) -> str:
+        """
+        Detecta el idioma del mensaje actual y actualiza el tag si cambia.
+        No fuerza ningún idioma por defecto ni usa valores hardcodeados.
+        """
         saved = self._extract_lang_from_history(history)
-        if saved:
+        detected = language_manager.detect_language(msg)
+
+        # Si la detección falla o no devuelve nada, usamos el último guardado
+        if not detected and saved:
+            return saved or "unknown"
+
+        # Si hay un idioma guardado y coincide, seguimos igual
+        if saved and detected == saved:
             return saved
-        det = language_manager.detect_language(msg)
-        self._persist_lang_tag(cid, det)
-        return det
+
+        # Si el idioma cambió (por ejemplo, inglés → español o viceversa), actualiza el tag
+        if detected and detected != saved:
+            self._persist_lang_tag(cid, detected)
+            return detected
+
+        # Fallback final
+        return detected or "unknown"
+
 
     # -----------------------------------------------
     def _postprocess(self, text: str) -> str:
@@ -222,8 +239,17 @@ class HotelAIHybrid:
                 )
                 return ""
 
-            # ================= POSTPROCESO =================
+            # ================= POSTPROCESO FINAL =================
+            def _clean_output_text(text: str) -> str:
+                if not text:
+                    return text
+                text = re.sub(r"(\b[A-ZÁÉÍÓÚÑ].{20,}?)\1+", r"\1", text)
+                text = re.sub(r"\s{2,}", " ", text)
+                return text.strip()
+
             final_resp = language_manager.ensure_language(self._postprocess(output), lang)
+            final_resp = _clean_output_text(final_resp)
+
             try:
                 self.memory.save(cid, "user", user_message)
                 if not self._extract_lang_from_history(hist):

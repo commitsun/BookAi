@@ -3,7 +3,7 @@ from langchain_openai import ChatOpenAI
 from utils.utils_prompt import load_prompt
 
 think_prompt = load_prompt("think_prompt.txt")
-llm_think = ChatOpenAI(model="gpt-4o-mini", temperature=0)
+llm_think = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
 
 @tool(
     name="think_tool",

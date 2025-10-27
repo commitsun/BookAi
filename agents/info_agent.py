@@ -3,6 +3,7 @@ from agents.base_agent import MCPBackedAgent
 from core.language_manager import enforce_language, detect_language
 from core.utils.utils_prompt import load_prompt
 from core.observability import ls_context  # 🟢 NUEVO
+from core.utils.normalize_reply import normalize_reply
 
 log = logging.getLogger("InfoAgent")
 
@@ -23,8 +24,10 @@ async def consulta_info(pregunta: str) -> str:
         try:
             lang = detect_language(pregunta)
             tool = await agent.kb_client.get_tool("Base_de_conocimientos_del_hotel")
+            
             raw_reply = await tool.ainvoke({"input": pregunta})
-            return enforce_language(pregunta, raw_reply, lang)
+            cleaned = normalize_reply(raw_reply, pregunta, "InfoAgent")
+            return enforce_language(pregunta, cleaned, lang)
         except Exception as e:
             log.error(f"❌ Error en InfoAgent: {e}", exc_info=True)
             return f"⚠️ Error en InfoAgent: {e}"

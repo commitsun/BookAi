@@ -7,68 +7,66 @@ from langchain_openai import ChatOpenAI
 # -----------------------------------------------------
 # 🔹 Limpieza robusta de respuesta cruda (sin LLM)
 # -----------------------------------------------------
+import json, re, logging
+
 def normalize_reply(raw_reply, query=None, source=None):
     """
-    Normaliza respuestas crudas que vienen desde MCP o agentes secundarios.
-    - Soporta dicts, JSON, listas o strings planos.
-    - Evita devolver valores vacíos que activen el fallback.
-    - Conserva el texto incluso si el formato no es estándar.
+    Normaliza respuestas crudas desde MCP o agentes secundarios.
+    - Desanida múltiples niveles de JSON.
+    - Extrae 'pageContent', 'text' o 'content' de cualquier estructura.
+    - Nunca devuelve vacío: conserva texto si algo es legible.
     """
     try:
-        # 🔸 Caso nulo
         if raw_reply is None:
             return ""
 
-        # 🔸 Si viene como dict (p. ej. {"text": "..."} o {"pageContent": "..."})
-        if isinstance(raw_reply, dict):
-            for key in ["pageContent", "text", "content", "response"]:
-                if key in raw_reply and isinstance(raw_reply[key], str):
-                    val = raw_reply[key].strip()
-                    if val:
-                        return val
-            # Devuelve el JSON como texto si no hay campos reconocibles
-            return json.dumps(raw_reply, ensure_ascii=False)
+        # 🔁 Desanidar JSON en profundidad (hasta 3 niveles)
+        def deep_deserialize(obj):
+            for _ in range(3):
+                if isinstance(obj, str):
+                    try:
+                        obj = json.loads(obj)
+                    except Exception:
+                        break
+            return obj
 
-        # 🔸 Si es JSON string
-        if isinstance(raw_reply, str):
-            try:
-                obj = json.loads(raw_reply)
-                if isinstance(obj, dict):
-                    for key in ["pageContent", "text", "content", "response"]:
-                        if key in obj and isinstance(obj[key], str):
-                            val = obj[key].strip()
-                            if val:
-                                return val
-                    # Si no hay campos reconocibles, devuelve JSON completo
-                    return json.dumps(obj, ensure_ascii=False)
-            except Exception:
-                pass  # no era JSON válido, se trata como texto normal
+        obj = deep_deserialize(raw_reply)
 
-        # 🔸 Si es lista (varios resultados o fragmentos)
-        if isinstance(raw_reply, list):
-            parts = []
-            for item in raw_reply:
+        # 🔹 Si es lista → concatenar contenidos útiles
+        if isinstance(obj, list):
+            fragments = []
+            for item in obj:
+                item = deep_deserialize(item)
                 if isinstance(item, dict):
-                    for key in ["pageContent", "text", "content"]:
-                        if key in item and item[key]:
-                            parts.append(str(item[key]).strip())
-                            break
+                    val = item.get("pageContent") or item.get("text") or item.get("content")
+                    if isinstance(val, str):
+                        val = deep_deserialize(val)
+                        if isinstance(val, dict):
+                            val = val.get("pageContent") or val.get("text") or val.get("content")
+                        if val:
+                            fragments.append(val.strip())
                 elif isinstance(item, str):
-                    parts.append(item.strip())
-            if parts:
-                return "\n".join(parts).strip()
+                    fragments.append(item.strip())
+            return "\n".join(fragments).strip()
 
-        # 🔸 Si es texto plano
-        if isinstance(raw_reply, str):
-            cleaned = re.sub(r"\s+", " ", raw_reply).strip()
-            return cleaned or raw_reply
+        # 🔹 Si es dict → devolver texto principal
+        if isinstance(obj, dict):
+            for key in ("pageContent", "text", "content"):
+                if key in obj and isinstance(obj[key], str):
+                    return obj[key].strip()
+            return json.dumps(obj, ensure_ascii=False)
 
-        # 🔸 Fallback final: convierte cualquier cosa a texto
-        return str(raw_reply)
+        # 🔹 Si es texto plano
+        if isinstance(obj, str):
+            return re.sub(r"\s+", " ", obj).strip()
+
+        # 🔹 Fallback final
+        return str(obj).strip()
 
     except Exception as e:
         logging.error(f"⚠️ Error en normalize_reply: {e}", exc_info=True)
         return str(raw_reply) or "Respuesta no disponible"
+
 
 
 # -----------------------------------------------------
@@ -83,24 +81,28 @@ def summarize_tool_output(query: str, raw_output: str, temperature: float = 0.0)
         if not raw_output or len(raw_output.strip()) == 0:
             return "Lo siento, no encontré información relevante en este momento."
 
-        llm = ChatOpenAI(model="gpt-4o-mini", temperature=temperature)
+        llm = ChatOpenAI(model="gpt-4.1-mini", temperature=temperature)
+
+        # Detectar idioma simple
+        lang_hint = "español" if re.search(r"[áéíóúñ¿¡]", query or "", re.I) or query.lower().startswith(("hola", "buen", "gracias")) else "auto"
 
         prompt = f"""
-            Eres el asistente virtual del hotel. Responde de forma amable,
-            natural y útil al huésped, usando la información a continuación.
+        Eres el asistente virtual del hotel. Responde de forma amable,
+        natural y útil al huésped, usando la información a continuación.
 
-            Consulta del huésped:
-            "{query}"
+        Consulta del huésped:
+        "{query}"
 
-            Información encontrada:
-            {raw_output}
+        Información encontrada:
+        {raw_output}
 
-            Instrucciones:
-            - Responde en el mismo idioma que la consulta.
-            - Da una respuesta breve (2–4 frases), clara y natural.
-            - No uses formato JSON ni listas técnicas.
-            - Si la información indica “no disponible”, responde con una frase educada explicando la situación.
-            """
+        Instrucciones:
+        - Responde en el mismo idioma que la consulta (o en {lang_hint} si no se detecta idioma claro).
+        - Da una respuesta breve (2–4 frases), clara y natural.
+        - No uses formato JSON ni listas técnicas.
+        """
+
+
 
         response = llm.invoke(prompt)
         return response.content.strip()
