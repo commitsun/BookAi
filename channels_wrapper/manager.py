@@ -28,8 +28,8 @@ class ChannelManager:
         """
         possible_channels = {
             "whatsapp": "channels_wrapper.whatsapp.whatsapp_meta",
+             "telegram": "channels_wrapper.telegram.telegram_channel",
             # Si quieres añadir más:
-            # "telegram": "channels_wrapper.telegram.telegram_channel",
             # "webchat": "channels_wrapper.webchat.webchat_channel",
         }
 
