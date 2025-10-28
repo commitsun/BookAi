@@ -144,26 +144,29 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
     name="availability_pricing",
     description=(
         "Consulta disponibilidad, precios y gestiona reservas de habitaciones. "
-        "Úsala cuando el cliente pregunte por precio, fechas, ofertas, número de camas o reserva."
+        "Permite responder preguntas específicas como precios, tipos de habitación, "
+        "coste total o disponibilidad para determinadas fechas."
     ),
     return_direct=True,
 )
 async def availability_pricing_tool(query: str) -> str:
-    """Consulta DispoPreciosAgent (MCP): buscar_token + Disponibilidad_y_precios."""
+    """Consulta DispoPreciosAgent (MCP): buscar_token + Disponibilidad_y_precios con razonamiento dinámico."""
+    from langchain_openai import ChatOpenAI
+
     try:
         logging.info(f"🧩 availability_pricing_tool ejecutado con query: {query}")
 
+        # 1️⃣ Cargar herramientas
         tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
         if not tools:
-            logging.error("❌ No se encontraron herramientas del DispoPreciosAgent.")
             return ESCALATE_SENTENCE
 
         token_tool = next((t for t in tools if t.name == "buscar_token"), None)
         dispo_tool = next((t for t in tools if t.name == "Disponibilidad_y_precios"), None)
         if not token_tool or not dispo_tool:
-            logging.error("⚠️ Faltan tools requeridas en MCP.")
             return ESCALATE_SENTENCE
 
+        # 2️⃣ Obtener token
         token_raw = await token_tool.ainvoke({})
         token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
         token = (
@@ -171,63 +174,51 @@ async def availability_pricing_tool(query: str) -> str:
             else token_data.get("key")
         )
         if not token:
-            logging.error("⚠️ No se obtuvo token válido de buscar_token.")
-            return ESCALATE_SENTENCE
+            return "⚠️ No se pudo obtener el token de acceso."
 
+        # 3️⃣ Fechas dinámicas
         today = datetime.date.today()
-        checkin = today + datetime.timedelta(days=17)
+        checkin = today + datetime.timedelta(days=7)
         checkout = checkin + datetime.timedelta(days=2)
-
-        m = re.search(r"\b(\d+)\s*(personas|pax|adultos)?\b", (query or "").lower())
-        occupancy = int(m.group(1)) if m else 2
 
         params = {
             "checkin": f"{checkin}T00:00:00",
             "checkout": f"{checkout}T00:00:00",
-            "occupancy": occupancy,
+            "occupancy": 2,
             "key": token,
         }
 
+        # 4️⃣ Llamar al MCP
         raw_reply = await dispo_tool.ainvoke(params)
         rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
-        if not rooms:
-            logging.warning("⚠️ Disponibilidad vacía desde MCP → escalación.")
-            return ESCALATE_SENTENCE
+        if not rooms or not isinstance(rooms, list):
+            return "No hay disponibilidad en las fechas indicadas."
 
-        opciones = "\n".join(
-            f"- {r['roomTypeName']}: {r['avail']} disponibles · {r['price']}€/noche"
-            for r in rooms
-        )
+        # 5️⃣ Enviar al LLM para razonamiento libre
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+        prompt = f"""
+Eres el asistente de reservas del hotel. Dispones de la siguiente información de habitaciones y precios (en euros por noche):
 
-        ql = (query or "").lower()
-        preferida = None
-        if "estándar" in ql or "estandar" in ql or "standard" in ql:
-            preferida = next(
-                (r for r in rooms if any(w in r["roomTypeName"].lower() for w in ["estándar", "estandar", "standard"])),
-                None,
-            )
-        elif "supletoria" in ql:
-            preferida = next((r for r in rooms if "supletoria" in r["roomTypeName"].lower()), None)
+{json.dumps(rooms, ensure_ascii=False, indent=2)}
 
-        if any(x in ql for x in ("reserv", "confirm", "book")) and (preferida or rooms):
-            seleccion = preferida or random.choice(rooms)
-            return (
-                f"✅ Reserva confirmada: habitación {seleccion['roomTypeName'].lower()} "
-                f"del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
-                f"para {occupancy} persona(s), {seleccion['price']}€ por noche. "
-                f"¡Gracias por elegirnos! 🏨✨"
-            )
+El huésped pregunta: "{query}"
 
-        respuesta = (
-            f"Disponibilidad del {checkin.strftime('%d/%m/%Y')} al {checkout.strftime('%d/%m/%Y')} "
-            f"para {occupancy} persona(s):\n{opciones}\n\n"
-            "Si quieres, puedo confirmar la reserva de la opción que prefieras."
-        )
-        return respuesta
+Tu tarea:
+- Usa exclusivamente los datos de la lista para calcular o responder.
+- Si se pregunta por el total de noches, multiplica el precio por el número de noches (usa 2 noches por defecto si no se menciona otra duración).
+- Si el tipo de habitación no existe en la lista, indícalo amablemente.
+- Responde de manera natural y clara, en español, sin mostrar JSON ni datos técnicos.
+"""
+        response = await llm.ainvoke(prompt)
+        answer = response.content.strip()
+
+        logging.info(f"🧠 Respuesta LLM pricing → {answer}")
+        return answer
 
     except Exception as e:
-        logging.error(f"❌ Error en availability_pricing_tool: {e}", exc_info=True)
+        logging.error(f"❌ Error en availability_pricing_tool flexible: {e}", exc_info=True)
         return ESCALATE_SENTENCE
+
 
 # =====================================================
 # 🧍 Escalación a soporte humano
