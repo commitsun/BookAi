@@ -1,3 +1,4 @@
+# core/main_agent.py
 import os
 import json
 import logging
@@ -51,10 +52,12 @@ class HotelAIHybrid:
         return_intermediate_steps: bool = True,
     ):
         self.memory = memory_manager or _global_memory
-        self.model_name = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
-        self.temperature = float(os.getenv("OPENAI_TEMPERATURE", "0.2"))
 
-        log.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
+        # 🧠 Hardcodeamos modelo por estabilidad (evita "must provide model parameter")
+        self.model_name = "gpt-4.1-mini"
+        self.temperature = 0.2
+
+        log.info(f"🧠 Inicializando HotelAIHybrid con modelo fijo: {self.model_name}")
 
         self.llm = ChatOpenAI(
             model=self.model_name,
@@ -63,9 +66,11 @@ class HotelAIHybrid:
             max_tokens=1500,
         )
 
+        # Herramientas
         self.tools = get_all_hotel_tools()
         log.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
 
+        # Prompt base
         self.system_message = self._load_main_prompt()
         self.agent_executor = self._create_agent_executor(
             max_iterations=max_iterations,
@@ -92,7 +97,7 @@ class HotelAIHybrid:
         return AgentExecutor(
             agent=agent,
             tools=self.tools,
-            verbose=False,
+            verbose=True,
             handle_parsing_errors=True,
             max_iterations=max_iterations,
             return_intermediate_steps=return_intermediate_steps,
@@ -116,29 +121,16 @@ class HotelAIHybrid:
             log.warning(f"⚠️ No se pudo guardar tag idioma: {e}")
 
     def _get_or_detect_language(self, msg: str, cid: str, history: List[dict]) -> str:
-        """
-        Detecta el idioma del mensaje actual y actualiza el tag si cambia.
-        No fuerza ningún idioma por defecto ni usa valores hardcodeados.
-        """
         saved = self._extract_lang_from_history(history)
         detected = language_manager.detect_language(msg)
-
-        # Si la detección falla o no devuelve nada, usamos el último guardado
         if not detected and saved:
             return saved or "unknown"
-
-        # Si hay un idioma guardado y coincide, seguimos igual
         if saved and detected == saved:
             return saved
-
-        # Si el idioma cambió (por ejemplo, inglés → español o viceversa), actualiza el tag
         if detected and detected != saved:
             self._persist_lang_tag(cid, detected)
             return detected
-
-        # Fallback final
         return detected or "unknown"
-
 
     # -----------------------------------------------
     def _postprocess(self, text: str) -> str:
@@ -154,7 +146,6 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     async def process_message(self, user_message: str, conversation_id: str = None) -> str | None:
-        """Procesa el mensaje del cliente con validaciones de entrada y salida."""
         if not conversation_id:
             conversation_id = "unknown"
 
@@ -170,7 +161,6 @@ class HotelAIHybrid:
             try:
                 si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
                 log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
-
                 if isinstance(si_result, str) and si_result != "Aprobado":
                     log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando.")
                     await interno_notify(si_result)
@@ -179,7 +169,7 @@ class HotelAIHybrid:
             except Exception as e:
                 log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
                 await interno_notify(
-                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_input_tool: {e}\nPrueba: {user_message}\nSugerencia: Revisión manual."
+                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_input_tool: {e}\nPrueba: {user_message}"
                 )
                 return ""
 
@@ -196,12 +186,7 @@ class HotelAIHybrid:
                     "input": user_message.strip(),
                     "chat_history": chat_hist,
                 })
-                output = None
-                for key in ["output", "final_output", "response"]:
-                    v = result.get(key)
-                    if isinstance(v, str) and v.strip():
-                        output = v.strip()
-                        break
+                output = next((result.get(k) for k in ["output", "final_output", "response"] if result.get(k)), "")
                 if not output:
                     output = "No dispongo de ese dato en este momento."
                 log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
@@ -225,17 +210,12 @@ class HotelAIHybrid:
                         await mark_pending(cid, user_message)
                         return ""
                     elif "estado: revisión necesaria" in estado:
-                        log.warning("⚠️ [Supervisor OUTPUT] Revisión necesaria (no crítica). Logueando pero sin escalar.")
+                        log.warning("⚠️ [Supervisor OUTPUT] Revisión necesaria (no crítica).")
                         await interno_notify(so_result)
-                    elif "estado: aprobado" in estado:
-                        log.info("✅ [Supervisor OUTPUT] Aprobado. Envío permitido.")
-                    else:
-                        log.info("ℹ️ [Supervisor OUTPUT] Estado no claro, pero contenido válido. Se permite envío.")
-
             except Exception as e:
                 log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
                 await interno_notify(
-                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_output_tool: {e}\nPrueba: {output}\nSugerencia: Revisión manual."
+                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_output_tool: {e}\nPrueba: {output}"
                 )
                 return ""
 

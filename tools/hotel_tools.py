@@ -10,8 +10,9 @@ import asyncio
 from pydantic import BaseModel, Field
 from langchain.tools import tool as base_tool, StructuredTool
 from core.mcp_client import mcp_client
-from core.utils.normalize_reply import normalize_reply, summarize_tool_output
-
+from core.utils.normalize_reply import normalize_reply
+from langchain.tools import Tool
+from langchain_openai import ChatOpenAI
 
 # =====================================================
 # ⚙️ Decorador híbrido compatible (LangChain <-> HotelAI)
@@ -27,7 +28,6 @@ def hybrid_tool(name=None, description=None, return_direct=False):
         return decorated
     return wrapper
 
-
 # =====================================================
 # 🔧 Constantes y funciones auxiliares
 # =====================================================
@@ -35,7 +35,6 @@ ESCALATE_SENTENCE = (
     "🕓 Un momento por favor, voy a consultarlo con el encargado. "
     "Permíteme contactar con el encargado."
 )
-
 
 def _looks_external_query(q: str) -> bool:
     """Detecta si el huésped pregunta por cosas FUERA del hotel."""
@@ -49,7 +48,6 @@ def _looks_external_query(q: str) -> bool:
         "museo", "museum", "parking público", "public parking",
     ]
     return any(k in ql for k in external_kw)
-
 
 def _should_escalate_from_text(text: str) -> bool:
     """Si la respuesta parece error o no dato, devolvemos escalación."""
@@ -67,6 +65,32 @@ def _should_escalate_from_text(text: str) -> bool:
     ]
     return any(p in t for p in triggers)
 
+# =====================================================
+# 🧠 Función de resumen de la salida MCP
+# =====================================================
+async def summarize_tool_output(question: str, context: str) -> str:
+    """Resume la información del MCP en una respuesta natural al huésped."""
+    try:
+        llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+        prompt = f"""
+        Eres un asistente del hotel. Un huésped ha hecho la siguiente pregunta: "{question}".
+        
+        A continuación tienes información del hotel extraída de una base de datos interna.
+        Usa **únicamente la información directamente relacionada con la pregunta**.
+        No incluyas detalles de otros temas ni repitas respuestas anteriores.
+        Si la información no está explícitamente en el texto, indica amablemente que no dispones de ese dato.
+
+        Devuelve una respuesta breve, amable y clara en español.
+        
+        --- Información del hotel ---
+        {context}
+        """
+        response = await llm.ainvoke(prompt)
+        return response.content.strip()
+    except Exception as e:
+        logging.error(f"⚠️ Error al resumir salida del MCP: {e}")
+        return context[:500]
+
 
 # =====================================================
 # 🧠 Información general del hotel (KB interna, MCP)
@@ -76,7 +100,6 @@ class HotelInformationInput(BaseModel):
 
     @classmethod
     def model_validate(cls, data):
-        # 🔧 Permitir tanto 'question' como 'query'
         if isinstance(data, dict) and "question" in data and "query" not in data:
             data["query"] = data["question"]
         return super().model_validate(data)
@@ -98,12 +121,10 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
         if not q:
             return ESCALATE_SENTENCE
 
-        # 🔹 Detecta si el cliente pregunta por algo externo al hotel
         if _looks_external_query(q):
             logging.info("↗️ Consulta externa detectada → escalación automática.")
             return ESCALATE_SENTENCE
 
-        # 🔹 Buscar la tool de conocimiento en el MCP
         tools = await mcp_client.get_tools(server_name="InfoAgent")
         if not tools:
             logging.error("❌ No se encontraron herramientas del InfoAgent (MCP vacío).")
@@ -114,39 +135,26 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
             logging.error("⚠️ No se encontró 'Base_de_conocimientos_del_hotel' en MCP.")
             return ESCALATE_SENTENCE
 
-        # =====================================================
-        # 🔎 Llamada directa al MCP
-        # =====================================================
         raw_reply = await info_tool.ainvoke({"input": q})
-
-        logging.info(f"📦 RAW REPLY TYPE: {type(raw_reply)}")
         logging.info(f"📦 RAW REPLY CONTENT (primeros 400 chars): {str(raw_reply)[:400]}")
 
-        # =====================================================
-        # 🧩 Limpieza y normalización
-        # =====================================================
-        cleaned = normalize_reply(raw_reply, q, source="InfoAgent").strip()
+        cleaned = normalize_reply(raw_reply, q).strip()
         if not cleaned or len(cleaned) < 10:
-            logging.warning(f"⚠️ KB devolvió vacío o formato raro: {type(raw_reply)}")
             cleaned = str(raw_reply).strip()
 
         if not cleaned or len(cleaned) < 10:
             return ESCALATE_SENTENCE
 
-        # =====================================================
-        # ✨ Reformulación natural con LLM
-        # =====================================================
-        final_text = summarize_tool_output(q, cleaned)
-        if not final_text or len(final_text) < 10:
-            final_text = cleaned
+        summarized = await summarize_tool_output(q, cleaned)
+        if not summarized or len(summarized) < 10:
+            summarized = cleaned
 
-        logging.info(f"✅ Respuesta final hotel_information_tool → {final_text[:200]}...")
-        return final_text
+        logging.info(f"✅ Resumen final hotel_information_tool → {summarized[:200]}...")
+        return summarized
 
     except Exception as e:
         logging.error(f"💥 Error en hotel_information_tool: {e}", exc_info=True)
         return ESCALATE_SENTENCE
-
 
 # =====================================================
 # 💰 Disponibilidad, precios y reservas
@@ -240,22 +248,16 @@ async def availability_pricing_tool(query: str) -> str:
         logging.error(f"❌ Error en availability_pricing_tool: {e}", exc_info=True)
         return ESCALATE_SENTENCE
 
-
 # =====================================================
 # 🧍 Escalación a soporte humano
 # =====================================================
 @hybrid_tool(
     name="guest_support",
-    description=(
-        "Escala la consulta al encargado humano del hotel. "
-        "Úsala cuando la información no está disponible o el cliente pida hablar con alguien."
-    ),
+    description="Escala la consulta al encargado humano del hotel.",
     return_direct=True,
 )
 async def guest_support_tool(query: str) -> str:
-    """Devuelve mensaje de escalación. La gestión humana ocurre fuera (InternoAgent)."""
     return ESCALATE_SENTENCE
-
 
 # =====================================================
 # 💭 Reflexión interna
@@ -268,7 +270,6 @@ async def guest_support_tool(query: str) -> str:
 def think_tool(situation: str) -> str:
     return f"Analizando la situación: {situation}"
 
-
 # =====================================================
 # 👋 Conversación trivial / saludo
 # =====================================================
@@ -280,55 +281,83 @@ def think_tool(situation: str) -> str:
 def other_tool(reply: str) -> str:
     return (reply or "").strip()
 
-
 # =====================================================
-# 🧩 Adaptador para tools async (seguro para FastAPI + LangChain)
+# 🔁 Exportador general de herramientas (MCP + locales)
 # =====================================================
-def make_async_tool_sync(tool_func, name, description):
-    from langchain_core.tools import BaseTool
-
-    async def async_wrapper(tool_input=None, **kwargs):
-        if isinstance(tool_func, BaseTool):
-            if tool_input is not None:
-                return await tool_func.ainvoke(tool_input)
-            return await tool_func.ainvoke(kwargs)
-        if tool_input is not None:
-            if isinstance(tool_input, dict):
-                return await tool_func(**tool_input)
-            elif isinstance(tool_input, str):
-                try:
-                    return await tool_func(query=tool_input)
-                except TypeError:
-                    return await tool_func(tool_input)
-        return await tool_func(**kwargs)
-
-    def sync_wrapper(tool_input=None, **kwargs):
+async def load_mcp_tools():
+    """Carga herramientas de InfoAgent y DispoPreciosAgent desde el MCP."""
+    all_mcp_tools = []
+    for server in ["InfoAgent", "DispoPreciosAgent"]:
         try:
-            loop = asyncio.get_event_loop()
-            if loop.is_closed():
-                raise RuntimeError("Loop cerrado")
-        except RuntimeError:
-            loop = asyncio.new_event_loop()
-            asyncio.set_event_loop(loop)
-        try:
-            return loop.run_until_complete(async_wrapper(tool_input=tool_input, **kwargs))
-        finally:
-            if not loop.is_running():
-                loop.close()
-
-    return StructuredTool.from_function(
-        sync_wrapper, name=name, description=description, return_direct=True
-    )
+            tools = await mcp_client.get_tools(server_name=server)
+            all_mcp_tools.extend(tools)
+            logging.info(f"✅ {len(tools)} herramientas cargadas desde {server}")
+        except Exception as e:
+            logging.warning(f"⚠️ No se pudieron cargar herramientas desde {server}: {e}")
+    return all_mcp_tools
 
 
-# =====================================================
-# 🔁 Exportador general de herramientas
-# =====================================================
 def get_all_hotel_tools():
-    return [
-        make_async_tool_sync(hotel_information_tool, "hotel_information", hotel_information_tool.description),
-        make_async_tool_sync(availability_pricing_tool, "availability_pricing", availability_pricing_tool.description),
-        make_async_tool_sync(guest_support_tool, "guest_support", guest_support_tool.description),
+    """Obtiene todas las herramientas, incluyendo las del MCP, sin conflictos de asyncio ni pydantic."""
+    try:
+        loop = asyncio.get_event_loop()
+        if loop.is_running():
+            logging.info("🔄 Loop activo detectado → saltando carga directa de MCP (async)")
+            mcp_tools = []
+        else:
+            mcp_tools = loop.run_until_complete(load_mcp_tools())
+    except RuntimeError:
+        mcp_tools = asyncio.run(load_mcp_tools())
+
+    def wrap_async_tool(fn, name, desc):
+        """Convierte async functions o StructuredTools en sync Tools compatibles con LangChain."""
+        import asyncio
+        import nest_asyncio
+        from langchain_core.tools import BaseTool
+
+        def sync_fn(input_text: str):
+            try:
+                try:
+                    loop = asyncio.get_event_loop()
+                except RuntimeError:
+                    loop = asyncio.new_event_loop()
+                    asyncio.set_event_loop(loop)
+
+                if loop.is_running():
+                    nest_asyncio.apply()
+
+                async def run_async():
+                    if isinstance(fn, BaseTool):
+                        return await fn.ainvoke(input_text)
+                    elif asyncio.iscoroutinefunction(fn):
+                        return await fn(input_text)
+                    else:
+                        return fn(input_text)
+
+                return loop.run_until_complete(run_async())
+
+            except Exception as e:
+                logging.error(f"Error en {name}: {e}", exc_info=True)
+                return ESCALATE_SENTENCE
+
+        return Tool(
+            name=name,
+            func=sync_fn,
+            description=desc,
+            return_direct=True,
+        )
+
+    tools = [
+        wrap_async_tool(hotel_information_tool, "hotel_information", hotel_information_tool.description),
+        wrap_async_tool(availability_pricing_tool, "availability_pricing", availability_pricing_tool.description),
+        wrap_async_tool(guest_support_tool, "guest_support", guest_support_tool.description),
         think_tool,
         other_tool,
     ]
+
+    if mcp_tools:
+        tools.extend(mcp_tools)
+        logging.info(f"🧩 {len(mcp_tools)} herramientas MCP añadidas")
+
+    logging.info(f"🧩 Total herramientas disponibles: {[t.name for t in tools]}")
+    return tools

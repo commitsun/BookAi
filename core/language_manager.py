@@ -4,17 +4,20 @@ from functools import lru_cache
 from typing import Optional
 from langchain_openai import ChatOpenAI
 
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+# 🧠 Hardcodeamos el modelo para evitar error 400 en detección de idioma
+OPENAI_MODEL = "gpt-4.1-mini"
+
 
 class LanguageManager:
     """
-    Gestión de idioma sin hardcode:
+    Gestión de idioma:
     - Detecta idioma (ISO 639-1) con OpenAI
     - Reescribe/Traduce forzando idioma destino
     - Idempotente: si ya está en ese idioma, no “añade” nada
     """
 
     def __init__(self, model: Optional[str] = None, temperature: float = 0.0):
+        # Se asegura de tener un modelo válido siempre
         self.llm = ChatOpenAI(model=model or OPENAI_MODEL, temperature=temperature)
 
     @lru_cache(maxsize=4096)
@@ -36,14 +39,18 @@ class LanguageManager:
                     "If unsure, return 'es'. No extra text."
                 ),
             },
-            {"role": "user", "content": text}
+            {"role": "user", "content": text},
         ]
-        out = self.llm.invoke(prompt).content.strip().lower()
-        # normaliza posibles respuestas largas
-        out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "es"
-        if len(out) != 2:  # si no es iso-639-1, fallback seguro
+
+        try:
+            out = self.llm.invoke(prompt).content.strip().lower()
+            out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "es"
+            if len(out) != 2:
+                return "es"
+            return out
+        except Exception as e:
+            print(f"⚠️ Error detectando idioma: {e}")
             return "es"
-        return out
 
     def ensure_language(self, text: str, lang_code: str) -> str:
         """
@@ -59,7 +66,7 @@ class LanguageManager:
                 "content": (
                     "You are a precise rewriter. "
                     "Output the SAME content as the user's message but strictly in the target language. "
-                    "Do not add explanations, prefaces, or any extra text. No code fences. No emojis changes."
+                    "Do not add explanations, prefaces, or any extra text. No code fences. No emoji changes."
                 ),
             },
             {
@@ -70,8 +77,12 @@ class LanguageManager:
                 ),
             },
         ]
-        out = self.llm.invoke(prompt).content.strip()
-        return out
+
+        try:
+            return self.llm.invoke(prompt).content.strip()
+        except Exception as e:
+            print(f"⚠️ Error forzando idioma: {e}")
+            return text
 
     def short_phrase(self, meaning: str, lang_code: str) -> str:
         """
@@ -96,7 +107,13 @@ class LanguageManager:
                 ),
             },
         ]
-        return self.llm.invoke(prompt).content.strip()
 
-# Singleton cómodo
+        try:
+            return self.llm.invoke(prompt).content.strip()
+        except Exception as e:
+            print(f"⚠️ Error generando frase corta: {e}")
+            return meaning
+
+
+# Singleton global para uso compartido
 language_manager = LanguageManager()

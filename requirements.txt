@@ -28,3 +28,4 @@ langdetect
 
 # === Extra ===
 datetime
+nest_asyncio

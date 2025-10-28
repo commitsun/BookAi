@@ -11,12 +11,14 @@ from core.notification import notify_encargado
 from core.memory_manager import MemoryManager
 from core.language_manager import language_manager
 
-# Conversaciones en las que estamos esperando respuesta humana
+# 🧩 Conversaciones en las que estamos esperando respuesta humana
 pending_escalations: dict[str, dict] = {}
 
 WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
 WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-OPENAI_MODEL = os.getenv("OPENAI_MODEL", "gpt-4.1-mini")
+
+# 🧠 Hardcodeamos el modelo para evitar error 400 (model parameter missing)
+OPENAI_MODEL = "gpt-4.1-mini"
 
 # Memoria compartida y persistente
 _global_memory = MemoryManager(max_runtime_messages=8)
@@ -84,7 +86,7 @@ async def mark_pending(conversation_id: str, user_message: str):
     now = time.time()
     existing = pending_escalations.get(conversation_id)
 
-    # Evitar duplicar una escalación que acabamos de crear hace nada
+    # Evitar duplicar una escalación recién creada
     if existing and (now - existing.get("ts", 0)) < 15:
         logging.info(f"⏭️ Escalación ya activa para {conversation_id}, evitando duplicados.")
     else:
@@ -109,13 +111,12 @@ async def mark_pending(conversation_id: str, user_message: str):
     except Exception as e:
         logging.warning(f"⚠️ No se pudo guardar tag de idioma en mark_pending: {e}")
 
-    # 1. Aviso visible al cliente SIEMPRE (esto es lo que el cliente ve en WhatsApp)
+    # 1. Aviso visible al cliente
     base_meaning_es = "Un momento por favor, voy a consultarlo con el encargado."
     phrase = "🕓 " + language_manager.short_phrase(base_meaning_es, lang)
     send_whatsapp_text(conversation_id, phrase)
 
-    # 2. Aviso interno al encargado con el ID del cliente
-    #    (para que pueda responder con RESPUESTA <id>: ...)
+    # 2. Aviso interno al encargado (Telegram)
     lang_label = lang.upper()
     aviso_encargado = (
         f"📩 *Nueva consulta del cliente* (Idioma: {lang_label})\n"
@@ -127,10 +128,8 @@ async def mark_pending(conversation_id: str, user_message: str):
 
     try:
         ok = await notify_encargado(aviso_encargado)
-        # si notify_encargado devuelve algo tipo None/False no pasa nada
         logging.info("📨 Aviso enviado al encargado (o ignorado si no hay Telegram).")
     except Exception as e:
-        # Muy importante: NO romper el flujo aunque falle Telegram
         logging.error(f"❌ Error enviando aviso al encargado: {e}", exc_info=True)
 
 
@@ -157,6 +156,7 @@ async def resolve_from_encargado(conversation_id: str, raw_text: str, hybrid_age
         or language_manager.detect_language(original_user_message or raw_text)
     )
 
+    # ✅ Se usa modelo hardcodeado para evitar error "model parameter missing"
     llm = ChatOpenAI(model=OPENAI_MODEL, temperature=0.2)
 
     system_prompt = (
@@ -186,13 +186,13 @@ async def resolve_from_encargado(conversation_id: str, raw_text: str, hybrid_age
         logging.error(f"❌ Error al reformular respuesta del encargado: {e}", exc_info=True)
         final_text = raw_text.strip()
 
-    # 2. Forzar idioma correcto (sin añadir info nueva)
+    # 2. Forzar idioma correcto
     try:
         final_text = language_manager.ensure_language(final_text, target_lang)
     except Exception:
         pass
 
-    # 3. Guardar memoria (para continuidad de la conversación)
+    # 3. Guardar memoria
     try:
         tag = f"[lang:{target_lang}]"
         hist = _global_memory.get_context(conversation_id, limit=10)
@@ -210,7 +210,7 @@ async def resolve_from_encargado(conversation_id: str, raw_text: str, hybrid_age
     # 4. Enviar WhatsApp al huésped
     send_whatsapp_text(conversation_id, final_text)
 
-    # 5. Limpiar la marca de pendiente
+    # 5. Limpiar marca de pendiente
     if conversation_id in pending_escalations:
         pending_escalations.pop(conversation_id, None)
 
