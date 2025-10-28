@@ -106,6 +106,12 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
         if not q:
             return ESCALATE_SENTENCE
 
+        # ✂️ Sanitiza la pregunta para evitar interpretaciones dobles (como "y si...")
+        if any(kw in q.lower() for kw in [" y ", " además", "también", "junto con", "ademas"]):
+            original_q = q
+            q = re.split(r"y |además|también|junto con|ademas", q, maxsplit=1, flags=re.IGNORECASE)[0].strip()
+            logging.info(f"✂️ Pregunta simplificada para evitar mezcla semántica: '{original_q}' → '{q}'")
+
         tools = await mcp_client.get_tools(server_name="InfoAgent")
         if not tools:
             logging.error("❌ No se encontraron herramientas del InfoAgent (MCP vacío).")
@@ -127,8 +133,11 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
             return ESCALATE_SENTENCE
 
         summarized = await summarize_tool_output(q, cleaned)
-        if not summarized or len(summarized) < 10:
-            summarized = cleaned
+
+        # 🧠 Si el modelo devuelve una respuesta tipo "no dispongo..." → escalamos
+        if not summarized or len(summarized) < 10 or _should_escalate_from_text(summarized):
+            logging.info("⚠️ Respuesta sin información suficiente → escalación automática.")
+            return ESCALATE_SENTENCE
 
         logging.info(f"✅ Resumen final hotel_information_tool → {summarized[:200]}...")
         return summarized
@@ -218,7 +227,6 @@ Tu tarea:
     except Exception as e:
         logging.error(f"❌ Error en availability_pricing_tool flexible: {e}", exc_info=True)
         return ESCALATE_SENTENCE
-
 
 # =====================================================
 # 🧍 Escalación a soporte humano
