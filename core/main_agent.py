@@ -1,24 +1,21 @@
-# core/main_agent.py
 import os
 import json
 import logging
 import re
 from typing import Optional, List
-
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain_core.messages import HumanMessage, AIMessage
-
-from tools.hotel_tools import get_all_hotel_tools
 from tools.supervisor_input_tool import supervisor_input_tool
 from tools.supervisor_output_tool import supervisor_output_tool
-
 from core.utils.utils_prompt import load_prompt
 from core.memory_manager import MemoryManager
 from core.language_manager import language_manager
 from core.escalation_manager import mark_pending
 from agents.interno_agent import process_tool_call as interno_notify
+from agents.info_agent import InfoAgent
+from agents.dispo_precios_agent import DispoPreciosAgent
 from core.observability import ls_context
 
 # ===============================================
@@ -43,7 +40,7 @@ LANG_TAG_RE = re.compile(r"^\[lang:([a-z]{2})\]$", re.IGNORECASE)
 # CLASE PRINCIPAL
 # ===============================================
 class HotelAIHybrid:
-    """Agente principal del hotel con supervisión, KB y escalado controlado."""
+    """Agente principal del hotel con supervisión, memoria y subagentes especializados."""
 
     def __init__(
         self,
@@ -53,11 +50,10 @@ class HotelAIHybrid:
     ):
         self.memory = memory_manager or _global_memory
 
-        # 🧠 Hardcodeamos modelo por estabilidad (evita "must provide model parameter")
         self.model_name = "gpt-4.1-mini"
         self.temperature = 0.2
 
-        log.info(f"🧠 Inicializando HotelAIHybrid con modelo fijo: {self.model_name}")
+        log.info(f"🧠 Inicializando HotelAIHybrid con modelo: {self.model_name}")
 
         self.llm = ChatOpenAI(
             model=self.model_name,
@@ -66,9 +62,16 @@ class HotelAIHybrid:
             max_tokens=1500,
         )
 
-        # Herramientas
-        self.tools = get_all_hotel_tools()
-        log.info(f"🧩 {len(self.tools)} herramientas cargadas correctamente.")
+        # Subagentes
+        self.info_agent = InfoAgent()
+        self.dispo_agent = DispoPreciosAgent()
+
+        # Las tools se obtienen de los subagentes
+        info_tools = getattr(self.info_agent, "tools", [])
+        dispo_tools = getattr(self.dispo_agent, "tools", [])
+        self.tools = info_tools + dispo_tools
+
+        log.info(f"🧩 {len(self.tools)} herramientas cargadas desde subagentes.")
 
         # Prompt base
         self.system_message = self._load_main_prompt()
@@ -77,7 +80,7 @@ class HotelAIHybrid:
             return_intermediate_steps=return_intermediate_steps,
         )
 
-        log.info("✅ HotelAIHybrid listo (supervisado y estable).")
+        log.info("✅ HotelAIHybrid listo (con subagentes y supervisión).")
 
     # -----------------------------------------------
     def _load_main_prompt(self) -> str:
@@ -104,7 +107,7 @@ class HotelAIHybrid:
         )
 
     # -----------------------------------------------
-    # Idioma persistente
+    # Gestión idioma persistente
     def _extract_lang_from_history(self, history: List[dict]) -> Optional[str]:
         for msg in reversed(history):
             if not isinstance(msg.get("content"), str):
@@ -134,7 +137,6 @@ class HotelAIHybrid:
 
     # -----------------------------------------------
     def _postprocess(self, text: str) -> str:
-        """Limpia texto generado (sin muletillas ni cierres redundantes)."""
         if not text:
             return ""
         text = text.strip().replace("..", ".")
@@ -144,7 +146,37 @@ class HotelAIHybrid:
                 text = text[:text.lower().find(t)].strip()
         return text
 
-    # -----------------------------------------------
+    # ======================================================
+    # 🚦 DECISIÓN AUTOMÁTICA DE SUBAGENTE
+    # ======================================================
+    async def _decide_subagent(self, message: str) -> str:
+        """
+        Usa el propio modelo del agente para decidir el subagente más adecuado.
+        Devuelve "dispo" o "info".
+        """
+        prompt = f"""
+Analiza la siguiente pregunta de un huésped:
+
+"{message}"
+
+Responde SOLO con una palabra:
+- "DISPO" si la pregunta trata sobre disponibilidad, precios, tipos de habitación o reservas.
+- "INFO" si trata sobre servicios, políticas, horarios, amenities, ubicación o normas del hotel.
+No añadas explicaciones ni texto adicional.
+"""
+        try:
+            resp = await self.llm.ainvoke(prompt)
+            decision = resp.content.strip().upper()
+            if "DISPO" in decision:
+                return "dispo"
+            return "info"
+        except Exception as e:
+            log.error(f"Error en decisión de subagente: {e}")
+            return "info"
+
+    # ======================================================
+    # 🚀 PIPELINE PRINCIPAL
+    # ======================================================
     async def process_message(self, user_message: str, conversation_id: str = None) -> str | None:
         if not conversation_id:
             conversation_id = "unknown"
@@ -157,23 +189,22 @@ class HotelAIHybrid:
             metadata={"conversation_id": cid, "input": user_message},
             tags=["main_agent", "hotel_ai"],
         ):
-            # ================= SUPERVISOR INPUT =================
+            # SUPERVISOR INPUT
             try:
                 si_result = supervisor_input_tool.invoke({"mensaje_usuario": user_message})
                 log.info(f"📑 [Supervisor INPUT] salida:\n{si_result}")
                 if isinstance(si_result, str) and si_result != "Aprobado":
-                    log.warning("🚫 [Supervisor INPUT] No aprobado. Escalando.")
                     await interno_notify(si_result)
                     await mark_pending(cid, user_message)
                     return ""
             except Exception as e:
                 log.error(f"❌ Error en supervisor_input_tool: {e}", exc_info=True)
                 await interno_notify(
-                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_input_tool: {e}\nPrueba: {user_message}"
+                    f"Estado: Revisión Necesaria\nMotivo: Error supervisor_input_tool: {e}\nPrueba: {user_message}"
                 )
                 return ""
 
-            # ================= AGENTE PRINCIPAL =================
+            # CONTEXTO / IDIOMA
             hist = self.memory.get_context(cid, limit=12)
             chat_hist = [
                 HumanMessage(content=m["content"]) if m["role"] == "user" else AIMessage(content=m["content"])
@@ -181,20 +212,20 @@ class HotelAIHybrid:
             ]
             lang = self._get_or_detect_language(user_message, cid, hist)
 
+            # 🧭 DECISIÓN INTELIGENTE DE SUBAGENTE
             try:
-                result = await self.agent_executor.ainvoke({
-                    "input": user_message.strip(),
-                    "chat_history": chat_hist,
-                })
-                output = next((result.get(k) for k in ["output", "final_output", "response"] if result.get(k)), "")
-                if not output:
-                    output = "No dispongo de ese dato en este momento."
-                log.info(f"🤖 [Agente Principal] Generó: {output[:200]}")
+                subagent = await self._decide_subagent(user_message)
+                log.info(f"🧭 Subagente elegido automáticamente: {subagent}")
+
+                if subagent == "dispo":
+                    output = await self.dispo_agent.handle(user_message)
+                else:
+                    output = await self.info_agent.handle(user_message)
             except Exception as e:
-                log.error(f"❌ Error ejecutando agente: {e}", exc_info=True)
+                log.error(f"Error en subagente: {e}", exc_info=True)
                 output = "Ha ocurrido un imprevisto. Voy a consultarlo con el encargado."
 
-            # ================= SUPERVISOR OUTPUT =================
+            # SUPERVISOR OUTPUT
             try:
                 so_result = supervisor_output_tool.invoke({
                     "input_usuario": user_message,
@@ -204,22 +235,20 @@ class HotelAIHybrid:
 
                 if isinstance(so_result, str):
                     estado = so_result.lower()
-                    if "estado: rechazado" in estado:
-                        log.warning("🚫 [Supervisor OUTPUT] Rechazado. Escalando al encargado.")
+                    if "rechazado" in estado:
                         await interno_notify(so_result)
                         await mark_pending(cid, user_message)
                         return ""
-                    elif "estado: revisión necesaria" in estado:
-                        log.warning("⚠️ [Supervisor OUTPUT] Revisión necesaria (no crítica).")
+                    elif "revisión" in estado:
                         await interno_notify(so_result)
             except Exception as e:
                 log.error(f"❌ Error en supervisor_output_tool: {e}", exc_info=True)
                 await interno_notify(
-                    f"Estado: Revisión Necesaria\nMotivo: Error interno supervisor_output_tool: {e}\nPrueba: {output}"
+                    f"Estado: Revisión Necesaria\nMotivo: Error supervisor_output_tool: {e}\nPrueba: {output}"
                 )
                 return ""
 
-            # ================= POSTPROCESO FINAL =================
+            # POSTPROCESO / MEMORIA
             def _clean_output_text(text: str) -> str:
                 if not text:
                     return text

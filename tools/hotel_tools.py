@@ -93,9 +93,9 @@ class HotelInformationInput(BaseModel):
 @hybrid_tool(
     name="hotel_information",
     description=(
-        "Proporciona información general del hotel: servicios, políticas, "
-        "ubicación, contacto, instalaciones, normas, horarios o amenities. "
-        "Úsala cuando el cliente pregunte por wifi, desayuno, parking, gimnasio, spa, atracciones cercanas o actividades turísticas."
+        "Proporciona información general del hotel: servicios, políticas, ubicación, "
+        "contacto, instalaciones, normas, horarios o amenities. "
+        "❌ No debe usarse para precios, disponibilidad o reservas de habitaciones."
     ),
     return_direct=True,
 )
@@ -251,15 +251,47 @@ def think_tool(situation: str) -> str:
     return f"Analizando la situación: {situation}"
 
 # =====================================================
-# 👋 Conversación trivial / saludo
+# 👋 Conversación trivial / saludo mejorado con LLM
 # =====================================================
 @hybrid_tool(
     name="other",
-    description="Para saludos, agradecimientos o small talk. Devuelve el texto directamente.",
+    description="Genera saludos, agradecimientos o small talk naturales usando el estilo del hotel.",
     return_direct=True,
 )
-def other_tool(reply: str) -> str:
-    return (reply or "").strip()
+async def other_tool(reply: str) -> str:
+    """
+    Genera un saludo o respuesta de cortesía natural usando el modelo del hotel.
+    Usa los prompts existentes, sin hardcodear texto.
+    """
+    try:
+        from core.utils.utils_prompt import load_prompt
+        from langchain_openai import ChatOpenAI
+
+        prompt_text = load_prompt("main_prompt.txt") or (
+            "Eres Sara, encargada del Hotel Alda Centro Ponferrada. "
+            "Saluda y conversa de forma amable, cálida y profesional."
+        )
+
+        llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.4)
+        prompt = [
+            {"role": "system", "content": prompt_text},
+            {
+                "role": "user",
+                "content": (
+                    f"El huésped ha dicho: '{reply}'. "
+                    "Responde con un saludo breve, natural y profesional, "
+                    "presentándote como Sara, encargada del hotel. "
+                    "No incluyas explicaciones ni formato adicional."
+                ),
+            },
+        ]
+
+        response = await llm.ainvoke(prompt)
+        return response.content.strip()
+
+    except Exception as e:
+        logging.error(f"⚠️ Error en other_tool: {e}", exc_info=True)
+        return "Hola, soy Sara, encargada del hotel. ¿En qué puedo ayudarte?"
 
 # =====================================================
 # 🔁 Exportador general de herramientas (MCP + locales)
