@@ -36,19 +36,6 @@ ESCALATE_SENTENCE = (
     "Permíteme contactar con el encargado."
 )
 
-def _looks_external_query(q: str) -> bool:
-    """Detecta si el huésped pregunta por cosas FUERA del hotel."""
-    ql = (q or "").lower()
-    external_kw = [
-        "cerca", "alrededor", "próximo", "proximo", "cercanos",
-        "near", "around", "close by", "nearby",
-        "restaurante", "restaurant", "comida", "chino", "chinese",
-        "farmacia", "pharmacy", "parada", "bus stop", "taxi",
-        "playa", "beach", "supermercado", "supermarket",
-        "museo", "museum", "parking público", "public parking",
-    ]
-    return any(k in ql for k in external_kw)
-
 def _should_escalate_from_text(text: str) -> bool:
     """Si la respuesta parece error o no dato, devolvemos escalación."""
     if not text:
@@ -74,14 +61,14 @@ async def summarize_tool_output(question: str, context: str) -> str:
         llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
         prompt = f"""
         Eres un asistente del hotel. Un huésped ha hecho la siguiente pregunta: "{question}".
-        
+
         A continuación tienes información del hotel extraída de una base de datos interna.
         Usa **únicamente la información directamente relacionada con la pregunta**.
         No incluyas detalles de otros temas ni repitas respuestas anteriores.
         Si la información no está explícitamente en el texto, indica amablemente que no dispones de ese dato.
 
         Devuelve una respuesta breve, amable y clara en español.
-        
+
         --- Información del hotel ---
         {context}
         """
@@ -90,7 +77,6 @@ async def summarize_tool_output(question: str, context: str) -> str:
     except Exception as e:
         logging.error(f"⚠️ Error al resumir salida del MCP: {e}")
         return context[:500]
-
 
 # =====================================================
 # 🧠 Información general del hotel (KB interna, MCP)
@@ -104,13 +90,12 @@ class HotelInformationInput(BaseModel):
             data["query"] = data["question"]
         return super().model_validate(data)
 
-
 @hybrid_tool(
     name="hotel_information",
     description=(
         "Proporciona información general del hotel: servicios, políticas, "
         "ubicación, contacto, instalaciones, normas, horarios o amenities. "
-        "Úsala cuando el cliente pregunte por wifi, desayuno, parking, gimnasio, spa, etc."
+        "Úsala cuando el cliente pregunte por wifi, desayuno, parking, gimnasio, spa, atracciones cercanas o actividades turísticas."
     ),
     return_direct=True,
 )
@@ -119,10 +104,6 @@ async def hotel_information_tool(query: str = None, question: str = None) -> str
     try:
         q = (query or question or "").strip()
         if not q:
-            return ESCALATE_SENTENCE
-
-        if _looks_external_query(q):
-            logging.info("↗️ Consulta externa detectada → escalación automática.")
             return ESCALATE_SENTENCE
 
         tools = await mcp_client.get_tools(server_name="InfoAgent")
