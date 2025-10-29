@@ -1,11 +1,18 @@
 """
-🚀 Main Entry Point - Sistema de Agentes para Hoteles (Refactorizado y Robustecido)
-===================================================================================
+🚀 Main Entry Point - Sistema de Agentes con Orquestación + Idioma
+==================================================================
+Flujo:
 WhatsApp → Supervisor Input → Main Agent → Supervisor Output → WhatsApp
                      ↓                ↓
                   Interno          Interno
                      ↓                ↓
                  Telegram         Telegram
+
+Funciones clave:
+- Detección dinámica del idioma del huésped (último mensaje manda)
+- Respuestas al huésped siempre en SU idioma actual
+- Escalación al encargado en español
+- Mensajes del encargado → pulidos y traducidos al idioma del huésped
 """
 
 import os
@@ -15,19 +22,16 @@ import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
-# =============================================================
-# IMPORTS DEL SISTEMA
-# =============================================================
-
 from channels_wrapper.manager import ChannelManager
 from core.main_agent import create_main_agent
 from core.memory_manager import MemoryManager
+from core.language_manager import language_manager
 from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent as InternoAgentV2
 
 # =============================================================
-# CONFIGURACIÓN GLOBAL
+# CONFIG GLOBAL / LOGGING
 # =============================================================
 
 warnings.filterwarnings("ignore", category=DeprecationWarning)
@@ -38,11 +42,10 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
-
 log = logging.getLogger("Main")
 
 # =============================================================
-# INICIALIZACIÓN DE FASTAPI
+# FASTAPI APP
 # =============================================================
 
 app = FastAPI(title="HotelAI - Sistema de Agentes Refactorizado")
@@ -57,16 +60,18 @@ supervisor_output = SupervisorOutputAgent()
 interno_agent = InternoAgentV2()
 channel_manager = ChannelManager()
 
-# =============================================================
-# BUFFER GLOBAL DE ESCALACIONES (Telegram ↔ WhatsApp)
-# =============================================================
-
+# Relación Telegram ↔ WhatsApp para replies humanos
 PENDING_ESCALATIONS = {}
+
+# Idioma actual del huésped por chat_id (ISO 639-1)
+# Se ACTUALIZA con CADA MENSAJE que llega del huésped.
+CHAT_LANG = {}
 
 log.info("✅ Sistema inicializado correctamente")
 
+
 # =============================================================
-# FUNCIÓN PRINCIPAL DE PROCESAMIENTO
+# PIPELINE PRINCIPAL
 # =============================================================
 
 async def process_user_message(
@@ -76,46 +81,72 @@ async def process_user_message(
     channel: str = "whatsapp"
 ) -> str:
     """
-    Procesa un mensaje del usuario siguiendo el flujo completo:
-    SupervisorInput → MainAgent → (opcional) SupervisorOutput → respuesta final.
-    Maneja también la escalación hacia Telegram cuando procede.
+    Procesa el mensaje del huésped y devuelve la respuesta FINAL en el idioma actual del huésped.
+    Flujo:
+      1. Detectar idioma del huésped y guardarlo.
+      2. Supervisor Input modera / decide si debemos escalar ya.
+      3. MainAgent genera respuesta.
+      4. Limpieza de respuesta (incisos, duplicados).
+      5. Supervisor Output audita.
+      6. Entrega final al huésped traducida a SU idioma.
     """
+
     try:
         log.info(f"📨 Nuevo mensaje de {chat_id} en {channel}: {user_message[:200]}...")
 
-        # ===== PASO 1: SUPERVISOR INPUT =====
-        input_validation = await supervisor_input.validate(user_message)
+        # =========================================================
+        # 1. DETECTAR / ACTUALIZAR IDIOMA DEL HUÉSPED
+        # =========================================================
+        try:
+            detected_lang = language_manager.detect_language(user_message)
+            CHAT_LANG[chat_id] = detected_lang  # <-- SIEMPRE pisamos con el último idioma detectado
+            guest_lang = detected_lang
+            log.info(f"🌐 Idioma detectado para {chat_id}: {guest_lang}")
+        except Exception as e:
+            log.warning(f"⚠️ No se pudo detectar idioma para {chat_id}: {e}")
+            # fallback: si ya sabíamos idioma, lo mantenemos; si no, español
+            guest_lang = CHAT_LANG.get(chat_id, "es")
+            CHAT_LANG[chat_id] = guest_lang
 
-        # input_validation SIEMPRE es dict normalizado según nuestro agente
+        # =========================================================
+        # 2. SUPERVISOR INPUT (moderación de la ENTRADA)
+        # =========================================================
+        input_validation = await supervisor_input.validate(user_message)
         estado_in = input_validation.get("estado", "Aprobado")
         motivo_in = input_validation.get("motivo", "")
 
-        # 🚨 Caso: mensaje marcado como NO APROBADO (insultos, amenazas, etc.)
+        # Caso NO aprobado → escalamos al encargado humano
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
             log.warning(f"⚠️ Mensaje rechazado por Supervisor Input: {motivo_in}")
 
-            escalation_msg = (
+            # Mensaje para el ENCARGADO (siempre en español, interno)
+            escalation_msg_es = (
                 "🔔 NUEVA CONSULTA ESCALADA\n\n"
                 f"📱 Chat ID: {chat_id}\n\n"
                 "🚨 MENSAJE RECHAZADO POR SUPERVISOR INPUT\n\n"
                 f"Chat ID: {chat_id}\n"
                 f"Hotel: {hotel_name}\n\n"
-                "Mensaje del usuario:\n"
+                "Mensaje del huésped:\n"
                 f"{user_message}\n\n"
                 "Motivo del rechazo:\n"
                 f"{motivo_in}\n\n"
-                "Por favor, intervén manualmente.\n"
+                "Por favor, intervén manualmente."
             )
+            await interno_agent.anotify_staff(escalation_msg_es, chat_id)
 
-            # avisar al encargado humano por Telegram
-            await interno_agent.anotify_staff(escalation_msg, chat_id)
-
-            # respuesta segura al huésped
-            return (
-                "🕓 Gracias por tu mensaje. Lo estamos revisando con nuestro equipo."
+            # Mensaje seguro que ve el HUÉSPED → en su idioma actual
+            safe_reply_base = (
+                "Gracias por tu mensaje. Lo estamos revisando con nuestro equipo."
             )
+            safe_reply_localized = language_manager.ensure_language(
+                safe_reply_base,
+                guest_lang
+            )
+            return safe_reply_localized
 
-        # ===== PASO 2: MAIN AGENT =====
+        # =========================================================
+        # 3. MAIN AGENT (orquestador principal)
+        # =========================================================
         try:
             history = memory_manager.get_memory(chat_id)
         except Exception as e:
@@ -124,12 +155,21 @@ async def process_user_message(
 
         async def send_inciso_callback(message: str):
             """
-            Callback que las tools pueden usar (por ejemplo, disponibilidad lenta)
-            para avisar al huésped tipo 'un momento por favor'.
-            Este mensaje NO pasa por SupervisorOutput.
+            Callback para tools internas (por ejemplo, 'estoy consultando disponibilidad...').
+            - Se envía directo al huésped
+            - Se adapta al idioma actual del huésped
+            - NO pasa por supervisor_output ni escalación
             """
             try:
-                await channel_manager.send_message(chat_id, message, channel=channel)
+                inciso_localized = language_manager.ensure_language(
+                    message,
+                    guest_lang
+                )
+                await channel_manager.send_message(
+                    chat_id,
+                    inciso_localized,
+                    channel=channel
+                )
             except Exception as e:
                 log.error(f"❌ Error enviando inciso al canal {channel}: {e}")
 
@@ -140,113 +180,137 @@ async def process_user_message(
             temperature=0.3,
         )
 
-        agent_response = await main_agent.ainvoke(
+        agent_response_raw = await main_agent.ainvoke(
             user_input=user_message,
             chat_id=chat_id,
             hotel_name=hotel_name,
             chat_history=history,
         )
 
-        if not agent_response or not agent_response.strip():
-            return "❌ Disculpa, no pude procesar tu solicitud. Intenta de nuevo."
+        if not agent_response_raw or not agent_response_raw.strip():
+            fallback_msg = (
+                "Disculpa, no pude procesar tu solicitud. "
+                "¿Podrías reformularla, por favor?"
+            )
+            return language_manager.ensure_language(
+                fallback_msg,
+                guest_lang
+            )
 
-        agent_response = str(agent_response).strip()
-        log.info(f"✅ Main Agent respondió (raw): {agent_response[:500]}...")
+        agent_response_raw = str(agent_response_raw).strip()
+        log.info(f"✅ Main Agent respondió (raw): {agent_response_raw[:500]}...")
 
-        # =====================================================
-        # NORMALIZACIÓN DE RESPUESTA
-        # =====================================================
+        # =========================================================
+        # 4. LIMPIEZA / NORMALIZACIÓN DE LA RESPUESTA
+        # =========================================================
 
-        # 1. Si viene con marca de inciso '##INCISO##', lo tratamos como aviso temporal:
-        if "##inciso##" in agent_response.lower():
-            safe_resp = agent_response.replace("##INCISO##", "", 1).strip()
-            log.info("ℹ️ Respuesta INCISO detectada. No se audita ni se escala.")
-            return safe_resp or "🕓 Estoy verificando tu solicitud, un momento por favor."
+        # 4.1 Marcas tipo '##INCISO##' (mensajes de espera)
+        # si la tool devolvió un inciso directo, lo mandamos ya al huésped sin auditoría
+        if "##inciso##" in agent_response_raw.lower():
+            clean_inciso = agent_response_raw.replace("##INCISO##", "", 1).strip()
+            if not clean_inciso:
+                clean_inciso = "Un momento por favor, estoy verificando la información."
+            return language_manager.ensure_language(
+                clean_inciso,
+                guest_lang
+            )
 
-        # 2. Heurística anti-dobles respuestas:
-        #    El agente a veces concatena un bloque técnico + reformulación amable final.
-        #    Nos quedamos con el último bloque separado por doble salto.
-        if "\n\n" in agent_response:
-            parts = [p.strip() for p in agent_response.split("\n\n") if p.strip()]
+        # 4.2 Respuestas con bloques repetidos separados por saltos grandes → nos quedamos con el último bloque útil
+        final_candidate = agent_response_raw
+        if "\n\n" in agent_response_raw:
+            parts = [p.strip() for p in agent_response_raw.split("\n\n") if p.strip()]
             if len(parts) > 1:
-                agent_response = parts[-1]
-                log.info("✂️ Limpieza heurística aplicada. Enviamos solo el último bloque al huésped.")
+                final_candidate = parts[-1]
+                log.info("✂️ Limpieza heurística: usando el último bloque de la respuesta del agente.")
 
-        # 3. Detección de mensajes tipo "estoy verificando", "un momento", etc.
-        #    Estos no deben escalar ni pasar por auditoría.
-        lower_resp = agent_response.lower()
+        # 4.3 Mensajes tipo 'estoy verificando...' → son mensajes de espera, se devuelven directo
+        lower_resp = final_candidate.lower()
         INCISO_PATTERNS = [
             "un momento por favor",
             "permíteme un momento",
+            "permiteme un momento",
             "estoy verificando",
             "estoy procesando tu solicitud",
             "estoy comprobando la información",
             "consultando con el equipo",
         ]
         if any(pat in lower_resp for pat in INCISO_PATTERNS):
-            log.info("ℹ️ Respuesta tipo INCISO detectada por heurística. No se audita.")
-            return agent_response
+            return language_manager.ensure_language(
+                final_candidate,
+                guest_lang
+            )
 
-        # ===== PASO 3: SUPERVISOR OUTPUT =====
+        # =========================================================
+        # 5. SUPERVISOR OUTPUT (auditoría de la SALIDA)
+        # =========================================================
         output_validation = await supervisor_output.validate(
             user_input=user_message,
-            agent_response=agent_response
+            agent_response=final_candidate
         )
 
-        # output_validation SIEMPRE dict normalizado según nuestro agente
-        estado_out = output_validation.get("estado", "Aprobado")
+        estado_out = (output_validation.get("estado", "Aprobado") or "").lower()
         motivo_out = output_validation.get("motivo", "")
         sugerencia_out = output_validation.get("sugerencia", "")
 
-        # Caso feliz → todo aprobado, se envía al huésped directamente
-        if estado_out.lower() in ["aprobado", "ok"]:
-            return agent_response
+        # Caso aprobado o revisión menor → enviamos al huésped
+        if (
+            "aprobado" in estado_out
+            or "revisión" in estado_out
+            or "revision" in estado_out
+        ):
+            localized = language_manager.ensure_language(
+                final_candidate,
+                guest_lang
+            )
+            return localized
 
-        # Caso "revisión necesaria" → normalmente son matices menores.
-        # No escalamos duro. Mandamos la respuesta tal cual al huésped, SIN molestar al encargado.
-        if "revisión" in estado_out.lower():
-            log.warning(f"⚠️ Supervisor Output pidió revisión menor: {motivo_out}")
-            return agent_response
-
-        # Caso RECHAZADO explícito → sí se escala al encargado humano
+        # Caso rechazo → escalamos
         log.warning(f"⚠️ Respuesta rechazada por Supervisor Output: {motivo_out}")
 
-        escalation_msg = (
+        escalation_msg_es = (
             "🔔 NUEVA CONSULTA ESCALADA\n\n"
             f"📱 Chat ID: {chat_id}\n\n"
             "🚨 RESPUESTA RECHAZADA POR SUPERVISOR OUTPUT\n\n"
             f"Chat ID: {chat_id}\n"
             f"Hotel: {hotel_name}\n\n"
-            "Mensaje del usuario:\n"
+            "Mensaje del huésped:\n"
             f"{user_message}\n\n"
             "Respuesta del agente (RECHAZADA):\n"
-            f"{agent_response}\n\n"
+            f"{final_candidate}\n\n"
             "Motivo del rechazo:\n"
             f"{motivo_out}\n\n"
             "Sugerencia:\n"
             f"{sugerencia_out}\n\n"
             "Por favor, proporciona una respuesta manual adecuada."
         )
+        await interno_agent.anotify_staff(escalation_msg_es, chat_id)
 
-        await interno_agent.anotify_staff(escalation_msg, chat_id)
-
-        # Lo que oye el huésped mientras tanto:
-        return (
-            "🕓 Permíteme un momento para verificar esa información con nuestro equipo."
+        hold_msg = (
+            "Permíteme un momento para verificar esa información con nuestro equipo."
         )
+        hold_msg_localized = language_manager.ensure_language(
+            hold_msg,
+            guest_lang
+        )
+        return hold_msg_localized
 
     except Exception as e:
         log.error(f"❌ Error en process_user_message: {e}", exc_info=True)
-        return "❌ Disculpa, ocurrió un error al procesar tu mensaje."
+        fallback_err = "Disculpa, ha ocurrido un error al procesar tu mensaje."
+        guest_lang = CHAT_LANG.get(chat_id, "es")
+        return language_manager.ensure_language(
+            fallback_err,
+            guest_lang
+        )
 
 
 # =============================================================
-# ENDPOINTS DE FASTAPI
+# ENDPOINTS WHATSAPP / TELEGRAM
 # =============================================================
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    """Verificación de Webhook para Meta (Facebook/WhatsApp)."""
+    """Verificación de Webhook para Meta (WhatsApp)."""
     VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
 
     params = request.query_params
@@ -260,7 +324,7 @@ async def webhook_receiver(request: Request):
     """
     Webhook de WhatsApp (Meta).
     Extrae el texto del huésped, ejecuta el pipeline
-    y responde al mismo chat por WhatsApp.
+    y responde en el MISMO idioma del mensaje más reciente del huésped.
     """
     try:
         data = await request.json()
@@ -286,7 +350,7 @@ async def webhook_receiver(request: Request):
         value = changes[0].get("value", {})
         messages = value.get("messages", [])
         if not messages:
-            log.info("ℹ️ Webhook sin mensajes (posible handshake inicial).")
+            log.info("ℹ️ Webhook sin mensajes (posible validación inicial).")
             return JSONResponse({"status": "ignored", "reason": "no messages"})
 
         msg = messages[0]
@@ -317,35 +381,56 @@ async def webhook_receiver(request: Request):
 async def telegram_webhook(request: Request):
     """
     Webhook de Telegram.
-    Se usa para que el encargado humano responda con Reply,
-    y esa respuesta llegue al huésped por WhatsApp.
+    El encargado humano responde con Reply en Telegram,
+    y reenviamos al huésped:
+      - suavizado en tono hotelero
+      - traducido al idioma ACTUAL del huésped.
     """
     try:
         data = await request.json()
         log.info(f"📞 Webhook Telegram recibido: {json.dumps(data, indent=2)}")
 
         message = data.get("message", {})
-        text = message.get("text", "")
+        text_from_staff = message.get("text", "")
         reply_to = message.get("reply_to_message", {})
 
-        if not text:
+        if not text_from_staff:
             return JSONResponse({"status": "ignored", "reason": "no text"})
 
+        # Tiene que ser respuesta (reply) a un mensaje que salió del bot al encargado
         original_msg_id = reply_to.get("message_id")
         if not original_msg_id:
             log.warning("⚠️ Mensaje Telegram sin reply_to → ignorado.")
             return JSONResponse({"status": "ignored", "reason": "no reply reference"})
 
+        # Recuperar el chat del huésped asociado a esa escalación
         original_chat_id = PENDING_ESCALATIONS.get(original_msg_id)
         if not original_chat_id:
             log.warning("⚠️ No se encontró chat_id asociado al mensaje respondido.")
             return JSONResponse({"status": "ignored", "reason": "no linked chat"})
 
-        # reenviamos la respuesta humana directamente al huésped por WhatsApp
-        await channel_manager.send_message(original_chat_id, text.strip(), channel="whatsapp")
-        log.info(f"✅ Respuesta del encargado reenviada a huésped {original_chat_id}: {text[:200]}")
+        # Idioma ACTUAL del huésped
+        guest_lang = CHAT_LANG.get(original_chat_id, "es")
 
-        # limpieza: ya no necesitamos mantener ese pending
+        # Pulimos tono y traducimos al idioma del huésped
+        polished_for_guest = language_manager.polish_for_guest(
+            raw_message=text_from_staff,
+            guest_lang=guest_lang,
+        )
+
+        # Enviamos por WhatsApp al huésped
+        await channel_manager.send_message(
+            original_chat_id,
+            polished_for_guest.strip(),
+            channel="whatsapp"
+        )
+
+        log.info(
+            f"✅ Respuesta del encargado enviada a huésped {original_chat_id} "
+            f"({guest_lang}): {polished_for_guest[:200]}"
+        )
+
+        # Limpiamos esa escalación puntual (1 reply = 1 cierre)
         PENDING_ESCALATIONS.pop(original_msg_id, None)
 
         return JSONResponse({"status": "success"})
@@ -355,30 +440,33 @@ async def telegram_webhook(request: Request):
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
 
 
+# =============================================================
+# HEALTHCHECK / ROOT
+# =============================================================
+
 @app.get("/health")
 async def health_check():
-    """Health check endpoint."""
-    return {"status": "healthy", "version": "2.0-refactored"}
+    return {"status": "healthy", "version": "2.2-language-aware"}
 
 
 @app.get("/")
 async def root():
-    """Root endpoint."""
     return {
         "service": "HotelAI - Sistema de Agentes",
-        "version": "2.0",
-        "architecture": "n8n-style orchestration",
+        "version": "2.2",
+        "architecture": "orchestrator + language-aware routing",
         "components": [
             "Supervisor Input",
             "Main Agent (Orchestrator)",
             "Supervisor Output",
-            "SubAgents: dispo/precios, info, interno_v2",
+            "Language Manager",
+            "Telegram Bridge (Interno)",
         ],
     }
 
 
 # =============================================================
-# EJECUCIÓN LOCAL
+# LOCAL DEV
 # =============================================================
 
 if __name__ == "__main__":
