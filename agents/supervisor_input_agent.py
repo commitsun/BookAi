@@ -1,26 +1,20 @@
 import logging
 from fastmcp import FastMCP
 from langchain_openai import ChatOpenAI
-from core.observability import ls_context  
+from core.observability import ls_context
 
 log = logging.getLogger("SupervisorInputAgent")
 
 mcp = FastMCP("SupervisorInputAgent")
 llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.2)
 
-# Cargar prompt desde /prompts/supervisor_input_prompt.txt
+# Cargar prompt
 with open("prompts/supervisor_input_prompt.txt", "r", encoding="utf-8") as f:
     SUPERVISOR_INPUT_PROMPT = f.read()
 
 
-@mcp.tool()
-async def evaluar_input(mensaje_usuario: str) -> str:
-    """
-    Evalúa si el mensaje del usuario es apto según las normas hoteleras.
-    Devuelve:
-    - 'Aprobado' si el mensaje es válido
-    - 'Interno({...})' si se requiere escalar al agente interno
-    """
+# 🔹 Define la función base (no decorada todavía)
+async def _evaluar_input_func(mensaje_usuario: str) -> str:
     with ls_context(
         name="SupervisorInputAgent.evaluar_input",
         metadata={"mensaje_usuario": mensaje_usuario},
@@ -42,6 +36,19 @@ async def evaluar_input(mensaje_usuario: str) -> str:
                 "\"sugerencia\": \"Revisar logs\""
                 "})"
             )
+
+# 🔹 Registra la función como tool MCP (wrapper)
+evaluar_input = mcp.tool()(_evaluar_input_func)
+
+
+class SupervisorInputAgent:
+    async def validate(self, mensaje_usuario: str) -> str:
+        try:
+            # ✅ Llama a la función base directamente (no al wrapper)
+            return await _evaluar_input_func(mensaje_usuario)
+        except Exception as e:
+            log.error(f"⚠️ Error en validate: {e}", exc_info=True)
+            return "Aprobado"
 
 
 if __name__ == "__main__":

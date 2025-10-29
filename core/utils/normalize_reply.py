@@ -59,25 +59,15 @@ def _extract_text_from_raw(raw: Any) -> str:
 
 
 def normalize_reply(raw_reply: Any, user_query: str, agent_name: str = "Unknown") -> str:
-    """
-    Limpia y formatea la respuesta bruta del MCP.
-    """
+    """Limpia caracteres y artefactos del modelo, sin censurar contenido."""
     try:
         text = _extract_text_from_raw(raw_reply)
         if not text or len(text.strip()) == 0:
-            return f"⚠️ Lo siento, {agent_name} no pudo encontrar información sobre eso."
+            return f"{agent_name} no pudo generar una respuesta adecuada."
 
-        # Eliminamos posibles caracteres de control o artefactos
-        text = text.replace("\\n", "\n").strip()
-        text = text.replace("**", "")
-        text = text.replace("```", "")
-        text = text.strip()
-
-        # Evitar respuestas que sean solo metadata
-        if "metadata" in text.lower() and "pagecontent" in text.lower():
-            return "⚠️ No se encontró una respuesta textual válida."
-
+        text = text.replace("\\n", "\n").replace("**", "").replace("```", "").strip()
         return text
     except Exception as e:
-        log.error(f"❌ Error en normalize_reply: {e}", exc_info=True)
-        return f"⚠️ Error procesando la respuesta del agente {agent_name}."
+        log.error(f"Error en normalize_reply: {e}", exc_info=True)
+        return f"Error procesando respuesta del agente {agent_name}."
+

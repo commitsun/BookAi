@@ -1,26 +1,20 @@
 import logging
 from fastmcp import FastMCP
 from langchain_openai import ChatOpenAI
-from core.observability import ls_context  # 🟢 NUEVO
+from core.observability import ls_context
 
 log = logging.getLogger("SupervisorOutputAgent")
 
 mcp = FastMCP("SupervisorOutputAgent")
 llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.3)
 
-# Cargar prompt desde /prompts/supervisor_output_prompt.txt
+# Cargar prompt
 with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
     SUPERVISOR_OUTPUT_PROMPT = f.read()
 
 
-@mcp.tool()
-async def auditar_respuesta(input_usuario: str, respuesta_agente: str) -> str:
-    """
-    Audita las respuestas generadas por el sistema antes de enviarlas al huésped.
-    Retorna:
-    Estado: [Aprobado | Revisión Necesaria | Rechazado]
-    Motivo, Prueba, Sugerencia
-    """
+# 🔹 Define la función base (sin decorar)
+async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> str:
     with ls_context(
         name="SupervisorOutputAgent.auditar_respuesta",
         metadata={"input_usuario": input_usuario, "respuesta_agente": respuesta_agente},
@@ -43,6 +37,24 @@ async def auditar_respuesta(input_usuario: str, respuesta_agente: str) -> str:
                 "Motivo: Error interno al auditar respuesta\n"
                 "Prueba: -\n"
                 "Sugerencia: Revisar agente de auditoría"
+            )
+
+# 🔹 Registra la función como MCP tool
+auditar_respuesta = mcp.tool()(_auditar_respuesta_func)
+
+
+class SupervisorOutputAgent:
+    async def validate(self, user_input: str, agent_response: str) -> str:
+        try:
+            # ✅ Llama a la función original directamente
+            return await _auditar_respuesta_func(user_input, agent_response)
+        except Exception as e:
+            log.error(f"⚠️ Error en validate (output): {e}", exc_info=True)
+            return (
+                "Estado: Revisión Necesaria\n"
+                "Motivo: Error al auditar respuesta\n"
+                "Prueba: -\n"
+                "Sugerencia: Revisar logs"
             )
 
 

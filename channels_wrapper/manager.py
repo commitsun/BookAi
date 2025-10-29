@@ -3,6 +3,10 @@ import importlib
 import inspect
 import os
 import traceback
+import logging
+import asyncio
+
+log = logging.getLogger("ChannelManager")
 
 class ChannelManager:
     """
@@ -28,8 +32,8 @@ class ChannelManager:
         """
         possible_channels = {
             "whatsapp": "channels_wrapper.whatsapp.whatsapp_meta",
-             "telegram": "channels_wrapper.telegram.telegram_channel",
-            # Si quieres añadir más:
+            "telegram": "channels_wrapper.telegram.telegram_channel",
+            # Puedes añadir más:
             # "webchat": "channels_wrapper.webchat.webchat_channel",
         }
 
@@ -75,3 +79,30 @@ class ChannelManager:
             except Exception as e:
                 print(f"⚠️ Error registrando canal '{name}' en FastAPI: {e}")
                 traceback.print_exc()
+
+    # ------------------------------------------------------------------
+    # 💬 Envío de mensajes a canales
+    # ------------------------------------------------------------------
+    async def send_message(self, chat_id: str, message: str, channel: str = "whatsapp"):
+        """
+        Envía un mensaje al canal especificado (WhatsApp o Telegram).
+        """
+        try:
+            channel_obj = self.channels.get(channel)
+            if not channel_obj:
+                raise ValueError(f"Canal no encontrado: {channel}")
+
+            # Algunos canales pueden tener send_message async o sync
+            send_fn = getattr(channel_obj, "send_message", None)
+            if not send_fn:
+                raise AttributeError(f"El canal '{channel}' no implementa send_message()")
+
+            if asyncio.iscoroutinefunction(send_fn):
+                await send_fn(chat_id, message)
+            else:
+                send_fn(chat_id, message)
+
+            log.info(f"📤 Mensaje enviado al canal '{channel}' → {chat_id}")
+
+        except Exception as e:
+            log.error(f"❌ Error enviando mensaje a {channel}: {e}", exc_info=True)

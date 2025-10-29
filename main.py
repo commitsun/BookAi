@@ -1,17 +1,33 @@
+"""
+🚀 Main Entry Point - Sistema de Agentes para Hoteles (Refactorizado)
+======================================================================
+WhatsApp → Supervisor Input → Main Agent → Supervisor Output → WhatsApp
+                     ↓                ↓
+                  Interno          Interno
+                     ↓                ↓
+                 Telegram         Telegram
+"""
+
 import os
 import warnings
 import logging
 from fastapi import FastAPI, Request
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, PlainTextResponse
 
+# Imports del sistema
 from channels_wrapper.manager import ChannelManager
 from channels_wrapper.telegram.telegram_channel import TelegramChannel
-from core.main_agent import HotelAIHybrid
+from core.main_agent import create_main_agent
+from core.memory_manager import MemoryManager
 from core.escalation_manager import pending_escalations, mark_pending
+from agents.supervisor_input_agent import SupervisorInputAgent
+from agents.supervisor_output_agent import SupervisorOutputAgent
+from agents.interno_agent import InternoAgent
 
-# =====================================================
-# 🧹 CONFIGURACIÓN GLOBAL
-# =====================================================
+# =============================================================
+# CONFIGURACIÓN GLOBAL
+# =============================================================
+
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 warnings.filterwarnings("ignore", category=UserWarning)
 os.environ["PYTHONWARNINGS"] = "ignore"
@@ -21,157 +37,271 @@ logging.basicConfig(
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
 
-# =====================================================
-# 🚀 Inicialización de FastAPI
-# =====================================================
-app = FastAPI(title="HotelAI - Multi-Channel Hybrid Bot")
+log = logging.getLogger("Main")
 
-# =====================================================
-# 🧠 Inicialización del agente híbrido principal
-# =====================================================
-try:
-    hybrid_agent = HotelAIHybrid()
-    logging.info("✅ HotelAIHybrid inicializado correctamente.")
-except Exception as e:
-    logging.error(f"❌ Error al inicializar HotelAIHybrid: {e}", exc_info=True)
-    raise e
+# =============================================================
+# INICIALIZACIÓN DE FASTAPI
+# =============================================================
 
-# =====================================================
-# 🔌 Registro de canales dinámicos (WhatsApp, Web, etc.)
-# =====================================================
-manager = ChannelManager()
-for name, channel in manager.channels.items():
-    channel.agent = hybrid_agent
-    channel.register_routes(app)
-    logging.info(f"✅ Canal '{name}' registrado correctamente desde {channel.__class__.__module__}")
+app = FastAPI(title="HotelAI - Sistema de Agentes Refactorizado")
 
-# =====================================================
-# 💬 Canal TELEGRAM independiente
-# =====================================================
-telegram_channel = TelegramChannel(openai_api_key=None)
-telegram_channel.agent = hybrid_agent
-telegram_channel.register_routes(app)
-logging.info("✅ Canal 'telegram' registrado correctamente.")
+# =============================================================
+# INICIALIZACIÓN DE COMPONENTES GLOBALES
+# =============================================================
 
-logging.info("🚀 Todos los canales inicializados correctamente y listos para recibir mensajes.")
+memory_manager = MemoryManager()
+supervisor_input = SupervisorInputAgent()
+supervisor_output = SupervisorOutputAgent()
+interno_agent = InternoAgent()
+channel_manager = ChannelManager()
 
-# =====================================================
-# 🩺 Healthcheck
-# =====================================================
-@app.get("/health")
-async def health():
-    """Endpoint para comprobar el estado general del bot."""
+log.info("✅ Sistema inicializado correctamente")
+
+
+# =============================================================
+# FUNCIÓN PRINCIPAL DE PROCESAMIENTO
+# =============================================================
+
+async def process_user_message(
+    user_message: str,
+    chat_id: str,
+    hotel_name: str = "Hotel",
+    channel: str = "whatsapp"
+) -> str:
+    """Procesa un mensaje del usuario siguiendo el flujo completo."""
     try:
-        return {
-            "status": "ok",
-            "channels": list(manager.channels.keys()) + ["telegram"],
-            "pending_escalations": list(pending_escalations.keys()),
-        }
+        log.info(f"📨 Nuevo mensaje de {chat_id} en {channel}: {user_message[:80]}...")
+
+        # ===== PASO 1: SUPERVISOR INPUT =====
+        log.info("🔍 PASO 1: Supervisor Input validando mensaje...")
+        input_validation = await supervisor_input.validate(user_message)
+
+        if isinstance(input_validation, dict):
+            estado = input_validation.get("estado", "Aprobado")
+            motivo = input_validation.get("motivo", "")
+        else:
+            estado = "Rechazado" if "rechazado" in input_validation.lower() else "Aprobado"
+            motivo = input_validation if estado != "Aprobado" else ""
+
+        if estado != "Aprobado":
+            log.warning(f"⚠️ Mensaje rechazado por Supervisor Input: {motivo}")
+            escalation_msg = f"""
+🚨 MENSAJE RECHAZADO POR SUPERVISOR INPUT
+
+Chat ID: {chat_id}
+Hotel: {hotel_name}
+
+Mensaje del usuario:
+{user_message}
+
+Motivo del rechazo:
+{motivo}
+
+Por favor, revisa y responde manualmente.
+"""
+            await interno_agent.anotify_staff(escalation_msg, chat_id)
+            return "🕓 Gracias por tu mensaje. Lo estamos revisando con nuestro equipo."
+
+        log.info("✅ Mensaje aprobado por Supervisor Input")
+
+        # ===== PASO 2: MAIN AGENT =====
+        log.info("🤖 PASO 2: Main Agent procesando...")
+
+        history = []
+        try:
+            history = memory_manager.get_memory(chat_id)
+        except Exception as e:
+            log.warning(f"⚠️ No se pudo obtener memoria: {e}")
+
+        def send_inciso_callback(message: str):
+            try:
+                channel_manager.send_message(chat_id, message, channel=channel)
+                log.info(f"📤 Inciso enviado: {message[:50]}...")
+            except Exception as e:
+                log.error(f"❌ Error enviando inciso: {e}")
+
+        main_agent = create_main_agent(
+            memory_manager=memory_manager,
+            send_callback=send_inciso_callback,
+            model_name="gpt-4o",
+            temperature=0.3,
+        )
+
+        agent_response = main_agent.invoke(
+            user_input=user_message,
+            chat_id=chat_id,
+            hotel_name=hotel_name,
+            chat_history=history,
+        )
+
+        log.info(f"✅ Main Agent respondió: {agent_response[:100]}...")
+
+        # ===== PASO 3: SUPERVISOR OUTPUT =====
+        log.info("🔍 PASO 3: Supervisor Output validando respuesta...")
+        output_validation = await supervisor_output.validate(
+            user_input=user_message, agent_response=agent_response
+        )
+
+        if isinstance(output_validation, dict):
+            estado_out = output_validation.get("estado", "Aprobado")
+            motivo_out = output_validation.get("motivo", "")
+            sugerencia = output_validation.get("sugerencia", "")
+        else:
+            estado_out = (
+                "Rechazado"
+                if "rechazado" in output_validation.lower()
+                or "revisión" in output_validation.lower()
+                else "Aprobado"
+            )
+            motivo_out = output_validation if estado_out != "Aprobado" else ""
+            sugerencia = ""
+
+        if estado_out != "Aprobado":
+            log.warning(f"⚠️ Respuesta rechazada por Supervisor Output: {motivo_out}")
+            escalation_msg = f"""
+🚨 RESPUESTA RECHAZADA POR SUPERVISOR OUTPUT
+
+Chat ID: {chat_id}
+Hotel: {hotel_name}
+
+Mensaje del usuario:
+{user_message}
+
+Respuesta del agente (RECHAZADA):
+{agent_response}
+
+Motivo del rechazo:
+{motivo_out}
+
+Sugerencia:
+{sugerencia}
+
+Por favor, proporciona una respuesta manual adecuada.
+"""
+            await interno_agent.anotify_staff(escalation_msg, chat_id)
+            return (
+                "🕓 Permíteme un momento para verificar esa información con nuestro equipo."
+            )
+
+        log.info("✅ Respuesta aprobada por Supervisor Output")
+        return agent_response
+
     except Exception as e:
-        logging.error(f"⚠️ Error en /health: {e}", exc_info=True)
-        return JSONResponse({"status": "error", "detail": str(e)}, status_code=500)
+        log.error(f"❌ Error en process_user_message: {e}", exc_info=True)
+        return "❌ Disculpa, ocurrió un error al procesar tu mensaje."
 
-# =====================================================
-# 💬 Endpoint genérico de mensajes (API externa)
-# =====================================================
-@app.post("/api/message")
-async def api_message(request: Request):
-    """
-    Permite enviar mensajes al agente híbrido mediante HTTP.
-    Ideal para integraciones o pruebas directas sin canal específico.
-    """
-    try:
-        data = await request.json()
-        user_message = data.get("message", "").strip()
-        conversation_id = str(data.get("conversation_id", "unknown")).replace("+", "").strip()
 
-        if not user_message:
-            return JSONResponse({"error": "Mensaje vacío"}, status_code=400)
-
-        logging.info(f"📨 [API] Mensaje recibido de {conversation_id}: {user_message}")
-
-        # Procesar mensaje con el agente principal
-        response = await hybrid_agent.process_message(user_message, conversation_id)
-
-        # ===== Escalación automática si procede =====
-        trigger_phrases = [
-            "contactar con el encargado",
-            "consultarlo con el encargado",
-            "voy a consultarlo con el encargado",
-            "un momento por favor",
-            "permíteme contactar",
-            "he contactado con el encargado",
-            "error",
-        ]
-        if any(p in (response or "").lower() for p in trigger_phrases):
-            await mark_pending(conversation_id, user_message)
-            logging.warning(f"🟡 Escalación detectada para {conversation_id}")
-            return JSONResponse({"response": "🕓 Consultando con el encargado..."})
-
-        # ===== Respuesta normal =====
-        logging.info(f"💬 [API] Respuesta enviada: {response[:120]}...")
-        return JSONResponse({"response": response})
-
-    except Exception as e:
-        logging.error(f"❌ Error en /api/message: {e}", exc_info=True)
-        return JSONResponse({"error": "Error interno al procesar el mensaje"}, status_code=500)
-
-# =====================================================
-# 📞 Verificación del webhook de Meta (GET)
-# =====================================================
-VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
+# =============================================================
+# ENDPOINTS DE FASTAPI
+# =============================================================
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
-    """
-    Meta (WhatsApp) envía una petición GET a este endpoint
-    para verificar que el servidor es válido.
-    """
-    try:
-        mode = request.query_params.get("hub.mode")
-        token = request.query_params.get("hub.verify_token")
-        challenge = request.query_params.get("hub.challenge")
+    """Verificación de Webhook para Meta (Facebook/WhatsApp)."""
+    VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
 
-        if mode == "subscribe" and token == VERIFY_TOKEN:
-            logging.info("✅ Webhook verificado correctamente con Meta.")
-            return int(challenge)
-        else:
-            logging.warning(f"❌ Verificación fallida: token={token}, esperado={VERIFY_TOKEN}")
-            return JSONResponse({"error": "Invalid verification"}, status_code=403)
-    except Exception as e:
-        logging.error(f"⚠️ Error al verificar webhook: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+    params = request.query_params
+    mode = params.get("hub.mode")
+    challenge = params.get("hub.challenge")
+    token = params.get("hub.verify_token")
 
-# =====================================================
-# 💬 Recepción de mensajes desde WhatsApp (POST)
-# =====================================================
+    log.info(f"🔍 Verificación Meta: mode={mode}, token={token}, challenge={challenge}")
+
+    if mode == "subscribe" and token == VERIFY_TOKEN:
+        return PlainTextResponse(content=challenge)
+    else:
+        return JSONResponse(
+            content={"error": "Invalid verification token"}, status_code=403
+        )
+
+
 @app.post("/webhook")
-async def whatsapp_webhook(request: Request):
-    """
-    Recibe los mensajes reales enviados por WhatsApp Cloud API.
-    """
+async def webhook_receiver(request: Request):
+    """Recibe mensajes de WhatsApp (Meta Webhooks)."""
     try:
-        body = await request.json()
-        logging.info(f"📩 [WhatsApp] Webhook recibido: {body}")
+        data = await request.json()
+        log.info(f"📩 Webhook POST recibido desde Meta: {data}")
 
-        entry = body.get("entry", [])
-        if entry:
-            changes = entry[0].get("changes", [])
-            if changes:
-                value = changes[0].get("value", {})
-                messages = value.get("messages", [])
-                if messages:
-                    msg = messages[0]
-                    sender = msg.get("from", "")
-                    text = msg.get("text", {}).get("body", "")
-                    if text:
-                        logging.info(f"💬 [WhatsApp] {sender}: {text}")
+        entry = data.get("entry", [])[0]
+        changes = entry.get("changes", [])[0]
+        value = changes.get("value", {})
+        messages = value.get("messages", [])
 
-                        # Procesar mensaje del huésped con el agente principal
-                        response = await hybrid_agent.process_message(text, sender)
-                        logging.info(f"🤖 [Respuesta WhatsApp]: {response[:120]}...")
+        if not messages:
+            log.info("📭 No hay mensajes en la notificación.")
+            return JSONResponse({"status": "ignored"})
 
-        return JSONResponse({"status": "received"})
+        msg = messages[0]
+        sender = msg["from"]
+        text = msg.get("text", {}).get("body", "")
+
+        log.info(f"📨 Mensaje recibido de {sender}: {text}")
+
+        response = await process_user_message(
+            user_message=text, chat_id=sender, channel="whatsapp"
+        )
+
+        await channel_manager.send_message(sender, response, channel="whatsapp")
+
+        return JSONResponse({"status": "success"})
+
     except Exception as e:
-        logging.error(f"❌ Error procesando webhook de WhatsApp: {e}", exc_info=True)
-        return JSONResponse({"error": str(e)}, status_code=500)
+        log.error(f"❌ Error procesando webhook POST: {e}", exc_info=True)
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.post("/webhook/telegram")
+async def telegram_webhook(request: Request):
+    """Webhook para respuestas del encargado vía Telegram."""
+    try:
+        data = await request.json()
+        log.info(f"📞 Webhook Telegram recibido: {data}")
+
+        staff_response = data.get("message", {}).get("text", "")
+        original_chat_id = data.get("context", {}).get("original_chat_id", "")
+
+        if not staff_response or not original_chat_id:
+            return JSONResponse({"status": "ignored", "reason": "missing data"})
+
+        await channel_manager.send_message(
+            original_chat_id, staff_response, channel="whatsapp"
+        )
+
+        log.info(f"✅ Respuesta del encargado enviada a {original_chat_id}")
+        return JSONResponse({"status": "success"})
+
+    except Exception as e:
+        log.error(f"❌ Error en webhook Telegram: {e}", exc_info=True)
+        return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
+
+
+@app.get("/health")
+async def health_check():
+    """Health check endpoint."""
+    return {"status": "healthy", "version": "2.0-refactored"}
+
+
+@app.get("/")
+async def root():
+    """Root endpoint."""
+    return {
+        "service": "HotelAI - Sistema de Agentes",
+        "version": "2.0",
+        "architecture": "n8n-style orchestration",
+        "components": [
+            "Supervisor Input",
+            "Main Agent (Orchestrator)",
+            "Supervisor Output",
+            "SubAgents: dispo/precios, info, interno",
+        ],
+    }
+
+
+# =============================================================
+# EJECUCIÓN
+# =============================================================
+
+if __name__ == "__main__":
+    import uvicorn
+
+    uvicorn.run(app, host="0.0.0.0", port=8000)
