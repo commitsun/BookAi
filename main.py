@@ -1,6 +1,6 @@
 """
-🚀 Main Entry Point - Sistema de Agentes para Hoteles (Refactorizado)
-======================================================================
+🚀 Main Entry Point - Sistema de Agentes para Hoteles (Refactorizado y Robustecido)
+===================================================================================
 WhatsApp → Supervisor Input → Main Agent → Supervisor Output → WhatsApp
                      ↓                ↓
                   Interno          Interno
@@ -9,6 +9,7 @@ WhatsApp → Supervisor Input → Main Agent → Supervisor Output → WhatsApp
 """
 
 import os
+import json
 import warnings
 import logging
 from fastapi import FastAPI, Request
@@ -80,12 +81,8 @@ async def process_user_message(
 
         # ===== PASO 1: SUPERVISOR INPUT =====
         input_validation = await supervisor_input.validate(user_message)
-        estado = "Aprobado"
-        motivo = ""
-
-        if isinstance(input_validation, dict):
-            estado = input_validation.get("estado", "Aprobado")
-            motivo = input_validation.get("motivo", "")
+        estado = input_validation.get("estado", "Aprobado") if isinstance(input_validation, dict) else "Aprobado"
+        motivo = input_validation.get("motivo", "") if isinstance(input_validation, dict) else ""
 
         if estado != "Aprobado":
             log.warning(f"⚠️ Mensaje rechazado por Supervisor Input: {motivo}")
@@ -104,7 +101,6 @@ Motivo del rechazo:
 
 Por favor, revisa y responde manualmente.
 """
-
             await interno_agent.anotify_staff(escalation_msg, chat_id)
             return "🕓 Gracias por tu mensaje. Lo estamos revisando con nuestro equipo."
 
@@ -146,14 +142,9 @@ Por favor, revisa y responde manualmente.
             user_input=user_message, agent_response=agent_response
         )
 
-        estado_out = "Aprobado"
-        motivo_out = ""
-        sugerencia = ""
-
-        if isinstance(output_validation, dict):
-            estado_out = output_validation.get("estado", "Aprobado")
-            motivo_out = output_validation.get("motivo", "")
-            sugerencia = output_validation.get("sugerencia", "")
+        estado_out = output_validation.get("estado", "Aprobado") if isinstance(output_validation, dict) else "Aprobado"
+        motivo_out = output_validation.get("motivo", "") if isinstance(output_validation, dict) else ""
+        sugerencia = output_validation.get("sugerencia", "") if isinstance(output_validation, dict) else ""
 
         if estado_out != "Aprobado":
             log.warning(f"⚠️ Respuesta rechazada por Supervisor Output: {motivo_out}")
@@ -204,20 +195,42 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def webhook_receiver(request: Request):
-    """Recibe mensajes de WhatsApp (Meta Webhooks)."""
+    """Recibe mensajes desde Meta (WhatsApp) o pruebas externas (p. ej. Telegram setWebhook)."""
     try:
         data = await request.json()
-        entry = data.get("entry", [])[0]
-        changes = entry.get("changes", [])[0]
-        value = changes.get("value", {})
-        messages = value.get("messages", [])
+        if not data:
+            log.warning("⚠️ Webhook recibido vacío o sin JSON válido.")
+            return JSONResponse({"status": "ignored", "reason": "empty body"})
 
+        # --- Seguridad básica: detectar si no es un webhook de WhatsApp
+        if "entry" not in data:
+            log.warning(f"⚠️ Webhook recibido sin 'entry': {data}")
+            return JSONResponse({"status": "ignored", "reason": "no entry"})
+
+        entry_list = data.get("entry", [])
+        if not entry_list:
+            log.warning("⚠️ Webhook recibido con 'entry' vacío.")
+            return JSONResponse({"status": "ignored", "reason": "empty entry"})
+
+        entry = entry_list[0]
+        changes = entry.get("changes", [])
+        if not changes:
+            log.warning("⚠️ Webhook recibido sin cambios.")
+            return JSONResponse({"status": "ignored", "reason": "no changes"})
+
+        value = changes[0].get("value", {})
+        messages = value.get("messages", [])
         if not messages:
-            return JSONResponse({"status": "ignored"})
+            log.info("ℹ️ Webhook recibido sin mensajes (posiblemente validación inicial).")
+            return JSONResponse({"status": "ignored", "reason": "no messages"})
 
         msg = messages[0]
-        sender = msg["from"]
+        sender = msg.get("from")
         text = msg.get("text", {}).get("body", "")
+
+        if not sender or not text:
+            log.warning(f"⚠️ Mensaje inválido recibido: {msg}")
+            return JSONResponse({"status": "ignored", "reason": "invalid message"})
 
         log.info(f"📨 Mensaje recibido de {sender}: {text}")
 
@@ -251,31 +264,22 @@ async def telegram_webhook(request: Request):
 
         # 🧩 Detectar si el encargado respondió en "Reply"
         original_msg_id = reply_to.get("message_id")
-        original_chat_id = None
+        if not original_msg_id:
+            log.warning("⚠️ Mensaje Telegram sin reply_to → ignorado.")
+            return JSONResponse({"status": "ignored", "reason": "no reply reference"})
 
-        from agents.interno_agent import InternoAgent
-        try:
-            from main import PENDING_ESCALATIONS
-            original_chat_id = PENDING_ESCALATIONS.get(original_msg_id)
-        except Exception:
-            log.warning("⚠️ No se pudo acceder al buffer global de escalaciones.")
-
+        # 🔄 Buscar chat_id original asociado en buffer global
+        original_chat_id = PENDING_ESCALATIONS.get(original_msg_id)
         if not original_chat_id:
             log.warning("⚠️ No se encontró chat_id asociado al mensaje respondido.")
             return JSONResponse({"status": "ignored", "reason": "no linked chat"})
 
         # 📤 Enviar la respuesta del encargado al huésped (WhatsApp)
-        await channel_manager.send_message(
-            original_chat_id, text.strip(), channel="whatsapp"
-        )
+        await channel_manager.send_message(original_chat_id, text.strip(), channel="whatsapp")
         log.info(f"✅ Respuesta del encargado reenviada a huésped {original_chat_id}: {text[:80]}")
 
-        # ✅ Opcional: eliminar del buffer una vez reenviado
-        try:
-            del PENDING_ESCALATIONS[original_msg_id]
-            log.info(f"🧹 Limpieza: eliminado mapping {original_msg_id} -> {original_chat_id}")
-        except Exception:
-            pass
+        # 🧹 Limpieza del buffer
+        PENDING_ESCALATIONS.pop(original_msg_id, None)
 
         return JSONResponse({"status": "success"})
 
@@ -307,7 +311,7 @@ async def root():
 
 
 # =============================================================
-# EJECUCIÓN
+# EJECUCIÓN LOCAL
 # =============================================================
 
 if __name__ == "__main__":
