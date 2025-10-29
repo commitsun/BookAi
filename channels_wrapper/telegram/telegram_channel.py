@@ -1,31 +1,24 @@
-
 import logging
 import os
 import requests
 from fastapi import Request
 from fastapi.responses import JSONResponse
 from channels_wrapper.base_channel import BaseChannel
+from channels_wrapper.utils.text_utils import send_fragmented_async
 from core.escalation_manager import resolve_from_encargado, pending_escalations
 from core.notification import notify_encargado
 
-# =====================================================
-# 🔑 TOKEN DEL BOT DE TELEGRAM
-# =====================================================
+log = logging.getLogger("telegram")
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
 
 class TelegramChannel(BaseChannel):
-    """Canal Telegram: recibe respuestas del encargado y las reenvía al huésped."""
+    """Canal Telegram: encargado ↔ huésped (reenvío automático y fragmentación)."""
 
-    # =====================================================
-    # Métodos requeridos por BaseChannel
-    # =====================================================
     def send_message(self, user_id: str, text: str):
-        """
-        Envía un mensaje al chat de Telegram del encargado o huésped.
-        """
+        """Envía mensaje al encargado por Telegram."""
         if not TELEGRAM_BOT_TOKEN or not user_id:
-            logging.error("❌ Falta TELEGRAM_BOT_TOKEN o user_id.")
+            log.error("❌ Falta TELEGRAM_BOT_TOKEN o user_id.")
             return
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
@@ -34,90 +27,93 @@ class TelegramChannel(BaseChannel):
         try:
             r = requests.post(url, json=data, timeout=10)
             if r.status_code != 200:
-                logging.error(f"⚠️ Telegram API error ({r.status_code}): {r.text}")
+                log.error(f"⚠️ Telegram API error ({r.status_code}): {r.text}")
             else:
-                logging.info(f"📤 Telegram → {user_id} (HTTP {r.status_code})")
+                log.info(f"📤 Telegram → {user_id}: {text[:60]}...")
         except Exception as e:
-            logging.error(f"⚠️ Error enviando mensaje Telegram: {e}", exc_info=True)
+            log.error(f"💥 Error enviando Telegram: {e}", exc_info=True)
 
     def extract_message_data(self, payload: dict):
-        """
-        Implementación vacía (no se usa en Telegram).
-        """
+        """No se usa en Telegram."""
         return None, None, None, None
 
-    # =====================================================
-    # Registro del webhook
-    # =====================================================
+    # ============================================================
+    # 🚀 WEBHOOK PRINCIPAL
+    # ============================================================
     def register_routes(self, app):
-        """
-        Registra el endpoint /telegram/webhook en FastAPI.
-        """
         @app.post("/telegram/webhook")
         async def telegram_webhook(request: Request):
             """
-            Webhook principal de Telegram: recibe mensajes del encargado y los gestiona.
+            Webhook para manejar las respuestas del encargado.
+            Admite formato:
+            - RESPUESTA <id>: <mensaje>
+            - Respuesta directa si hay una sola conversación pendiente.
             """
             try:
                 data = await request.json()
                 message = data.get("message", {})
                 chat_id = message.get("chat", {}).get("id")
-                text = message.get("text", "")
+                text = (message.get("text") or "").strip()
 
                 if not text:
                     return JSONResponse({"ok": True})
 
-                logging.info(f"💬 Telegram → Encargado [{chat_id}]: {text}")
+                log.info(f"💬 Telegram (encargado {chat_id}): {text}")
 
                 # =====================================================
-                # Caso 1️⃣: El encargado usa formato "RESPUESTA <id>: <mensaje>"
+                # 🧩 Caso 1: Formato RESPUESTA <id>: <texto>
                 # =====================================================
                 if text.lower().startswith("respuesta "):
                     try:
                         content = text.split(" ", 1)[1]
                         target_id, respuesta = content.split(":", 1)
-                        target_id = target_id.strip()
-                        respuesta = respuesta.strip()
+                        target_id, respuesta = target_id.strip(), respuesta.strip()
 
-                        from main import hybrid_agent
-                        await resolve_from_encargado(target_id, respuesta, hybrid_agent)
-                        await notify_encargado(f"✅ Respuesta enviada al cliente {target_id}.")
+                        # 🔥 Reenviar al huésped con fragmentación
+                        await resolve_from_encargado(target_id, respuesta, None)
+                        await notify_encargado(f"✅ Respuesta enviada al cliente `{target_id}`.")
+                        return JSONResponse({"ok": True})
                     except Exception as e:
-                        logging.error(f"❌ Error procesando RESPUESTA: {e}", exc_info=True)
-                        await notify_encargado("⚠️ Formato incorrecto. Usa RESPUESTA <id>: <mensaje>.")
-                    return JSONResponse({"ok": True})
+                        log.error(f"❌ Error formato RESPUESTA: {e}", exc_info=True)
+                        await notify_encargado(
+                            "⚠️ Formato incorrecto. Usa:\n\nRESPUESTA <id>: <mensaje>"
+                        )
+                        return JSONResponse({"ok": False})
 
                 # =====================================================
-                # Caso 2️⃣: Respuesta directa (solo hay una conversación pendiente)
+                # 🧩 Caso 2: Solo hay una conversación pendiente
                 # =====================================================
                 if len(pending_escalations) == 1:
                     target_id = next(iter(pending_escalations.keys()))
                     respuesta = text.strip()
-                    logging.info(f"✉️ Respuesta directa del encargado → {target_id}: {respuesta}")
-
-                    from main import hybrid_agent
-                    await resolve_from_encargado(target_id, respuesta, hybrid_agent)
-                    await notify_encargado(f"✅ Respuesta enviada automáticamente al cliente {target_id}.")
+                    log.info(f"📨 Respuesta directa → {target_id}: {respuesta}")
+                    await resolve_from_encargado(target_id, respuesta, None)
+                    await notify_encargado(
+                        f"✅ Respuesta automática enviada al cliente `{target_id}`."
+                    )
+                    return JSONResponse({"ok": True})
 
                 # =====================================================
-                # Caso 3️⃣: Hay varias conversaciones pendientes
+                # 🧩 Caso 3: Varias conversaciones pendientes
                 # =====================================================
                 elif len(pending_escalations) > 1:
-                    ids = "\n".join([f"• {cid}" for cid in pending_escalations.keys()])
-                    await notify_encargado(
-                        f"⚠️ Hay varias conversaciones pendientes.\n"
-                        f"Usa el formato:\n\nRESPUESTA <id>: <mensaje>\n\n"
-                        f"Clientes pendientes:\n{ids}"
+                    ids = "\n".join(f"• `{cid}`" for cid in pending_escalations.keys())
+                    msg = (
+                        "⚠️ Hay *varias* conversaciones pendientes.\n"
+                        "Usa el formato:\n\n"
+                        "`RESPUESTA <id>: <mensaje>`\n\n"
+                        f"Clientes:\n{ids}"
                     )
+                    await notify_encargado(msg)
+                    return JSONResponse({"ok": True})
 
                 # =====================================================
-                # Caso 4️⃣: No hay ninguna conversación pendiente
+                # 🧩 Caso 4: No hay conversaciones pendientes
                 # =====================================================
                 else:
-                    await notify_encargado("⚠️ No hay conversaciones pendientes en este momento.")
-
-                return JSONResponse({"ok": True})
+                    await notify_encargado("ℹ️ No hay conversaciones pendientes ahora mismo.")
+                    return JSONResponse({"ok": True})
 
             except Exception as e:
-                logging.error(f"❌ Error procesando webhook de Telegram: {e}", exc_info=True)
+                log.error(f"💥 Error en Telegram webhook: {e}", exc_info=True)
                 return JSONResponse({"ok": False, "error": str(e)}, status_code=500)

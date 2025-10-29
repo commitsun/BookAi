@@ -1,8 +1,12 @@
 """
 🤖 Main Agent - Agente Principal Orquestador (Refactorizado y Mejorado)
 =======================================================================
-Este agente central coordina TODAS las interacciones del sistema.
+Coordina TODAS las interacciones del sistema.
 Actúa como ORQUESTADOR, delegando tareas a las herramientas especializadas.
+Incluye:
+ - Corte de loops infinitos
+ - Detección de escalaciones automáticas
+ - Control de ejecución concurrente
 """
 
 import logging
@@ -12,7 +16,7 @@ from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import StructuredTool
 
-# Imports de tools
+# Tools del sistema
 from tools.think_tool import create_think_tool
 from tools.inciso_tool import create_inciso_tool
 from tools.interno_tool import create_interno_tool
@@ -23,12 +27,18 @@ from tools.info_hotel_tool import create_info_hotel_tool
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
 from core.memory_manager import MemoryManager
+from agents.interno_agent import InternoAgent
 
 log = logging.getLogger("MainAgent")
 
+# =============================================================
+# 🚦 Variable de control para evitar loops
+# =============================================================
+AGENT_ACTIVE = {}
+
 
 class MainAgent:
-    """Agente principal que orquesta todo el sistema."""
+    """Agente principal que orquesta todas las operaciones del sistema."""
 
     def __init__(
         self,
@@ -49,6 +59,7 @@ class MainAgent:
         base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
         self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
+        self.interno_agent = InternoAgent()
         log.info(f"✅ MainAgent inicializado con modelo {model_name}")
 
     # --------------------------------------------------
@@ -110,55 +121,83 @@ NO generes respuestas por tu cuenta. SOLO invoca las tools adecuadas y retorna s
         hotel_name: str = "Hotel",
         chat_history: Optional[List] = None
     ) -> str:
-        """Procesa una consulta del usuario."""
+        """Procesa una consulta del usuario con control de loops y escalación."""
         try:
+            # 🚦 Evitar loops recursivos
+            if AGENT_ACTIVE.get(chat_id):
+                log.warning(f"⚠️ Loop detectado para chat {chat_id}, deteniendo ejecución.")
+                return "Estoy procesando tu solicitud, por favor espera un momento."
+
+            AGENT_ACTIVE[chat_id] = True
+
             log.info(f"🤖 Main Agent procesando input: {user_input[:100]}...")
 
-            # 🕒 Actualizar contexto temporal antes de cada ejecución
+            # 🕒 Actualizar contexto temporal
             base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
             self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
             tools = self._build_tools(chat_id=chat_id, hotel_name=hotel_name)
-
-            # Crear el agente
             prompt_template = self._create_prompt_template()
-            agent = create_openai_tools_agent(llm=self.llm, tools=tools, prompt=prompt_template)
 
-            # Crear el executor
+            # Crear el agente principal
+            agent = create_openai_tools_agent(
+                llm=self.llm,
+                tools=tools,
+                prompt=prompt_template
+            )
+
+            # Crear el ejecutor
             agent_executor = AgentExecutor(
                 agent=agent,
                 tools=tools,
-                verbose=True,
-                max_iterations=10,
-                max_execution_time=120,
+                verbose=False,
+                max_iterations=6,
+                max_execution_time=90,
                 handle_parsing_errors=True,
                 return_intermediate_steps=False
             )
 
-            # Ejecutar flujo
+            # 🚀 Ejecutar flujo
             result = agent_executor.invoke({
                 "input": user_input,
                 "chat_history": chat_history or []
             })
 
-            # Extraer respuesta final
+            # 🧩 Extraer la respuesta
             response = (
                 result.get("output", str(result))
                 if isinstance(result, dict)
                 else str(result)
-            )
+            ).strip()
 
-            log.info(f"✅ Main Agent completó ejecución ({len(response)} caracteres)")
+            # 🧠 Detectar si requiere escalación
+            if "ESCALATION_REQUIRED" in response or "ESCALAR_A_INTERNO" in response:
+                log.warning("🚨 Escalación detectada automáticamente.")
+                self.interno_agent.notify_staff(
+                    f"Consulta escalada automáticamente:\n\n{user_input}",
+                    chat_id=chat_id,
+                    context={"motivo": "Sin respuesta clara o ambigua"}
+                )
+                response = (
+                    "🕓 Un momento por favor, estoy verificando esa información con nuestro equipo."
+                )
+
+            # 🔁 Evitar repeticiones infinitas / loops
+            repetitive_patterns = ["¿desea", "¿te gustaría", "¿quieres", "😊", "😄"]
+            if any(p in response.lower() for p in repetitive_patterns):
+                log.info("✅ Respuesta final detectada, deteniendo flujo.")
+                return response
 
             # 💾 Guardar conversación
             if self.memory_manager and chat_id:
                 try:
                     self.memory_manager.save(chat_id, "user", user_input)
                     self.memory_manager.save(chat_id, "assistant", response)
-                    log.info(f"💾 Conversación guardada en memoria ({chat_id})")
+                    log.info(f"💾 Conversación guardada correctamente ({chat_id})")
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo guardar la conversación: {e}")
 
+            log.info(f"✅ Main Agent completó ejecución ({len(response)} caracteres)")
             return response
 
         except Exception as e:
@@ -167,6 +206,9 @@ NO generes respuestas por tu cuenta. SOLO invoca las tools adecuadas y retorna s
                 "❌ Ocurrió un error al procesar tu consulta. "
                 "Por favor, intenta nuevamente o contacta con el hotel."
             )
+
+        finally:
+            AGENT_ACTIVE.pop(chat_id, None)
 
     # --------------------------------------------------
     async def ainvoke(
