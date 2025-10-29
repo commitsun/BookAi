@@ -16,10 +16,8 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 # Imports del sistema
 from channels_wrapper.manager import ChannelManager
-from channels_wrapper.telegram.telegram_channel import TelegramChannel
 from core.main_agent import create_main_agent
 from core.memory_manager import MemoryManager
-from core.escalation_manager import pending_escalations, mark_pending
 from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent
@@ -56,7 +54,6 @@ interno_agent = InternoAgent()
 channel_manager = ChannelManager()
 
 log.info("✅ Sistema inicializado correctamente")
-
 
 # =============================================================
 # FUNCIÓN PRINCIPAL DE PROCESAMIENTO
@@ -107,19 +104,22 @@ Por favor, revisa y responde manualmente.
         # ===== PASO 2: MAIN AGENT =====
         log.info("🤖 PASO 2: Main Agent procesando...")
 
-        history = []
+        # Recuperar historial conversacional
         try:
             history = memory_manager.get_memory(chat_id)
         except Exception as e:
             log.warning(f"⚠️ No se pudo obtener memoria: {e}")
+            history = []
 
-        def send_inciso_callback(message: str):
+        # 🔧 Callback corregido con await
+        async def send_inciso_callback(message: str):
             try:
-                channel_manager.send_message(chat_id, message, channel=channel)
-                log.info(f"📤 Inciso enviado: {message[:50]}...")
+                await channel_manager.send_message(chat_id, message, channel=channel)
+                log.info(f"📤 Inciso enviado: {message[:80]}...")
             except Exception as e:
                 log.error(f"❌ Error enviando inciso: {e}")
 
+        # Crear agente principal
         main_agent = create_main_agent(
             memory_manager=memory_manager,
             send_callback=send_inciso_callback,
@@ -127,13 +127,20 @@ Por favor, revisa y responde manualmente.
             temperature=0.3,
         )
 
-        agent_response = main_agent.invoke(
+        # Ejecutar agente principal
+        agent_response = await main_agent.ainvoke(
             user_input=user_message,
             chat_id=chat_id,
             hotel_name=hotel_name,
             chat_history=history,
         )
 
+        if not agent_response or not agent_response.strip():
+            log.warning("⚠️ Respuesta vacía del Main Agent.")
+            return "❌ Disculpa, no pude procesar tu solicitud. Intenta de nuevo."
+
+        # Limpieza de respuesta
+        agent_response = str(agent_response).strip()
         log.info(f"✅ Main Agent respondió: {agent_response[:100]}...")
 
         # ===== PASO 3: SUPERVISOR OUTPUT =====
@@ -179,9 +186,7 @@ Sugerencia:
 Por favor, proporciona una respuesta manual adecuada.
 """
             await interno_agent.anotify_staff(escalation_msg, chat_id)
-            return (
-                "🕓 Permíteme un momento para verificar esa información con nuestro equipo."
-            )
+            return "🕓 Permíteme un momento para verificar esa información con nuestro equipo."
 
         log.info("✅ Respuesta aprobada por Supervisor Output")
         return agent_response
@@ -211,7 +216,8 @@ async def verify_webhook(request: Request):
         return PlainTextResponse(content=challenge)
     else:
         return JSONResponse(
-            content={"error": "Invalid verification token"}, status_code=403
+            content={"error": "Invalid verification token"},
+            status_code=403
         )
 
 
@@ -238,10 +244,15 @@ async def webhook_receiver(request: Request):
         log.info(f"📨 Mensaje recibido de {sender}: {text}")
 
         response = await process_user_message(
-            user_message=text, chat_id=sender, channel="whatsapp"
+            user_message=text,
+            chat_id=sender,
+            channel="whatsapp"
         )
 
-        await channel_manager.send_message(sender, response, channel="whatsapp")
+        try:
+            await channel_manager.send_message(sender, response, channel="whatsapp")
+        except Exception as e:
+            log.error(f"❌ Error enviando respuesta final: {e}")
 
         return JSONResponse({"status": "success"})
 
@@ -296,12 +307,10 @@ async def root():
         ],
     }
 
-
 # =============================================================
 # EJECUCIÓN
 # =============================================================
 
 if __name__ == "__main__":
     import uvicorn
-
     uvicorn.run(app, host="0.0.0.0", port=8000)
