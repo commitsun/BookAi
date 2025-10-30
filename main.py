@@ -1,5 +1,5 @@
 """
-🚀 Main Entry Point - Sistema de Agentes con Orquestación + Idioma
+🚀 Main Entry Point - Sistema de Agentes con Orquestación + Idioma + Buffer
 ==================================================================
 Flujo:
 WhatsApp → Supervisor Input → Main Agent → Supervisor Output → WhatsApp
@@ -13,6 +13,7 @@ Funciones clave:
 - Respuestas al huésped siempre en SU idioma actual
 - Escalación al encargado en español
 - Mensajes del encargado → pulidos y traducidos al idioma del huésped
+- ✅ Buffer inteligente de mensajes para WhatsApp
 """
 
 import os
@@ -21,6 +22,11 @@ import warnings
 import logging
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
+import asyncio  # necesario para el buffer
+
+# =============================================================
+# IMPORTS DE COMPONENTES
+# =============================================================
 
 from channels_wrapper.manager import ChannelManager
 from core.main_agent import create_main_agent
@@ -29,6 +35,7 @@ from core.language_manager import language_manager
 from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent as InternoAgentV2
+from core.message_buffer import MessageBufferManager  # ✅ añadido
 
 # =============================================================
 # CONFIG GLOBAL / LOGGING
@@ -59,16 +66,15 @@ supervisor_input = SupervisorInputAgent()
 supervisor_output = SupervisorOutputAgent()
 interno_agent = InternoAgentV2()
 channel_manager = ChannelManager()
+buffer_manager = MessageBufferManager(idle_seconds=6.0)  # ✅ nuevo buffer
 
 # Relación Telegram ↔ WhatsApp para replies humanos
 PENDING_ESCALATIONS = {}
 
-# Idioma actual del huésped por chat_id (ISO 639-1)
-# Se ACTUALIZA con CADA MENSAJE que llega del huésped.
+# Idioma actual del huésped por chat_id
 CHAT_LANG = {}
 
 log.info("✅ Sistema inicializado correctamente")
-
 
 # =============================================================
 # PIPELINE PRINCIPAL
@@ -104,7 +110,6 @@ async def process_user_message(
             log.info(f"🌐 Idioma detectado para {chat_id}: {guest_lang}")
         except Exception as e:
             log.warning(f"⚠️ No se pudo detectar idioma para {chat_id}: {e}")
-            # fallback: si ya sabíamos idioma, lo mantenemos; si no, español
             guest_lang = CHAT_LANG.get(chat_id, "es")
             CHAT_LANG[chat_id] = guest_lang
 
@@ -119,7 +124,6 @@ async def process_user_message(
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
             log.warning(f"⚠️ Mensaje rechazado por Supervisor Input: {motivo_in}")
 
-            # Mensaje para el ENCARGADO (siempre en español, interno)
             escalation_msg_es = (
                 "🔔 NUEVA CONSULTA ESCALADA\n\n"
                 f"📱 Chat ID: {chat_id}\n\n"
@@ -134,7 +138,6 @@ async def process_user_message(
             )
             await interno_agent.anotify_staff(escalation_msg_es, chat_id)
 
-            # Mensaje seguro que ve el HUÉSPED → en su idioma actual
             safe_reply_base = (
                 "Gracias por tu mensaje. Lo estamos revisando con nuestro equipo."
             )
@@ -203,9 +206,6 @@ async def process_user_message(
         # =========================================================
         # 4. LIMPIEZA / NORMALIZACIÓN DE LA RESPUESTA
         # =========================================================
-
-        # 4.1 Marcas tipo '##INCISO##' (mensajes de espera)
-        # si la tool devolvió un inciso directo, lo mandamos ya al huésped sin auditoría
         if "##inciso##" in agent_response_raw.lower():
             clean_inciso = agent_response_raw.replace("##INCISO##", "", 1).strip()
             if not clean_inciso:
@@ -215,15 +215,14 @@ async def process_user_message(
                 guest_lang
             )
 
-        # 4.2 Respuestas con bloques repetidos separados por saltos grandes → nos quedamos con el último bloque útil
         final_candidate = agent_response_raw
         if "\n\n" in agent_response_raw:
             parts = [p.strip() for p in agent_response_raw.split("\n\n") if p.strip()]
-            if len(parts) > 1:
-                final_candidate = parts[-1]
-                log.info("✂️ Limpieza heurística: usando el último bloque de la respuesta del agente.")
+            # En lugar de quedarnos con el último bloque, unimos todo el texto coherente
+            final_candidate = "\n\n".join(dict.fromkeys(parts))  # elimina duplicados pero conserva todo el contenido
+            log.info("✂️ Limpieza ajustada: respuesta completa sin recortes.")
 
-        # 4.3 Mensajes tipo 'estoy verificando...' → son mensajes de espera, se devuelven directo
+
         lower_resp = final_candidate.lower()
         INCISO_PATTERNS = [
             "un momento por favor",
@@ -252,7 +251,6 @@ async def process_user_message(
         motivo_out = output_validation.get("motivo", "")
         sugerencia_out = output_validation.get("sugerencia", "")
 
-        # Caso aprobado o revisión menor → enviamos al huésped
         if (
             "aprobado" in estado_out
             or "revisión" in estado_out
@@ -264,7 +262,6 @@ async def process_user_message(
             )
             return localized
 
-        # Caso rechazo → escalamos
         log.warning(f"⚠️ Respuesta rechazada por Supervisor Output: {motivo_out}")
 
         escalation_msg_es = (
@@ -303,7 +300,6 @@ async def process_user_message(
             guest_lang
         )
 
-
 # =============================================================
 # ENDPOINTS WHATSAPP / TELEGRAM
 # =============================================================
@@ -322,9 +318,9 @@ async def verify_webhook(request: Request):
 @app.post("/webhook")
 async def webhook_receiver(request: Request):
     """
-    Webhook de WhatsApp (Meta).
-    Extrae el texto del huésped, ejecuta el pipeline
-    y responde en el MISMO idioma del mensaje más reciente del huésped.
+    Webhook de WhatsApp (Meta) con integración del BUFFER.
+    Ahora los mensajes se acumulan durante unos segundos de inactividad
+    antes de ser procesados por el pipeline.
     """
     try:
         data = await request.json()
@@ -363,14 +359,31 @@ async def webhook_receiver(request: Request):
 
         log.info(f"📨 Mensaje recibido de {sender}: {text}")
 
-        response_text = await process_user_message(
-            user_message=text,
-            chat_id=sender,
-            channel="whatsapp"
+        # =========================================================
+        # 🔄 NUEVO: ENVIAMOS EL MENSAJE AL BUFFER
+        # =========================================================
+        async def _process_buffered(conversation_id: str, combined_text: str, version: int):
+            """Callback que se ejecuta cuando el buffer expira."""
+            try:
+                log.info(f"🧠 Procesando lote buffered v{version} → {conversation_id}: {combined_text}")
+                response_text = await process_user_message(
+                    user_message=combined_text,
+                    chat_id=conversation_id,
+                    channel="whatsapp"
+                )
+                await channel_manager.send_message(conversation_id, response_text, channel="whatsapp")
+                log.info(f"📤 Respuesta enviada a {conversation_id} (versión {version})")
+            except Exception as e:
+                log.error(f"❌ Error en callback buffered: {e}", exc_info=True)
+
+        # Enviar mensaje al buffer manager
+        await buffer_manager.add_message(
+            conversation_id=sender,
+            text=text,
+            process_callback=_process_buffered,
         )
 
-        await channel_manager.send_message(sender, response_text, channel="whatsapp")
-        return JSONResponse({"status": "success"})
+        return JSONResponse({"status": "queued"})
 
     except Exception as e:
         log.error(f"❌ Error procesando webhook POST: {e}", exc_info=True)
@@ -397,28 +410,23 @@ async def telegram_webhook(request: Request):
         if not text_from_staff:
             return JSONResponse({"status": "ignored", "reason": "no text"})
 
-        # Tiene que ser respuesta (reply) a un mensaje que salió del bot al encargado
         original_msg_id = reply_to.get("message_id")
         if not original_msg_id:
             log.warning("⚠️ Mensaje Telegram sin reply_to → ignorado.")
             return JSONResponse({"status": "ignored", "reason": "no reply reference"})
 
-        # Recuperar el chat del huésped asociado a esa escalación
         original_chat_id = PENDING_ESCALATIONS.get(original_msg_id)
         if not original_chat_id:
             log.warning("⚠️ No se encontró chat_id asociado al mensaje respondido.")
             return JSONResponse({"status": "ignored", "reason": "no linked chat"})
 
-        # Idioma ACTUAL del huésped
         guest_lang = CHAT_LANG.get(original_chat_id, "es")
 
-        # Pulimos tono y traducimos al idioma del huésped
         polished_for_guest = language_manager.polish_for_guest(
             raw_message=text_from_staff,
             guest_lang=guest_lang,
         )
 
-        # Enviamos por WhatsApp al huésped
         await channel_manager.send_message(
             original_chat_id,
             polished_for_guest.strip(),
@@ -430,15 +438,12 @@ async def telegram_webhook(request: Request):
             f"({guest_lang}): {polished_for_guest[:200]}"
         )
 
-        # Limpiamos esa escalación puntual (1 reply = 1 cierre)
         PENDING_ESCALATIONS.pop(original_msg_id, None)
-
         return JSONResponse({"status": "success"})
 
     except Exception as e:
         log.error(f"❌ Error procesando webhook Telegram: {e}", exc_info=True)
         return JSONResponse({"status": "error", "message": str(e)}, status_code=500)
-
 
 # =============================================================
 # HEALTHCHECK / ROOT
@@ -446,21 +451,27 @@ async def telegram_webhook(request: Request):
 
 @app.get("/health")
 async def health_check():
-    return {"status": "healthy", "version": "2.2-language-aware"}
+    return {
+        "status": "healthy",
+        "version": "2.3-buffered",
+        "buffer": True,
+        "description": "Sistema de agentes con buffer de mensajes y supervisión",
+    }
 
 
 @app.get("/")
 async def root():
     return {
         "service": "HotelAI - Sistema de Agentes",
-        "version": "2.2",
-        "architecture": "orchestrator + language-aware routing",
+        "version": "2.3",
+        "architecture": "orchestrator + language-aware routing + buffered input",
         "components": [
             "Supervisor Input",
             "Main Agent (Orchestrator)",
             "Supervisor Output",
             "Language Manager",
             "Telegram Bridge (Interno)",
+            "Message Buffer",
         ],
     }
 
@@ -471,4 +482,5 @@ async def root():
 
 if __name__ == "__main__":
     import uvicorn
+    log.info("🚀 Iniciando servidor FastAPI con buffer habilitado...")
     uvicorn.run(app, host="0.0.0.0", port=8000)

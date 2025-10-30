@@ -1,4 +1,3 @@
-# channels_wrapper/manager.py
 import importlib
 import inspect
 import os
@@ -8,13 +7,12 @@ import asyncio
 
 log = logging.getLogger("ChannelManager")
 
+
 class ChannelManager:
     """
-    Carga y gestiona dinámicamente los canales (WhatsApp, Telegram, etc.)
-    desde la carpeta `channels_wrapper/`.
-
-    Cada canal debe tener una clase que herede de BaseChannel y aceptar
-    el parámetro `openai_api_key` en su constructor.
+    Administra los canales (WhatsApp, Telegram, etc.)
+    cargándolos dinámicamente desde `channels_wrapper/`.
+    Cada canal debe heredar de BaseChannel y aceptar `openai_api_key` en su constructor.
     """
 
     def __init__(self):
@@ -26,42 +24,41 @@ class ChannelManager:
     # 📦 Carga dinámica de canales
     # ------------------------------------------------------------------
     def _load_channels(self):
-        """
-        Busca e importa dinámicamente los canales disponibles en 
-        `channels_wrapper/`. Cada canal debe heredar de BaseChannel.
-        """
+        """Carga los módulos de canal disponibles."""
         possible_channels = {
             "whatsapp": "channels_wrapper.whatsapp.whatsapp_meta",
             "telegram": "channels_wrapper.telegram.telegram_channel",
-            # Puedes añadir más:
-            # "webchat": "channels_wrapper.webchat.webchat_channel",
+            # puedes añadir más canales aquí
         }
 
         for name, module_path in possible_channels.items():
             try:
                 module = importlib.import_module(module_path)
 
-                # Buscar clase que herede de BaseChannel
-                channel_class = None
-                for _, cls in inspect.getmembers(module, inspect.isclass):
-                    if cls.__module__ == module_path:
-                        channel_class = cls
-                        break
+                # Buscar la clase del canal
+                channel_class = next(
+                    (
+                        cls
+                        for _, cls in inspect.getmembers(module, inspect.isclass)
+                        if cls.__module__ == module_path
+                    ),
+                    None,
+                )
 
                 if not channel_class:
-                    print(f"⚠️ No se encontró clase de canal válida en {module_path}")
+                    log.warning(f"⚠️ No se encontró clase válida para canal '{name}' en {module_path}")
                     continue
 
-                # Instanciar canal con la API key
-                self.channels[name] = channel_class(openai_api_key=self.openai_api_key)
-                print(f"✅ Canal '{name}' cargado correctamente desde {module_path}")
+                # Instanciar canal
+                channel_instance = channel_class(openai_api_key=self.openai_api_key)
+                self.channels[name] = channel_instance
+                log.info(f"✅ Canal '{name}' cargado desde {module_path}")
 
             except Exception as e:
-                print(f"⚠️ Error cargando canal '{name}': {e}")
-                traceback.print_exc()
+                log.error(f"❌ Error cargando canal '{name}' ({module_path}): {e}", exc_info=True)
 
     # ------------------------------------------------------------------
-    # 🔌 Registro de canales en FastAPI
+    # 🔌 Registro en FastAPI
     # ------------------------------------------------------------------
     def register_all(self, app, hybrid_agent=None):
         """
@@ -73,36 +70,38 @@ class ChannelManager:
                 if hybrid_agent:
                     channel.agent = hybrid_agent
 
-                channel.register_routes(app)
-                print(f"🔗 Canal '{name}' registrado en FastAPI correctamente.")
+                if hasattr(channel, "register_routes"):
+                    channel.register_routes(app)
+                    log.info(f"🔗 Canal '{name}' registrado en FastAPI.")
+                else:
+                    log.warning(f"⚠️ Canal '{name}' no implementa register_routes().")
 
             except Exception as e:
-                print(f"⚠️ Error registrando canal '{name}' en FastAPI: {e}")
-                traceback.print_exc()
+                log.error(f"❌ Error registrando canal '{name}': {e}", exc_info=True)
 
     # ------------------------------------------------------------------
-    # 💬 Envío de mensajes a canales
+    # 💬 Envío de mensajes
     # ------------------------------------------------------------------
     async def send_message(self, chat_id: str, message: str, channel: str = "whatsapp"):
         """
-        Envía un mensaje al canal especificado (WhatsApp o Telegram).
+        Envía un mensaje al canal especificado (WhatsApp, Telegram, etc.).
+        Soporta métodos síncronos y asíncronos.
         """
         try:
             channel_obj = self.channels.get(channel)
             if not channel_obj:
                 raise ValueError(f"Canal no encontrado: {channel}")
 
-            # Algunos canales pueden tener send_message async o sync
             send_fn = getattr(channel_obj, "send_message", None)
             if not send_fn:
-                raise AttributeError(f"El canal '{channel}' no implementa send_message()")
+                raise AttributeError(f"El canal '{channel}' no implementa send_message().")
 
             if asyncio.iscoroutinefunction(send_fn):
                 await send_fn(chat_id, message)
             else:
                 send_fn(chat_id, message)
 
-            log.info(f"📤 Mensaje enviado al canal '{channel}' → {chat_id}")
+            log.info(f"📤 [{channel}] Mensaje enviado a {chat_id}: {message[:80]}...")
 
         except Exception as e:
             log.error(f"❌ Error enviando mensaje a {channel}: {e}", exc_info=True)
