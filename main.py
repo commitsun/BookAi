@@ -351,11 +351,20 @@ async def webhook_receiver(request: Request):
 
         msg = messages[0]
         sender = msg.get("from")
+        msg_type = msg.get("type")
         text = msg.get("text", {}).get("body", "")
+
+        # 🧠 NUEVO: manejar audios (y otros tipos)
+        if msg_type == "audio":
+            from channels_wrapper.utils.media_utils import transcribe_audio
+            from core.config import Settings as C
+            media_id = msg.get("audio", {}).get("id")
+            text = transcribe_audio(media_id, C.WHATSAPP_TOKEN, C.OPENAI_API_KEY)
 
         if not sender or not text:
             log.warning(f"⚠️ Mensaje inválido recibido: {msg}")
             return JSONResponse({"status": "ignored", "reason": "invalid message"})
+
 
         log.info(f"📨 Mensaje recibido de {sender}: {text}")
 
