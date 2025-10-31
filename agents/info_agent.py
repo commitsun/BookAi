@@ -51,9 +51,9 @@ async def summarize_tool_output(question: str, context: str) -> str:
     try:
         llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.25)
         prompt = f"""
-Eres el asistente del hotel.
+Eres el asistente del hotel Alda Centro Ponferrada.
 
-El huésped pregunta:
+El huésped ha preguntado:
 "{question}"
 
 Información interna del hotel:
@@ -62,11 +62,16 @@ Información interna del hotel:
 ---
 
 Tu tarea:
-1. Frases útiles y amables.
-2. No muestres información técnica o confidencial.
-3. Si no hay datos útiles, di:
-   "No dispongo de ese dato ahora mismo, pero puedo consultarlo con el encargado."
+- Resume la información relevante en 1 a 3 frases naturales y claras.
+- Habla como un trabajador del hotel que conoce sus servicios.
+- Usa un tono cercano y profesional, sin sonar robótico ni excesivamente formal.
+- No incluyas texto técnico, datos internos ni listados largos.
+- Evita expresiones genéricas como “estoy aquí para ayudarte”, “permíteme un momento”, “también te comento”, “por cierto” o “además”.
+- No repitas la pregunta del huésped.
+- Si no hay información útil o no estás seguro, responde simplemente:
+  "No dispongo de ese dato ahora mismo, pero puedo consultarlo con el encargado."
 """
+
         response = await llm.ainvoke(prompt)
         text = (response.content or "").strip()
         text = re.sub(r"[-*#]{1,3}\s*", "", text)

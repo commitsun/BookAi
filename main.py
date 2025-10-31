@@ -35,8 +35,8 @@ from core.language_manager import language_manager
 from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent as InternoAgentV2
-from core.message_buffer import MessageBufferManager  # ✅ añadido
-
+from core.message_buffer import MessageBufferManager  
+from channels_wrapper.utils.text_utils import send_fragmented_async
 # =============================================================
 # CONFIG GLOBAL / LOGGING
 # =============================================================
@@ -375,13 +375,28 @@ async def webhook_receiver(request: Request):
             """Callback que se ejecuta cuando el buffer expira."""
             try:
                 log.info(f"🧠 Procesando lote buffered v{version} → {conversation_id}: {combined_text}")
+
+                # 1️⃣ Ejecutar el pipeline normal para obtener la respuesta final
                 response_text = await process_user_message(
                     user_message=combined_text,
                     chat_id=conversation_id,
                     channel="whatsapp"
                 )
-                await channel_manager.send_message(conversation_id, response_text, channel="whatsapp")
-                log.info(f"📤 Respuesta enviada a {conversation_id} (versión {version})")
+
+                # 2️⃣ Si no hay respuesta, salimos
+                if not response_text or not response_text.strip():
+                    log.warning(f"⚠️ Respuesta vacía para {conversation_id}")
+                    return
+
+                # 3️⃣ Definimos función wrapper compatible con el fragmentador
+                async def send_to_channel(user_id: str, text: str):
+                    await channel_manager.send_message(user_id, text, channel="whatsapp")
+
+                # 4️⃣ Enviar respuesta fragmentada con pausas naturales
+                await send_fragmented_async(send_to_channel, conversation_id, response_text)
+
+                log.info(f"📤 Respuesta fragmentada enviada a {conversation_id} (versión {version})")
+
             except Exception as e:
                 log.error(f"❌ Error en callback buffered: {e}", exc_info=True)
 
