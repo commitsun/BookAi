@@ -13,7 +13,7 @@ from channels_wrapper.utils.text_utils import send_fragmented_async
 # 🔧 Configuración desde variables de entorno
 # =====================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_ENCARGADO_CHAT_ID")  # ID del encargado principal
+TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID del encargado principal
 
 log = logging.getLogger("notification")
 

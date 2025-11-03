@@ -4,6 +4,7 @@ import os
 import traceback
 import logging
 import asyncio
+from channels_wrapper.base_channel import BaseChannel  # 👈 Verificación de herencia
 
 log = logging.getLogger("ChannelManager")
 
@@ -28,19 +29,18 @@ class ChannelManager:
         possible_channels = {
             "whatsapp": "channels_wrapper.whatsapp.whatsapp_meta",
             "telegram": "channels_wrapper.telegram.telegram_channel",
-            # puedes añadir más canales aquí
         }
 
         for name, module_path in possible_channels.items():
             try:
                 module = importlib.import_module(module_path)
 
-                # Buscar la clase del canal
+                # Buscar la clase que herede de BaseChannel
                 channel_class = next(
                     (
                         cls
                         for _, cls in inspect.getmembers(module, inspect.isclass)
-                        if cls.__module__ == module_path
+                        if issubclass(cls, BaseChannel) and cls is not BaseChannel
                     ),
                     None,
                 )
@@ -52,10 +52,13 @@ class ChannelManager:
                 # Instanciar canal
                 channel_instance = channel_class(openai_api_key=self.openai_api_key)
                 self.channels[name] = channel_instance
-                log.info(f"✅ Canal '{name}' cargado desde {module_path}")
+                log.info(f"✅ Canal '{name}' cargado correctamente desde {module_path}")
 
             except Exception as e:
                 log.error(f"❌ Error cargando canal '{name}' ({module_path}): {e}", exc_info=True)
+
+        if not self.channels:
+            log.warning("⚠️ No se cargó ningún canal. Verifica los módulos en channels_wrapper/*")
 
     # ------------------------------------------------------------------
     # 🔌 Registro en FastAPI
@@ -72,12 +75,12 @@ class ChannelManager:
 
                 if hasattr(channel, "register_routes"):
                     channel.register_routes(app)
-                    log.info(f"🔗 Canal '{name}' registrado en FastAPI.")
+                    log.info(f"🔗 Canal '{name}' registrado correctamente en FastAPI.")
                 else:
                     log.warning(f"⚠️ Canal '{name}' no implementa register_routes().")
 
             except Exception as e:
-                log.error(f"❌ Error registrando canal '{name}': {e}", exc_info=True)
+                log.error(f"💥 Error registrando canal '{name}': {e}", exc_info=True)
 
     # ------------------------------------------------------------------
     # 💬 Envío de mensajes
@@ -90,7 +93,12 @@ class ChannelManager:
         try:
             channel_obj = self.channels.get(channel)
             if not channel_obj:
-                raise ValueError(f"Canal no encontrado: {channel}")
+                raise ValueError(f"Canal no encontrado o no cargado: {channel}")
+
+            # 👇 Fuerza el chat_id correcto para Telegram
+            if channel == "telegram":
+                from core.config import Settings as C
+                chat_id = C.TELEGRAM_CHAT_ID or chat_id
 
             send_fn = getattr(channel_obj, "send_message", None)
             if not send_fn:
@@ -104,4 +112,12 @@ class ChannelManager:
             log.info(f"📤 [{channel}] Mensaje enviado a {chat_id}: {message[:80]}...")
 
         except Exception as e:
-            log.error(f"❌ Error enviando mensaje a {channel}: {e}", exc_info=True)
+            log.error(f"❌ Error enviando mensaje por canal '{channel}': {e}", exc_info=True)
+
+
+    # ------------------------------------------------------------------
+    # 🧩 Utilidad: listar canales activos
+    # ------------------------------------------------------------------
+    def list_channels(self):
+        """Devuelve la lista de canales cargados actualmente."""
+        return list(self.channels.keys())

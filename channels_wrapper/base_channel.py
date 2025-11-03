@@ -45,6 +45,27 @@ class BaseChannel(ABC):
     def register_routes(self, app):
         ...
 
+    # ============================================================
+    # 🧩 MÉTODO REQUERIDO POR BaseChannel
+    # ============================================================
+    def extract_message_data(self, payload: dict):
+        """
+        Extrae los datos clave del payload recibido desde Telegram.
+        Devuelve: (user_id, message_id, message_type, message_text)
+        """
+        try:
+            message = payload.get("message", {})
+            chat = message.get("chat", {})
+            user_id = str(chat.get("id", "")) or None
+            message_id = str(message.get("message_id", "")) or None
+            message_type = "text"
+            message_text = (message.get("text") or "").strip() or None
+
+            return user_id, message_id, message_type, message_text
+        except Exception as e:
+            log.error(f"⚠️ Error extrayendo datos del mensaje de Telegram: {e}", exc_info=True)
+            return None, None, None, None
+
     # ==========================================================
     # Hooks opcionales
     # ==========================================================

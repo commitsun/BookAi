@@ -16,7 +16,7 @@ class Settings:
 
     # Telegram / encargado
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_ENCARGADO_CHAT_ID")
+    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
 
     # MCP / Supabase
     ENDPOINT_MCP = os.getenv("ENDPOINT_MCP")

@@ -1,12 +1,10 @@
 """
-🤖 Main Agent - Orquestador Principal
-====================================
+🤖 Main Agent - Orquestador Principal (v4 integrado con ReAct Interno)
+=====================================================================
+
 - Coordina TODAS las interacciones del sistema.
-- Actúa como orquestador: decide qué tool usar.
-- Incluye:
-  - Corte de loops infinitos
-  - Detección de necesidad de escalación
-  - Persistencia en memoria
+- Orquesta tools y maneja auto-escalaciones inteligentes.
+- Integrado con InternoAgent v4 (ReAct).
 """
 
 import logging
@@ -19,7 +17,7 @@ from langchain.tools import StructuredTool
 # Tools del sistema
 from tools.think_tool import create_think_tool
 from tools.inciso_tool import create_inciso_tool
-from tools.interno_tool import create_interno_tool
+from tools.interno_tool import create_interno_tools, ESCALATIONS_STORE  # ✅ corregido
 from tools.dispo_precios_tool import create_dispo_precios_tool
 from tools.info_hotel_tool import create_info_hotel_tool
 
@@ -27,6 +25,8 @@ from tools.info_hotel_tool import create_info_hotel_tool
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
 from core.memory_manager import MemoryManager
+
+# 🆕 InternoAgent v4
 from agents.interno_agent import InternoAgent
 
 log = logging.getLogger("MainAgent")
@@ -63,8 +63,9 @@ class MainAgent:
         base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
         self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
-        # Agente humano interno (Telegram)
+        # 🆕 Agente Interno (ReAct)
         self.interno_agent = InternoAgent()
+
         log.info(f"✅ MainAgent inicializado con modelo {model_name}")
 
     # --------------------------------------------------
@@ -98,7 +99,7 @@ class MainAgent:
             create_inciso_tool(send_callback=self.send_callback),
             create_dispo_precios_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_info_hotel_tool(memory_manager=self.memory_manager, chat_id=chat_id),
-            create_interno_tool(chat_id=chat_id, hotel_name=hotel_name),
+            *create_interno_tools(),  # ✅ integración con Interno v4
         ]
         log.info(f"🔧 {len(tools)} herramientas configuradas para MainAgent ({chat_id})")
         return tools
@@ -126,10 +127,9 @@ class MainAgent:
         Devuelve SIEMPRE texto listo para mandar al huésped.
         """
         try:
-            # 🚦 Bloquea loops reentrantes
+            # 🚦 Control anti-loops
             if AGENT_ACTIVE.get(chat_id):
                 log.warning(f"⚠️ Loop detectado para chat {chat_id}. Deteniendo ejecución temprana.")
-                # Marcamos explícitamente como INCISO para que el caller no lo audite ni lo escale
                 return "##INCISO## Estoy verificando tu solicitud con el sistema interno, un momento por favor."
 
             AGENT_ACTIVE[chat_id] = True
@@ -159,37 +159,41 @@ class MainAgent:
                 return_intermediate_steps=False
             )
 
-            # 🚀 Ejecutar
-            result = executor.invoke({
+            # 🚀 Ejecutar agente (async para soportar tools coroutine)
+            result = await executor.ainvoke({
                 "input": user_input,
                 "chat_history": chat_history or []
             })
 
-            # result normalmente es dict con "output"
             response = (
                 result.get("output", str(result))
                 if isinstance(result, dict)
                 else str(result)
-            ).strip()
+            )
+            response = (response or "").strip()
 
             log.info(f"🧠 Respuesta bruta del agente ({chat_id}): {response[:500]}")
 
-            # 🧠 AUTO-ESCALACIÓN: si las tools no han podido resolver
-            if "ESCALATION_REQUIRED" in response or "ESCALAR_A_INTERNO" in response:
-                log.warning("🚨 Señal de escalación detectada dentro de la respuesta del agente.")
-                await self.interno_agent.anotify_staff(
-                    (
-                        "Consulta escalada automáticamente:\n\n"
-                        f"User input:\n{user_input}\n\n"
-                        f"Contexto chat_id: {chat_id}"
-                    ),
-                    chat_id=chat_id,
-                    context={"motivo": "Sin respuesta clara / información insuficiente"}
+            # =============================================================
+            # 🔍 AUTOESCALACIÓN INTELIGENTE (Integración con Interno v4)
+            # =============================================================
+            if (
+                not response
+                or "no disponible" in response.lower()
+                or "consultar con el encargado" in response.lower()
+                or "ESCALATION_REQUIRED" in response
+                or "ESCALAR_A_INTERNO" in response
+            ):
+                log.warning(f"🚨 Escalación detectada (MainAgent) para {chat_id}")
+                await self.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_input,
+                    escalation_type="info_not_found",
+                    reason="El MainAgent no encontró información o detectó una consulta que requiere intervención humana.",
+                    context=f"Respuesta generada: {response[:150]}"
                 )
-                return (
-                    "##INCISO## Estoy verificando esa información con nuestro equipo. "
-                    "Te respondo enseguida."
-                )
+                # Modo silencioso (no responde al huésped)
+                return None
 
             # 💾 Guardar conversación
             if self.memory_manager and chat_id:
@@ -205,13 +209,22 @@ class MainAgent:
 
         except Exception as e:
             log.error(f"❌ Error en MainAgent para chat {chat_id}: {e}", exc_info=True)
-            return (
-                "##INCISO## Ha ocurrido un problema técnico al procesar tu solicitud. "
-                "Estoy comprobando la información con el equipo."
-            )
+
+            # 🔧 Escalar errores críticos a Interno
+            try:
+                await self.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_input,
+                    escalation_type="info_not_found",
+                    reason=f"Error crítico en ejecución del MainAgent: {str(e)}",
+                    context="Error no controlado en la orquestación principal."
+                )
+            except Exception as e2:
+                log.error(f"⚠️ Error durante la escalación interna: {e2}", exc_info=True)
+
+            return None
 
         finally:
-            # liberar lock anti-loop
             AGENT_ACTIVE.pop(chat_id, None)
 
 

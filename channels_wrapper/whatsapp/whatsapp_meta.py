@@ -11,7 +11,9 @@ from core.message_buffer import MessageBufferManager
 from channels_wrapper.base_channel import BaseChannel
 from channels_wrapper.utils.media_utils import transcribe_audio
 from channels_wrapper.utils.text_utils import send_fragmented_async
-from core.escalation_manager import mark_pending
+
+# ✅ Nuevo sistema de escalaciones (v4)
+from agents.interno_agent import InternoAgent
 
 log = logging.getLogger("whatsapp")
 
@@ -21,17 +23,19 @@ BUFFER_WAIT_SECONDS = 8
 
 class WhatsAppChannel(BaseChannel):
     """
-    Canal WhatsApp (Meta Graph API) que usa MessageBufferManager:
+    Canal WhatsApp (Meta Graph API) con integración a InternoAgent v4.
       - Agrupa mensajes consecutivos del mismo usuario.
-      - Reinicia el temporizador si llegan nuevos mensajes.
-      - Al pasar BUFFER_WAIT_SECONDS sin actividad, envía el bloque al agente.
+      - Envía el bloque tras un periodo de inactividad.
+      - Si la IA detecta una falta de información o necesidad de confirmación,
+        se activa la escalación automática con el agente interno ReAct.
     """
 
     def __init__(self, openai_api_key: str = None):
         super().__init__(openai_api_key=openai_api_key or C.OPENAI_API_KEY)
         self.buffer_manager = MessageBufferManager(idle_seconds=BUFFER_WAIT_SECONDS)
         self._processed_ids: set[str] = set()
-        log.info("✅ WhatsAppChannel inicializado con MessageBufferManager")
+        self.interno_agent = InternoAgent()  # ✅ Inicialización del nuevo agente
+        log.info("✅ WhatsAppChannel inicializado con InternoAgent v4 y MessageBufferManager")
 
     # ---------------------------------------------------------------------
     # Webhooks
@@ -119,12 +123,23 @@ class WhatsAppChannel(BaseChannel):
             self._append(cid, "assistant", response)
             log.info(f"📩 Respuesta enviada a {cid}: {response[:120]}")
 
-            # Escalación si el contenido lo sugiere (no bloqueante)
+            # ===========================================================
+            # 🆕 Nueva lógica: detección de escalación (InternoAgent v4)
+            # ===========================================================
             if any(
                 p in response.lower()
                 for p in ["encargado", "consultarlo", "permíteme contactar", "no dispongo"]
             ):
-                asyncio.create_task(mark_pending(cid, user_block))
+                log.info(f"🚨 Escalación detectada automáticamente para {cid}")
+                asyncio.create_task(
+                    self.interno_agent.escalate(
+                        guest_chat_id=cid,
+                        guest_message=user_block,
+                        escalation_type="info_not_found",
+                        reason="El agente indica falta de información",
+                        context=f"Detección automática desde WhatsApp para: {user_block[:100]}",
+                    )
+                )
 
         except asyncio.CancelledError:
             raise
