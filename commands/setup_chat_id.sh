@@ -25,7 +25,11 @@ if [ -n "$EXISTING_ID" ]; then
 fi
 
 # Pedir nuevo ID
-read -p "💬 Introduce tu nuevo 
+read -p "💬 Introduce tu nuevo Chat ID de Telegram (o deja vacío para mantener el actual): " CHAT_ID
+
+if [ -z "$CHAT_ID" ]; then
+  if [ -n "$EXISTING_ID" ]; then
+    CHAT_ID="$EXISTING_ID"
     echo "✅ Manteniendo Chat ID existente: $CHAT_ID"
   else
     echo "⚠️ No se ha introducido ningún Chat ID. Saliendo..."
