@@ -18,19 +18,14 @@ CURRENT_USER=$(whoami)
 echo "🧑 Usuario actual: $CURRENT_USER"
 
 # Leer el chat ID actual (si existe)
-EXISTING_ID=$(grep '^TELEGRAM_ENCARGADO_CHAT_ID=' "$ENV_FILE" | cut -d'=' -f2)
+EXISTING_ID=$(grep '^TELEGRAM_CHAT_ID=' "$ENV_FILE" | cut -d'=' -f2)
 
 if [ -n "$EXISTING_ID" ]; then
   echo "ℹ️ Chat ID actual: $EXISTING_ID"
 fi
 
 # Pedir nuevo ID
-read -p "💬 Introduce tu nuevo TELEGRAM_CHAT_ID (o presiona Enter para mantener el actual): " CHAT_ID
-
-# Si no se introduce nada, mantener el actual
-if [ -z "$CHAT_ID" ]; then
-  if [ -n "$EXISTING_ID" ]; then
-    CHAT_ID="$EXISTING_ID"
+read -p "💬 Introduce tu nuevo 
     echo "✅ Manteniendo Chat ID existente: $CHAT_ID"
   else
     echo "⚠️ No se ha introducido ningún Chat ID. Saliendo..."
@@ -38,8 +33,8 @@ if [ -z "$CHAT_ID" ]; then
   fi
 else
   echo "💾 Actualizando Chat ID a: $CHAT_ID"
-  sed -i '/^TELEGRAM_ENCARGADO_CHAT_ID=/d' "$ENV_FILE"
-  echo "TELEGRAM_ENCARGADO_CHAT_ID=$CHAT_ID" >> "$ENV_FILE"
+  sed -i '/^TELEGRAM_CHAT_ID=/d' "$ENV_FILE"
+  echo "TELEGRAM_CHAT_ID=$CHAT_ID" >> "$ENV_FILE"
 
   echo "♻️ Reiniciando contenedor para aplicar cambios..."
   cd "$PROJECT_DIR/commands"
