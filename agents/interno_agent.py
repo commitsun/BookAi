@@ -1,8 +1,9 @@
 """
-🤖 Interno Agent v4 - Agente Reactivo (versión limpia y optimizada)
-==================================================================
+🤖 Interno Agent v5 - Agente Reactivo con Memoria Integrada
+===========================================================
 Gestiona el flujo interno de escalaciones entre huésped y encargado.
-Incluye soporte para ajustes iterativos (reformulación de respuesta).
+- Guarda todas las interacciones en memoria (huésped ↔ encargado).
+- Permite trazabilidad de cada escalación.
 """
 
 import logging
@@ -14,7 +15,6 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from tools.interno_tool import create_interno_tools, ESCALATIONS_STORE
 
 log = logging.getLogger("InternoAgent")
-
 
 # =============================================================
 # 🧠 CREACIÓN DEL AGENTE REACTIVO
@@ -46,15 +46,18 @@ def create_interno_agent():
 
 
 # =============================================================
-# 🤖 CLASE PRINCIPAL DEL AGENTE INTERNO
+# 🤖 CLASE PRINCIPAL CON MEMORIA
 # =============================================================
 
 class InternoAgent:
-    """Orquesta el flujo entre el encargado (Telegram) y el huésped (WhatsApp)."""
+    """Orquesta el flujo entre el encargado (Telegram) y el huésped (WhatsApp),
+    con trazabilidad en memoria.
+    """
 
-    def __init__(self):
+    def __init__(self, memory_manager=None):
         self.executor = create_interno_agent()
         self.escalations = ESCALATIONS_STORE
+        self.memory_manager = memory_manager  # 🧠 integración aquí
 
     # =========================================================
     # 🔺 1️⃣ Crear nueva escalación
@@ -73,7 +76,18 @@ Nueva escalación:
 Usa la tool 'notificar_encargado' con estos datos.
 """
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
-        return (result.get("output") or str(result)).strip()
+        output = (result.get("output") or str(result)).strip()
+
+        # 🧠 Guardar evento en memoria
+        if self.memory_manager:
+            self.memory_manager.update_memory(
+                guest_chat_id,
+                f"[InternoAgent] Nueva escalación ({escalation_id}): {reason}",
+                f"Mensaje huésped: {guest_message}\nContexto: {context}\nSalida: {output}"
+            )
+
+        log.info(f"📢 Escalación creada {escalation_id} → {guest_chat_id}")
+        return output
 
     # =========================================================
     # 🧾 2️⃣ Procesar respuesta del encargado → generar borrador
@@ -85,8 +99,17 @@ Usa la tool 'notificar_encargado' con estos datos.
         - Si es un ajuste posterior, reformula con el prompt empático.
         """
         manager_reply_clean = manager_reply.strip().lower()
+        guest_chat_id = self._get_chat_from_escalation(escalation_id)
 
-        # 🧠 Si ya hay borrador → interpretar como ajustes (salvo que sea 'ok')
+        # 🧠 Registrar la intervención del encargado
+        if self.memory_manager and guest_chat_id:
+            self.memory_manager.update_memory(
+                guest_chat_id,
+                f"[InternoAgent] Encargado respondió (escalación {escalation_id})",
+                manager_reply
+            )
+
+        # Si ya hay borrador → ajustes
         if escalation_id in self.escalations and self.escalations[escalation_id].draft_response:
             if "ok" not in manager_reply_clean and "confirm" not in manager_reply_clean:
                 user_input = f"""
@@ -97,10 +120,19 @@ Usa la tool 'confirmar_y_enviar_respuesta' con confirmed=False y adjustments="{m
 """
                 result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
                 output = (result.get("output") or "").strip()
+
+                # Guardar en memoria
+                if self.memory_manager and guest_chat_id:
+                    self.memory_manager.update_memory(
+                        guest_chat_id,
+                        f"[InternoAgent] Ajustes solicitados por encargado ({escalation_id})",
+                        output
+                    )
+
                 log.info(f"🧾 Nuevo borrador ajustado para {escalation_id}: {output[:100]}...")
                 return output
 
-        # 🆕 Si no había borrador previo → generar uno nuevo
+        # Si no había borrador previo → generar uno nuevo
         user_input = f"""
 El encargado respondió a la escalación {escalation_id}:
 \"{manager_reply}\"
@@ -108,6 +140,15 @@ Usa la tool 'generar_borrador_respuesta'.
 """
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
         output = (result.get("output") or "").strip()
+
+        # 🧠 Guardar en memoria
+        if self.memory_manager and guest_chat_id:
+            self.memory_manager.update_memory(
+                guest_chat_id,
+                f"[InternoAgent] Nuevo borrador generado ({escalation_id})",
+                output
+            )
+
         log.info(f"🧾 Borrador inicial generado para {escalation_id}: {output[:100]}...")
         return output
 
@@ -129,5 +170,25 @@ Usa la tool 'confirmar_y_enviar_respuesta'.
 """
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
         output = (result.get("output") or "").strip()
+
+        # 🧠 Guardar en memoria
+        guest_chat_id = self._get_chat_from_escalation(escalation_id)
+        if self.memory_manager and guest_chat_id:
+            self.memory_manager.update_memory(
+                guest_chat_id,
+                f"[InternoAgent] Confirmación final ({escalation_id}) → confirmed={confirmed}",
+                output
+            )
+
         log.info(f"📤 Respuesta final procesada para {escalation_id}: {output[:100]}...")
         return output
+
+    # =========================================================
+    # 🔍 MÉTODO AUXILIAR: buscar chat_id desde el registro
+    # =========================================================
+    def _get_chat_from_escalation(self, escalation_id: str):
+        """Obtiene el chat_id asociado a una escalación si está registrado."""
+        esc = self.escalations.get(escalation_id)
+        if not esc:
+            return None
+        return getattr(esc, "chat_id", None) or getattr(esc, "guest_chat_id", None)

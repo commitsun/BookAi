@@ -51,27 +51,41 @@ async def _evaluar_input_func(mensaje_usuario: str) -> str:
             }
             return f"Interno({json.dumps(fallback, ensure_ascii=False)})"
 
+
 # Registrar como herramienta MCP
 evaluar_input = mcp.tool()(_evaluar_input_func)
 
+
 # =============================================================
-# 🚦 CLASE PRINCIPAL
+# 🚦 CLASE PRINCIPAL CON MEMORIA
 # =============================================================
 
 class SupervisorInputAgent:
     """
-    Interpreta la salida del modelo y devuelve un dict estandarizado.
-    Se toleran ligeras desviaciones de formato, priorizando evitar falsos negativos.
+    Evalúa los mensajes entrantes del huésped para detectar si son apropiados.
+    Ahora guarda en memoria cada evaluación realizada.
     """
 
-    async def validate(self, mensaje_usuario: str) -> dict:
+    def __init__(self, memory_manager=None):
+        self.memory_manager = memory_manager
+
+    async def validate(self, mensaje_usuario: str, chat_id: str = None) -> dict:
         """
         Devuelve un diccionario con el campo 'estado' como mínimo.
         Si no se puede interpretar con certeza, se asume Aprobado.
+        Además, guarda el resultado en la memoria si está habilitada.
         """
         try:
             raw = await _evaluar_input_func(mensaje_usuario)
             salida = (raw or "").strip()
+
+            # 🧠 Guardar en memoria el input y resultado
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    f"[SupervisorInput] Evaluando mensaje:\n{mensaje_usuario}",
+                    f"Resultado evaluación:\n{salida}"
+                )
 
             # --- Caso 1: salida exacta 'Aprobado'
             if salida.lower() == "aprobado":
@@ -125,6 +139,7 @@ class SupervisorInputAgent:
         except Exception as e:
             log.error(f"❌ Error en validate(): {e}", exc_info=True)
             return {"estado": "Aprobado", "motivo": "Error interno, aprobado por seguridad"}
+
 
 # =============================================================
 # 🚀 ENTRYPOINT MCP (solo si se ejecuta como script)

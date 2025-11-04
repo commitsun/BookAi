@@ -22,11 +22,13 @@ class DispoPreciosAgent:
     Subagente encargado de responder preguntas sobre disponibilidad,
     tipos de habitación, precios y reservas.
     Usa las tools 'buscar_token' y 'Disponibilidad_y_precios' del MCP.
+    Ahora incluye integración con MemoryManager para mantener trazabilidad.
     """
 
-    def __init__(self, model_name: str = "gpt-4.1-mini"):
+    def __init__(self, model_name: str = "gpt-4.1-mini", memory_manager=None):
         self.model_name = model_name
         self.llm = ChatOpenAI(model=self.model_name, temperature=0.2)
+        self.memory_manager = memory_manager  # 🧠 integración
 
         # 🧩 Construcción inicial del prompt con contexto temporal
         base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
@@ -36,7 +38,7 @@ class DispoPreciosAgent:
         self.tools = [self._build_tool()]
         self.agent_executor = self._build_agent_executor()
 
-        log.info("💰 DispoPreciosAgent inicializado correctamente.")
+        log.info("💰 DispoPreciosAgent inicializado correctamente con memoria.")
 
     # ----------------------------------------------------------
     def _get_default_prompt(self) -> str:
@@ -150,8 +152,8 @@ class DispoPreciosAgent:
         return loop.run_until_complete(coro(*args, **kwargs))
 
     # ----------------------------------------------------------
-    async def handle(self, pregunta: str, chat_history=None) -> str:
-        """Entrada principal del subagente (modo asíncrono)."""
+    async def handle(self, pregunta: str, chat_history=None, chat_id: str = None) -> str:
+        """Entrada principal del subagente (modo asíncrono) con soporte de memoria."""
         log.info(f"📩 [DispoPreciosAgent] Recibida pregunta: {pregunta}")
         lang = language_manager.detect_language(pregunta)
 
@@ -183,18 +185,38 @@ class DispoPreciosAgent:
 
             respuesta_final = " ".join(cleaned).strip()
 
+            # 🧠 Guardar interacción en memoria
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    "[DispoPreciosAgent] Pregunta sobre disponibilidad o precios",
+                    f"Entrada: {pregunta}\n\nRespuesta: {respuesta_final}"
+                )
+
             log.info(f"✅ [DispoPreciosAgent] Respuesta final: {respuesta_final[:200]}")
             return respuesta_final or "No dispongo de disponibilidad en este momento."
 
         except Exception as e:
             log.error(f"❌ Error en DispoPreciosAgent: {e}", exc_info=True)
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    "[DispoPreciosAgent] Error interno al procesar disponibilidad/precios.",
+                    str(e)
+                )
             return "Ha ocurrido un problema al obtener la disponibilidad."
 
     # ----------------------------------------------------------
-    def invoke(self, user_input: str, chat_history=None) -> str:
+    def invoke(self, user_input: str, chat_history=None, chat_id: str = None) -> str:
         """Versión síncrona (wrapper) para integración con DispoPreciosTool."""
         try:
-            return self._sync_run(self.handle, user_input, chat_history)
+            return self._sync_run(self.handle, user_input, chat_history, chat_id)
         except Exception as e:
             log.error(f"❌ Error en DispoPreciosAgent.invoke: {e}", exc_info=True)
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    "[DispoPreciosAgent] Error en invocación síncrona.",
+                    str(e)
+                )
             return "Ha ocurrido un error al procesar la disponibilidad o precios."

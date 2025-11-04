@@ -52,25 +52,40 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
             }
             return f"Interno({json.dumps(fallback, ensure_ascii=False)})"
 
+
 auditar_respuesta = mcp.tool()(_auditar_respuesta_func)
 
+
 # =============================================================
-# 🚦 CLASE PRINCIPAL
+# 🚦 CLASE PRINCIPAL CON MEMORIA
 # =============================================================
 
 class SupervisorOutputAgent:
-    async def validate(self, user_input: str, agent_response: str) -> dict:
+    """
+    Agente de auditoría de salida con integración de memoria.
+    Guarda cada interacción (entrada y salida) para mantener trazabilidad.
+    """
+
+    def __init__(self, memory_manager=None):
+        self.memory_manager = memory_manager
+
+    async def validate(self, user_input: str, agent_response: str, chat_id: str = None) -> dict:
         """Normaliza la salida del modelo y aplica tolerancia contextual."""
         try:
             raw = await _auditar_respuesta_func(user_input, agent_response)
             salida = (raw or "").strip()
 
-            # =====================================================
-            # 🧩 Detección temprana de respuestas válidas extensas
-            # =====================================================
+            # 🧠 Guardar auditoría en memoria si está habilitada
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    f"[SupervisorOutput] Validando respuesta:\n{user_input}",
+                    f"Salida modelo:\n{salida}"
+                )
+
             conversational_tokens = [
-                "¿te gustaría", "¿prefieres", "¿deseas", "¿quieres", "puedo ayudarte",
-                "¿necesitas más información"
+                "¿te gustaría", "¿prefieres", "¿deseas", "¿quieres",
+                "puedo ayudarte", "¿necesitas más información"
             ]
             if (
                 any(t in agent_response.lower() for t in conversational_tokens)
@@ -94,7 +109,6 @@ class SupervisorOutputAgent:
                     data = json.loads(inner)
                     estado = str(data.get("estado", "")).lower()
 
-                    # Si el modelo marca rechazo pero la respuesta es segura o amable
                     if any(pal in estado for pal in ["rechazado", "no aprobado"]):
                         if (
                             len(agent_response.split()) > 8
@@ -155,6 +169,7 @@ class SupervisorOutputAgent:
         except Exception as e:
             log.error(f"⚠️ Error en validate (output): {e}", exc_info=True)
             return {"estado": "Aprobado", "motivo": "Error interno, aprobado por seguridad"}
+
 
 # =============================================================
 # 🚀 ENTRYPOINT MCP

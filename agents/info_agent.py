@@ -1,8 +1,8 @@
 """
-📚 InfoAgent v2 - Subagente de información del hotel (con escalación automática)
-===============================================================================
+📚 InfoAgent v3 - Subagente de información del hotel (con memoria + escalación automática)
+==========================================================================================
 Responde preguntas generales sobre el hotel: servicios, horarios, políticas, etc.
-Si no encuentra información clara → Escala automáticamente al encargado vía Telegram.
+Ahora incluye integración con MemoryManager para mantener contexto conversacional.
 """
 
 import re
@@ -18,7 +18,7 @@ from core.utils.utils_prompt import load_prompt
 from core.utils.normalize_reply import normalize_reply
 from core.mcp_client import mcp_client
 from core.utils.time_context import get_time_context
-from agents.interno_agent import InternoAgent  # 👈 se añade
+from agents.interno_agent import InternoAgent  # 👈 Escalación interna
 
 log = logging.getLogger("InfoAgent")
 
@@ -26,7 +26,6 @@ ESCALATE_SENTENCE = (
     "🕓 Un momento por favor, voy a consultarlo con el encargado. "
     "Permíteme contactar con el encargado."
 )
-
 
 # =====================================================
 # 🔍 Helper: detectar si parece volcado técnico interno
@@ -62,22 +61,20 @@ Información interna del hotel:
 ---
 
 Tu tarea:
-- Resume la información relevante en 1 a 3 frases naturales y claras.
+- Da información relevante en frases naturales y claras.
 - Habla como un trabajador del hotel que conoce sus servicios.
 - Usa un tono cercano y profesional, sin sonar robótico ni excesivamente formal.
 - No incluyas texto técnico, datos internos ni listados largos.
-- Evita expresiones genéricas como “estoy aquí para ayudarte”, “permíteme un momento”, “también te comento”, “por cierto” o “además”.
+- Evita expresiones genéricas como “estoy aquí para ayudarte” o “además”.
 - No repitas la pregunta del huésped.
-- Si no hay información útil o no estás seguro, responde simplemente:
+- Si no hay información útil, responde:
   "No dispongo de ese dato ahora mismo, pero puedo consultarlo con el encargado."
 """
-
         response = await llm.ainvoke(prompt)
         text = (response.content or "").strip()
         text = re.sub(r"[-*#]{1,3}\s*", "", text)
         text = re.sub(r"\s{2,}", " ", text)
         return text[:600]
-
     except Exception as e:
         log.error(f"⚠️ Error en summarize_tool_output: {e}", exc_info=True)
         return "No dispongo de ese dato ahora mismo, pero puedo consultarlo con el encargado."
@@ -123,25 +120,27 @@ async def hotel_information_tool(query: str) -> str:
 
 
 # =====================================================
-# 🏨 Clase InfoAgent
+# 🏨 Clase InfoAgent (con memoria integrada)
 # =====================================================
 class InfoAgent:
     """
     Subagente que responde preguntas generales sobre el hotel.
     Escala automáticamente al encargado si no hay información útil.
+    Ahora integra memoria persistente por chat_id.
     """
 
-    def __init__(self, model_name: str = "gpt-4.1-mini"):
+    def __init__(self, model_name: str = "gpt-4.1-mini", memory_manager=None):
         self.model_name = model_name
         self.llm = ChatOpenAI(model=self.model_name, temperature=0.2)
-        self.interno_agent = InternoAgent()  # 👈 se añade
+        self.interno_agent = InternoAgent(memory_manager=memory_manager)
+        self.memory_manager = memory_manager  # 🧠 integración aquí
 
         base_prompt = load_prompt("info_hotel_prompt.txt") or self._get_default_prompt()
         self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
         self.tools = [self._build_tool()]
         self.agent_executor = self._build_agent_executor()
 
-        log.info("✅ InfoAgent inicializado correctamente.")
+        log.info("✅ InfoAgent inicializado con memoria.")
 
     # --------------------------------------------------
     def _get_default_prompt(self) -> str:
@@ -189,6 +188,7 @@ class InfoAgent:
         """
         Punto de entrada unificado (usado por la tool `info_hotel_tool`).
         Si no hay información → Escalación automática.
+        Guarda interacciones en memoria por huésped.
         """
         log.info(f"📩 [InfoAgent] Consulta: {user_input}")
         lang = language_manager.detect_language(user_input)
@@ -212,6 +212,14 @@ class InfoAgent:
 
             respuesta_final = language_manager.ensure_language(output, lang)
 
+            # 🧠 Guardar en memoria
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    f"[InfoAgent] Pregunta del huésped:",
+                    f"{user_input}\n\nRespuesta generada:\n{respuesta_final}"
+                )
+
             # 🔎 Detección de falta de información
             no_info = any(
                 p in respuesta_final.lower()
@@ -227,17 +235,43 @@ class InfoAgent:
                     f"❓ *Consulta del huésped:*\n{user_input}\n\n"
                     "🧠 *Contexto:*\nEl sistema no encontró información relevante en la base de conocimiento."
                 )
-                self.interno_agent.notify_staff(msg, chat_id, context={"tipo": "info_no_encontrada"})
-                return "ESCALATION_REQUIRED"
+
+                # 🧠 Registrar escalación también en memoria
+                if self.memory_manager and chat_id:
+                    self.memory_manager.update_memory(
+                        chat_id,
+                        "[InfoAgent] Escalación automática al encargado.",
+                        msg
+                    )
+
+                await self.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_input,
+                    escalation_type="info_no_encontrada",
+                    reason="Falta de información relevante en la base de conocimiento.",
+                    context="Escalación automática desde InfoAgent"
+                )
+                return language_manager.ensure_language(ESCALATE_SENTENCE, lang)
 
             log.info(f"✅ [InfoAgent] Respuesta final: {respuesta_final[:200]}")
             return respuesta_final or ESCALATE_SENTENCE
 
         except Exception as e:
             log.error(f"💥 Error en InfoAgent.invoke: {e}", exc_info=True)
-            self.interno_agent.notify_staff(
-                f"Error en InfoAgent al procesar:\n{user_input}",
-                chat_id,
-                context={"tipo": "error_runtime"}
+
+            if self.memory_manager and chat_id:
+                self.memory_manager.update_memory(
+                    chat_id,
+                    "[InfoAgent] Error interno en procesamiento.",
+                    str(e)
+                )
+
+            await self.interno_agent.escalate(
+                guest_chat_id=chat_id,
+                guest_message=user_input,
+                escalation_type="error_runtime",
+                reason="Error en ejecución del InfoAgent",
+                context="Error interno durante la invocación"
             )
-            return "ESCALATION_REQUIRED"
+
+            return language_manager.ensure_language(ESCALATE_SENTENCE, lang)
