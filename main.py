@@ -229,19 +229,48 @@ async def verify_webhook(request: Request):
 
 @app.post("/webhook")
 async def whatsapp_webhook(request: Request):
-    """Webhook WhatsApp (Meta) + Buffer inteligente."""
+    """
+    Webhook WhatsApp (Meta) + Buffer inteligente + Transcripción de audio (Whisper)
+    """
     try:
         data = await request.json()
         value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
         msg = value.get("messages", [{}])[0]
         sender = msg.get("from")
-        text = msg.get("text", {}).get("body", "")
+        msg_type = msg.get("type")
 
+        text = ""
+
+        # ==========================================================
+        # 🗣️ Si es texto normal
+        # ==========================================================
+        if msg_type == "text":
+            text = msg.get("text", {}).get("body", "")
+
+        # ==========================================================
+        # 🎧 Si es un audio → transcribir con Whisper
+        # ==========================================================
+        elif msg_type == "audio":
+            from channels_wrapper.utils.media_utils import transcribe_audio
+            from core.config import Settings as C
+
+            media_id = msg.get("audio", {}).get("id")
+            if media_id:
+                log.info(f"🎧 Audio recibido (media_id={media_id}), iniciando transcripción...")
+                text = transcribe_audio(media_id, C.WHATSAPP_TOKEN, C.OPENAI_API_KEY)
+                log.info(f"📝 Transcripción completada: {text}")
+
+        # ==========================================================
+        # 🚫 Si no hay texto ni audio válido → ignorar
+        # ==========================================================
         if not sender or not text:
             return JSONResponse({"status": "ignored"})
 
         log.info(f"💬 WhatsApp {sender}: {text}")
 
+        # ==========================================================
+        # 🧠 Buffer inteligente de mensajes (para agrupar texto)
+        # ==========================================================
         async def _process_buffered(cid: str, combined_text: str, version: int):
             log.info(f"🧠 Procesando lote buffered v{version} → {cid}")
             resp = await process_user_message(combined_text, cid, channel="whatsapp")
@@ -252,9 +281,13 @@ async def whatsapp_webhook(request: Request):
             async def send_to_channel(uid: str, txt: str):
                 await channel_manager.send_message(uid, txt, channel="whatsapp")
 
+            # Fragmentación y envío con ritmo humano
+            from channels_wrapper.utils.text_utils import send_fragmented_async
             await send_fragmented_async(send_to_channel, cid, resp)
 
+        # Añadir mensaje al buffer
         await buffer_manager.add_message(sender, text, _process_buffered)
+
         return JSONResponse({"status": "queued"})
 
     except Exception as e:
