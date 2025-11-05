@@ -22,13 +22,13 @@ class DispoPreciosAgent:
     Subagente encargado de responder preguntas sobre disponibilidad,
     tipos de habitación, precios y reservas.
     Usa las tools 'buscar_token' y 'Disponibilidad_y_precios' del MCP.
-    Ahora incluye integración con MemoryManager para mantener trazabilidad.
+    Integrado con MemoryManager para trazabilidad completa.
     """
 
     def __init__(self, model_name: str = "gpt-4.1-mini", memory_manager=None):
         self.model_name = model_name
         self.llm = ChatOpenAI(model=self.model_name, temperature=0.2)
-        self.memory_manager = memory_manager  # 🧠 integración
+        self.memory_manager = memory_manager
 
         # 🧩 Construcción inicial del prompt con contexto temporal
         base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
@@ -38,7 +38,7 @@ class DispoPreciosAgent:
         self.tools = [self._build_tool()]
         self.agent_executor = self._build_agent_executor()
 
-        log.info("💰 DispoPreciosAgent inicializado correctamente con memoria.")
+        log.info("💰 DispoPreciosAgent inicializado correctamente con memoria y contexto temporal.")
 
     # ----------------------------------------------------------
     def _get_default_prompt(self) -> str:
@@ -132,7 +132,7 @@ class DispoPreciosAgent:
             verbose=True,
             return_intermediate_steps=False,
             handle_parsing_errors=True,
-            max_iterations=1,
+            max_iterations=4,
             max_execution_time=60
         )
 
@@ -189,8 +189,8 @@ class DispoPreciosAgent:
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
-                    "[DispoPreciosAgent] Pregunta sobre disponibilidad o precios",
-                    f"Entrada: {pregunta}\n\nRespuesta: {respuesta_final}"
+                    role="assistant",
+                    content=f"[DispoPreciosAgent] Entrada: {pregunta}\n\nRespuesta: {respuesta_final}"
                 )
 
             log.info(f"✅ [DispoPreciosAgent] Respuesta final: {respuesta_final[:200]}")
@@ -201,8 +201,8 @@ class DispoPreciosAgent:
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
-                    "[DispoPreciosAgent] Error interno al procesar disponibilidad/precios.",
-                    str(e)
+                    role="system",
+                    content=f"[DispoPreciosAgent] Error interno: {e}"
                 )
             return "Ha ocurrido un problema al obtener la disponibilidad."
 
@@ -216,7 +216,7 @@ class DispoPreciosAgent:
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
-                    "[DispoPreciosAgent] Error en invocación síncrona.",
-                    str(e)
+                    role="system",
+                    content=f"[DispoPreciosAgent] Error en invocación síncrona: {e}"
                 )
             return "Ha ocurrido un error al procesar la disponibilidad o precios."

@@ -31,57 +31,55 @@ class DispoPreciosTool:
     Herramienta que delega consultas de disponibilidad/precios al subagente especializado.
     El subagente tiene acceso al PMS del hotel vía MCP server.
     """
-    
+
     def __init__(self, memory_manager=None, chat_id: str = ""):
         """
         Args:
             memory_manager: Gestor de memoria para contexto conversacional
             chat_id: ID del chat (para tracking)
         """
-        self.agent = DispoPreciosAgent(model_name="gpt-4.1-mini")
         self.memory_manager = memory_manager
         self.chat_id = chat_id
+
+        # ✅ CORREGIDO: propagar memory_manager al subagente
+        self.agent = DispoPreciosAgent(
+            model_name="gpt-4.1-mini",
+            memory_manager=memory_manager
+        )
+
         log.info(f"✅ DispoPreciosTool inicializado para chat {chat_id}")
-    
+
     def _procesar_consulta(self, consulta: str) -> str:
         """
         Delega la consulta al subagente de disponibilidad y precios.
-        
-        Args:
-            consulta: Pregunta sobre disponibilidad, precios o reservas
-            
-        Returns:
-            Respuesta del subagente con la información solicitada
         """
         try:
             log.info(f"🏨 Procesando consulta de dispo/precios: {consulta[:80]}...")
-            
-            # Obtener contexto de memoria si está disponible
+
+            # ✅ Obtener historial correcto desde MemoryManager
             history = []
             if self.memory_manager and self.chat_id:
                 try:
-                    memory = self.memory_manager.get_memory(self.chat_id)
-                    if memory and hasattr(memory, 'chat_memory'):
-                        history = memory.chat_memory.messages
+                    history = self.memory_manager.get_memory_as_messages(self.chat_id)
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo obtener memoria: {e}")
-            
+
             # Invocar al subagente
             respuesta = self.agent.invoke(
                 user_input=consulta,
                 chat_history=history
             )
-            
-            log.info(f"✅ Respuesta generada: {len(respuesta)} caracteres")
-            
+
+            log.info(f"✅ Respuesta generada ({len(respuesta)} caracteres)")
             return respuesta
-            
+
         except Exception as e:
-            log.error(f"❌ Error en subagente dispo/precios: {e}")
+            log.error(f"❌ Error en subagente dispo/precios: {e}", exc_info=True)
             return (
                 f"❌ Error al consultar disponibilidad y precios: {str(e)}. "
                 "Por favor, reformula tu consulta o contacta directamente con el hotel."
             )
+
     
     def as_tool(self) -> StructuredTool:
         """

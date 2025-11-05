@@ -1,8 +1,8 @@
 import logging
 from datetime import datetime
-from core.db import supabase  # 👈 reutiliza la conexión ya existente
+from core.db import supabase  # ✅ reutiliza la conexión ya existente
 
-log = logging.getLogger("EscalationsRepo")
+log = logging.getLogger("EscalationsDB")
 
 # ======================================================
 # 💾 Crear o actualizar una escalación
@@ -13,8 +13,10 @@ def save_escalation(escalation: dict):
     Si ya existe (por el mismo escalation_id), se actualiza.
     """
     try:
+        # Garantiza que siempre haya un timestamp
+        escalation["updated_at"] = datetime.utcnow().isoformat()
         supabase.table("escalations").upsert(escalation).execute()
-        log.info(f"💾 Escalación {escalation['escalation_id']} guardada/actualizada correctamente.")
+        log.info(f"💾 Escalación {escalation.get('escalation_id')} guardada/actualizada correctamente.")
     except Exception as e:
         log.error(f"⚠️ Error guardando escalación {escalation.get('escalation_id')}: {e}", exc_info=True)
 
@@ -32,7 +34,10 @@ def get_escalation(escalation_id: str):
             .single()
             .execute()
         )
-        return result.data
+        data = result.data
+        if not data:
+            log.warning(f"⚠️ Escalación {escalation_id} no encontrada en la base de datos.")
+        return data
     except Exception as e:
         log.error(f"⚠️ Error obteniendo escalación {escalation_id}: {e}", exc_info=True)
         return None
@@ -43,7 +48,7 @@ def get_escalation(escalation_id: str):
 # ======================================================
 def update_escalation(escalation_id: str, updates: dict):
     """
-    Actualiza los campos de una escalación.
+    Actualiza los campos de una escalación existente.
     Ejemplo:
         update_escalation("esc_34683527049_1762168364", {"draft_response": "Texto actualizado"})
     """

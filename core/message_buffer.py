@@ -1,7 +1,9 @@
-# core/message_buffer.py
 import asyncio
+import logging
 from dataclasses import dataclass, field
 from typing import Callable, Awaitable, Dict, List, Optional
+
+log = logging.getLogger("MessageBufferManager")
 
 
 @dataclass
@@ -15,14 +17,14 @@ class ConversationState:
 
 class MessageBufferManager:
     """
-    Administra un buffer por conversación con:
-      - Acumulación de mensajes durante `idle_seconds`
-      - Reinicio del temporizador con cada nuevo mensaje
-      - Al expirar, envía el lote al callback de proceso
-      - Si llega un mensaje mientras se procesa, CANCELA el procesamiento previo
+    Administra un buffer por conversación:
+      ✅ Agrupa mensajes consecutivos del mismo usuario
+      ✅ Reinicia temporizador con cada nuevo mensaje
+      ✅ Combina mensajes como bloque coherente (con saltos de línea)
+      ✅ Llama al callback tras inactividad de `idle_seconds`
     """
 
-    def __init__(self, idle_seconds: float = 10.0):
+    def __init__(self, idle_seconds: float = 8.0):
         self.idle_seconds = float(idle_seconds)
         self._convs: Dict[str, ConversationState] = {}
 
@@ -38,33 +40,30 @@ class MessageBufferManager:
         process_callback: Callable[[str, str, int], Awaitable[None]],
     ):
         """
-        Añade un mensaje al buffer y gestiona temporizador + cancelaciones.
-        - process_callback(conversation_id, combined_text, version)
+        Añade un mensaje al buffer y reinicia el temporizador.
+        Si no hay más mensajes después de `idle_seconds`, se procesa el bloque combinado.
         """
         state = self._get_state(conversation_id)
 
         async with state.lock:
-            # Guardar fragmento
             state.messages.append(text.strip())
-
-            # Nueva "versión" de conversación → invalida procesos en curso
             state.version += 1
             current_version = state.version
 
-            # Cancelar temporizador anterior si seguía vivo
+            # Cancelar temporizador previo
             if state.timer_task and not state.timer_task.done():
                 state.timer_task.cancel()
-                state.timer_task = None
 
-            # Si hay un procesamiento en curso, cancelarlo.
+            # Cancelar procesamiento si aún no terminó
             if state.processing_task and not state.processing_task.done():
                 state.processing_task.cancel()
-                state.processing_task = None
 
-            # Crear nuevo temporizador
+            # Nuevo temporizador
             state.timer_task = asyncio.create_task(
                 self._start_timer(conversation_id, current_version, process_callback)
             )
+
+        log.info(f"🧩 Buffer actualizado ({len(state.messages)} msgs) para {conversation_id}")
 
     async def _start_timer(
         self,
@@ -72,29 +71,47 @@ class MessageBufferManager:
         version: int,
         process_callback: Callable[[str, str, int], Awaitable[None]],
     ):
-        """Espera `idle_seconds`. Si nadie interrumpe, flush y procesa el lote."""
+        """Espera `idle_seconds`. Si no llegan más mensajes, procesa el bloque."""
         try:
             await asyncio.sleep(self.idle_seconds)
             state = self._get_state(conversation_id)
 
             async with state.lock:
-                # Si llegó otro mensaje después, esta versión ya no vale
                 if version != state.version:
-                    return
+                    return  # hubo nuevos mensajes → cancelar
 
-                # Combinar y limpiar buffer
-                combined = " ".join(m for m in state.messages if m).strip()
+                messages = list(state.messages)
                 state.messages.clear()
                 state.timer_task = None
 
-                if not combined:
+                if not messages:
                     return
 
-                # Lanzar tarea de procesamiento
+                # 🔹 Combinar mensajes con saltos de línea y limpieza
+                combined = self._combine_messages(messages)
+
+                # Lanzar procesamiento
                 state.processing_task = asyncio.create_task(
                     process_callback(conversation_id, combined, version)
                 )
 
         except asyncio.CancelledError:
-            # Timer cancelado por llegada de nuevos mensajes → simplemente salir
-            return
+            return  # Timer cancelado, llega mensaje nuevo
+
+    def _combine_messages(self, messages: List[str]) -> str:
+        """
+        Une mensajes en un bloque estructurado y legible para el modelo.
+        - Elimina duplicados triviales
+        - Une con saltos de línea para claridad
+        """
+        cleaned = []
+        last = ""
+        for m in messages:
+            m = m.strip()
+            if m and m != last:
+                cleaned.append(m)
+                last = m
+
+        combined = "\n".join(cleaned).strip()
+        log.info(f"🧠 Combinando {len(cleaned)} mensajes:\n{combined}")
+        return combined

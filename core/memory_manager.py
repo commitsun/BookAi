@@ -76,11 +76,18 @@ class MemoryManager:
     def save(self, conversation_id: str, role: str, content: str) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
+        Cumple con la restricción de Supabase (role ∈ {'user','assistant','system','tool'}).
+        No añade etiquetas ni prefijos en el contenido.
         """
         cid = self._clean_id(conversation_id)
+
+        # Normaliza el rol
+        valid_roles = {"user", "assistant", "system", "tool"}
+        normalized_role = role if role in valid_roles else "assistant"
+
         entry = {
-            "role": role,
-            "content": content,
+            "role": normalized_role,
+            "content": content.strip(),
             "created_at": datetime.utcnow().isoformat(),
         }
 
@@ -91,10 +98,11 @@ class MemoryManager:
 
         # Guardar en Supabase
         try:
-            save_message(cid, role, content)
-            log.debug(f"💾 Guardado en Supabase: ({cid}, {role})")
+            save_message(cid, normalized_role, entry["content"])
+            log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:
-            log.warning(f"⚠️ No se pudo guardar mensaje en Supabase ({cid}): {e}")
+            log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
+
 
     # ----------------------------------------------------------------------
     def clear(self, conversation_id: str) -> None:
@@ -105,3 +113,50 @@ class MemoryManager:
         if cid in self.runtime_memory:
             del self.runtime_memory[cid]
             log.info(f"🧹 Memoria temporal limpiada para {cid}")
+    # ----------------------------------------------------------------------
+    def update_memory(self, conversation_id: str, role: str, content: str) -> None:
+        """
+        Alias retrocompatible de `save()` usado por los agentes antiguos (InfoAgent, etc.)
+        Permite guardar mensajes en memoria sin romper compatibilidad.
+        """
+        try:
+            self.save(conversation_id=conversation_id, role=role, content=content)
+        except Exception as e:
+            log.warning(f"⚠️ Error en update_memory (alias de save): {e}")
+
+    # ----------------------------------------------------------------------
+    def get_memory_as_messages(self, conversation_id: str, limit: int = 10):
+        """
+        🔄 Devuelve la memoria en formato LangChain (HumanMessage / AIMessage / SystemMessage).
+
+        Esto permite que los agentes puedan reconstruir el contexto correctamente
+        sin errores de tipo (dict → ChatMessage).
+        """
+        from langchain.schema import HumanMessage, AIMessage, SystemMessage
+
+        try:
+            raw_messages = self.get_memory(conversation_id, limit)
+            messages = []
+
+            for msg in raw_messages:
+                role = msg.get("role", "assistant")
+                content = msg.get("content", "")
+
+                if not content:
+                    continue
+
+                if role == "user":
+                    messages.append(HumanMessage(content=content))
+                elif role == "system":
+                    messages.append(SystemMessage(content=content))
+                else:
+                    messages.append(AIMessage(content=content))
+
+            log.debug(
+                f"🧩 get_memory_as_messages → {len(messages)} mensajes convertidos para {conversation_id}"
+            )
+            return messages
+
+        except Exception as e:
+            log.error(f"⚠️ Error al convertir memoria a mensajes LangChain: {e}", exc_info=True)
+            return []

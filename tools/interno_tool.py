@@ -22,6 +22,7 @@ from langchain_openai import ChatOpenAI
 from core.language_manager import language_manager
 from core.escalation_db import save_escalation, update_escalation
 from core.config import Settings as C
+from core.escalation_manager import get_escalation
 
 log = logging.getLogger("InternoTool")
 
@@ -131,8 +132,9 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
             if sent_message_id:
                 try:
-                    from main import ESCALATION_TRACKING
-                    ESCALATION_TRACKING[sent_message_id] = escalation_id
+                    from core.escalation_manager import register_escalation
+                    register_escalation(sent_message_id, escalation_id)
+
                     log.info(f"📎 Registrado message_id={sent_message_id} → escalación={escalation_id}")
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo registrar message_id → {e}")
@@ -217,7 +219,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
     esc = ESCALATIONS_STORE[escalation_id]
 
-        # 🔁 Caso 1: ajustes → reformular nuevo borrador
+    # 🔁 Caso 1: ajustes → reformular nuevo borrador
     if not confirmed and adjustments:
         new_draft = generar_borrador(escalation_id, esc.draft_response or "", adjustment=adjustments)
 
@@ -279,7 +281,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 # 🧩 REGISTRO DE TOOLS
 # =============================================================
 
-@tool("notificar_encargado", args_schema=SendToEncargadoInput)
+@tool("notificar_encargado", args_schema=SendToEncargadoInput, return_direct=False)
 def notificar_encargado_tool(**kwargs) -> str:
     """Tool que notifica al encargado del hotel sobre una nueva escalación por Telegram."""
     return send_to_encargado(**kwargs)

@@ -46,7 +46,9 @@ class MainAgent:
         temperature: float = 0.3,
         memory_manager: Optional[MemoryManager] = None,
         send_message_callback: Optional[Callable] = None,
+        interno_agent: Optional[InternoAgent] = None,
     ):
+
         self.model_name = model_name
         self.temperature = temperature
         self.memory_manager = memory_manager
@@ -63,8 +65,8 @@ class MainAgent:
         base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
         self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
-        # 🆕 Agente Interno (ReAct)
-        self.interno_agent = InternoAgent()
+        # 🆕 Agente Interno (ReAct) — se inyecta desde main.py
+        self.interno_agent = interno_agent
 
         log.info(f"✅ MainAgent inicializado con modelo {model_name}")
 
@@ -99,7 +101,6 @@ class MainAgent:
             create_inciso_tool(send_callback=self.send_callback),
             create_dispo_precios_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_info_hotel_tool(memory_manager=self.memory_manager, chat_id=chat_id),
-            *create_interno_tools(),  # ✅ integración con Interno v4
         ]
         log.info(f"🔧 {len(tools)} herramientas configuradas para MainAgent ({chat_id})")
         return tools
@@ -153,7 +154,7 @@ class MainAgent:
                 agent=chain_agent,
                 tools=tools,
                 verbose=True,
-                max_iterations=6,
+                max_iterations=15,
                 max_execution_time=90,
                 handle_parsing_errors=True,
                 return_intermediate_steps=False
@@ -232,13 +233,16 @@ class MainAgent:
 def create_main_agent(
     memory_manager: Optional[MemoryManager] = None,
     send_callback: Optional[Callable] = None,
+    interno_agent: Optional[InternoAgent] = None,
     model_name: str = "gpt-4.1-mini",
-    temperature: float = 0.3
+    temperature: float = 0.3,
 ) -> MainAgent:
     """Factory para crear el MainAgent configurado."""
     return MainAgent(
         model_name=model_name,
         temperature=temperature,
         memory_manager=memory_manager,
-        send_message_callback=send_callback
+        send_message_callback=send_callback,
+        interno_agent=interno_agent,
     )
+

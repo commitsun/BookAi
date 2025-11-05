@@ -31,7 +31,7 @@ from agents.supervisor_output_agent import SupervisorOutputAgent
 
 # 🆕 InternoAgent v4 (ReAct)
 from agents.interno_agent import InternoAgent
-from tools.interno_tool import ESCALATIONS_STORE  # ✅ corregido
+from core.escalation_manager import register_escalation, get_escalation
 
 from core.message_buffer import MessageBufferManager
 from channels_wrapper.utils.text_utils import send_fragmented_async
@@ -60,10 +60,14 @@ app = FastAPI(title="HotelAI - Sistema de Agentes ReAct v4")
 # COMPONENTES GLOBALES
 # =============================================================
 
+
 memory_manager = MemoryManager()
-supervisor_input = SupervisorInputAgent()
-supervisor_output = SupervisorOutputAgent()
-interno_agent = InternoAgent()
+
+# ✅ Propagar memory_manager a todos los agentes supervisores e internos
+supervisor_input = SupervisorInputAgent(memory_manager=memory_manager)
+supervisor_output = SupervisorOutputAgent(memory_manager=memory_manager)
+interno_agent = InternoAgent(memory_manager=memory_manager)
+
 channel_manager = ChannelManager()
 buffer_manager = MessageBufferManager(idle_seconds=6.0)
 
@@ -143,7 +147,7 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
         # ---------------------------------------------------------
         # 3️⃣ Main Agent
         try:
-            history = memory_manager.get_memory(chat_id)
+            history = memory_manager.get_memory_as_messages(chat_id)
         except Exception as e:
             log.warning(f"⚠️ No se pudo obtener memoria: {e}")
             history = []
@@ -155,9 +159,11 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
         main_agent = create_main_agent(
             memory_manager=memory_manager,
             send_callback=send_inciso_callback,
+            interno_agent=interno_agent,  # ✅ Instancia compartida
             model_name="gpt-4o",
             temperature=0.3,
         )
+
 
         response_raw = await main_agent.ainvoke(
             user_input=user_message,
@@ -272,8 +278,9 @@ async def whatsapp_webhook(request: Request):
         # 🧠 Buffer inteligente de mensajes (para agrupar texto)
         # ==========================================================
         async def _process_buffered(cid: str, combined_text: str, version: int):
-            log.info(f"🧠 Procesando lote buffered v{version} → {cid}")
+            log.info(f"🧠 Procesando lote buffered v{version} → {cid}\n🧩 Mensajes combinados:\n{combined_text}")
             resp = await process_user_message(combined_text, cid, channel="whatsapp")
+
             if not resp:
                 log.info(f"🔇 Escalación silenciosa {cid}")
                 return
@@ -284,6 +291,7 @@ async def whatsapp_webhook(request: Request):
             # Fragmentación y envío con ritmo humano
             from channels_wrapper.utils.text_utils import send_fragmented_async
             await send_fragmented_async(send_to_channel, cid, resp)
+
 
         # Añadir mensaje al buffer
         await buffer_manager.add_message(sender, text, _process_buffered)
@@ -358,7 +366,7 @@ async def telegram_webhook_handler(request: Request):
         # 2️⃣ Respuesta nueva (reply al mensaje de escalación)
         # =========================================================
         if original_msg_id is not None:
-            escalation_id = ESCALATION_TRACKING.get(str(original_msg_id))
+            escalation_id = get_escalation(str(original_msg_id))  # 👈 usa la función global, no el diccionario local
             if not escalation_id:
                 log.warning(f"⚠️ No se encontró escalación asociada a message_id={original_msg_id}")
             else:

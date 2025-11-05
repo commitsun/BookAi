@@ -23,10 +23,17 @@ class InfoHotelTool:
     """
 
     def __init__(self, memory_manager=None, chat_id: str = ""):
-        self.agent = InfoAgent(model_name="gpt-4.1-mini")
         self.memory_manager = memory_manager
         self.chat_id = chat_id
+
+        # ✅ CORREGIDO: Propagar memory_manager al subagente
+        self.agent = InfoAgent(
+            model_name="gpt-4.1-mini",
+            memory_manager=memory_manager
+        )
+
         log.info(f"✅ InfoHotelTool inicializado para chat {chat_id}")
+
 
     async def _procesar_consulta(self, consulta: str) -> str:
         """Delega la consulta al subagente de información del hotel."""
@@ -37,9 +44,10 @@ class InfoHotelTool:
             history = []
             if self.memory_manager and self.chat_id:
                 try:
-                    history = self.memory_manager.get_memory(self.chat_id)
+                    history = self.memory_manager.get_memory_as_messages(self.chat_id)
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo obtener memoria: {e}")
+
 
             # ⚠️ CORRECCIÓN: usar await al invocar al subagente
             respuesta = await self.agent.invoke(
