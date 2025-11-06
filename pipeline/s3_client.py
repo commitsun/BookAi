@@ -3,7 +3,6 @@ import boto3
 from typing import List
 from .supabase_utils import ensure_kb_table_exists
 
-
 # ===============================
 # 🔧 Configuración básica
 # ===============================
@@ -12,15 +11,13 @@ S3_BUCKET = os.getenv("S3_BUCKET", "bookai-pre-roomdoo")
 
 
 # ===============================
-# 🔐 Cliente S3 compatible OIDC
+# 🔐 Cliente S3 compatible con OIDC
 # ===============================
 def get_s3_client():
     """
-    Crea un cliente S3 compatible tanto con OIDC (GitHub Actions)
-    como con entornos locales configurados con `aws configure`.
-
-    No fuerza credenciales estáticas para evitar el error:
-    'InvalidAccessKeyId' al usar OIDC.
+    Crea un cliente S3 compatible con OIDC (GitHub Actions)
+    o con credenciales locales (aws configure).
+    No fuerza credenciales estáticas para evitar 'InvalidAccessKeyId'.
     """
     session = boto3.Session(region_name=AWS_REGION)
     return session.client("s3")
@@ -39,15 +36,18 @@ def list_hotel_folders(prefix: str = "") -> List[str]:
     """
     print(f"📦 Listando carpetas raíz en bucket: {S3_BUCKET} ...")
 
-    # Comprobar que el bucket es accesible
+    # Comprobar acceso al bucket
     try:
         s3.head_bucket(Bucket=S3_BUCKET)
     except Exception as e:
         print(f"❌ No se puede acceder al bucket '{S3_BUCKET}': {e}")
         return []
 
-    # Listar carpetas raíz usando el delimitador "/"
-    response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix, Delimiter="/")
+    try:
+        response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix, Delimiter="/")
+    except Exception as e:
+        print(f"❌ Error al listar objetos de S3: {e}")
+        return []
 
     if "CommonPrefixes" not in response:
         print("⚠️ No se encontraron carpetas en el bucket.")
@@ -59,7 +59,7 @@ def list_hotel_folders(prefix: str = "") -> List[str]:
 
 
 # ===============================
-# 🧠 Inicialización en Supabase
+# 🧠 Inicialización de KB en Supabase
 # ===============================
 def init_hotels_in_supabase():
     """
@@ -83,4 +83,5 @@ def init_hotels_in_supabase():
 # ▶️ Ejecución directa (CLI)
 # ===============================
 if __name__ == "__main__":
+    print("🚀 Iniciando sincronización con S3 y verificación en Supabase...")
     init_hotels_in_supabase()

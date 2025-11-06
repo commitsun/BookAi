@@ -2,7 +2,7 @@ import os
 from supabase import create_client
 from dotenv import load_dotenv
 
-# Cargar variables del entorno
+# Cargar variables de entorno
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -16,41 +16,39 @@ supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 def ensure_pgvector_enabled():
     """
-    Habilita la extensión pgvector si aún no existe.
-    Necesario para poder usar columnas del tipo VECTOR.
+    Verifica que la extensión pgvector está disponible en Supabase.
+    Si no lo está, muestra un aviso.
     """
     print("🧩 Verificando extensión pgvector...")
     try:
-        result = supabase.rpc("execute_sql", {"sql": "create extension if not exists vector;"}).execute()
-        print("✅ Extensión pgvector habilitada correctamente.")
+        supabase.rpc("exec_sql", {"sql": "SELECT 'vector'::regtype;"}).execute()
+        print("✅ Extensión pgvector ya disponible.")
     except Exception as e:
-        print(f"⚠️ No se pudo habilitar pgvector automáticamente: {e}")
+        print("⚠️ Extensión pgvector no disponible. Actívala manualmente:")
+        print("   👉 CREATE EXTENSION IF NOT EXISTS vector;")
 
 
 def ensure_kb_table_exists(hotel_id: str):
     """
-    Crea una tabla de base de conocimiento (knowledge base) en Supabase
-    si aún no existe. Ejemplo: kb_alda_ponferrada
+    Crea una tabla de base de conocimiento (KB) en Supabase si no existe.
     """
     table_name = f"kb_{hotel_id.lower()}"
-
     print(f"🧱 Verificando tabla: {table_name}")
 
-    # Primero asegurar que pgvector está habilitada
     ensure_pgvector_enabled()
 
     ddl = f"""
-    create table if not exists {table_name} (
-        id uuid primary key default gen_random_uuid(),
-        content text,
-        embedding vector(1536),
-        metadata jsonb,
-        created_at timestamp with time zone default now()
+    CREATE TABLE IF NOT EXISTS {table_name} (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        content TEXT,
+        embedding VECTOR(1536),
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT now()
     );
     """
 
     try:
-        supabase.rpc("execute_sql", {"sql": ddl}).execute()
+        supabase.rpc("exec_sql", {"sql": ddl}).execute()
         print(f"✅ Tabla {table_name} creada o existente.")
     except Exception as e:
         print(f"⚠️ Error creando {table_name}: {e}")
