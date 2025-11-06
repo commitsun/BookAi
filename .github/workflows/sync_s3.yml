@@ -1,9 +1,9 @@
 name: 🔄 Sync S3 Knowledge Bases
 
 on:
-  workflow_dispatch: {}  # 👈 puedes lanzarlo manualmente desde GitHub
+  workflow_dispatch: {}   # 👈 puedes lanzarlo manualmente desde GitHub
   schedule:
-    - cron: "0 6 */5 * *"  # 👈 cada 5 días a las 6:00 UTC
+    - cron: "0 6 */5 * *"   # 👈 cada 5 días a las 6:00 UTC
 
 permissions:
   id-token: write   # para autenticación OIDC con AWS
