@@ -1,0 +1,20 @@
+# Entorno virtual
+.venv/
+venv/
+
+# Configuración local
+.env
+*.log
+
+# Archivos de cache
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Archivos temporales
+*.swp
+.DS_Store
+
+# Logs del pipeline
+logs/

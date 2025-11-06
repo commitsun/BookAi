@@ -1,0 +1,8 @@
+boto3
+supabase
+python-dotenv
+openai
+tiktoken
+langchain
+langchain-community
+langchain-openai

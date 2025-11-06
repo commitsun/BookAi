@@ -1,0 +1,45 @@
+name: 🔄 Sync S3 Knowledge Bases
+
+on:
+  workflow_dispatch: {}  # 👈 puedes lanzarlo manualmente desde GitHub
+  schedule:
+    - cron: "0 6 */5 * *"  # 👈 cada 5 días a las 6:00 UTC
+
+permissions:
+  id-token: write   # para autenticación OIDC con AWS
+  contents: read
+
+jobs:
+  sync-and-vectorize:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🛎️ Checkout repository
+        uses: actions/checkout@v4
+
+      - name: 🐍 Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: 📦 Install dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: 🔑 Configure AWS credentials (OIDC)
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::958933161814:role/github-oidc-s3-access
+          aws-region: eu-west-1
+
+      - name: 🌍 Load environment variables
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+          echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+
+      - name: 🚀 Run S3 sync + vectorization pipeline
+        run: python -m pipeline.run_pipeline
