@@ -1,15 +1,15 @@
 name: 🔄 Sync & Vectorize Knowledge Bases
 
 on:
-  workflow_dispatch: {}         # 👈 Puedes lanzarlo manualmente desde GitHub
+  workflow_dispatch: {}          # Lanzar manualmente
+  schedule:
+    - cron: "0 6 */5 * *"        # Cada 5 días a las 6:00 UTC
   push:
     branches:
-      - vectorizer-pipeline     # 👈 Se lanza al hacer push a esta rama
-  schedule:
-    - cron: "0 6 */5 * *"       # 👈 Cada 5 días a las 6:00 UTC
+      - vectorizer-pipeline      # En cada push a esta rama
 
 permissions:
-  id-token: write               # Para autenticación OIDC con AWS
+  id-token: write                # Para autenticación OIDC con AWS
   contents: read
 
 jobs:
@@ -44,25 +44,14 @@ jobs:
           echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
 
-      - name: 🔍 Check environment & S3 bucket access
+      # 🧩 1️⃣ Sincronizar estructura S3 con Supabase
+      - name: 🔁 Sync hotel folders with Supabase
         run: |
-          echo "Checking environment..."
-          python - <<'EOF'
-          import os, boto3, botocore
-          required = ["SUPABASE_URL", "SUPABASE_KEY", "OPENAI_API_KEY", "S3_BUCKET"]
-          missing = [k for k in required if not os.getenv(k)]
-          if missing:
-              raise SystemExit(f"❌ Missing env vars: {', '.join(missing)}")
+          echo "🚀 Step 1: Syncing hotel folders..."
+          python -m pipeline.s3_client
 
-          s3 = boto3.client("s3")
-          bucket = os.getenv("S3_BUCKET")
-
-          try:
-              s3.head_bucket(Bucket=bucket)
-              print(f"✅ S3 bucket '{bucket}' is accessible.")
-          except botocore.exceptions.ClientError as e:
-              raise SystemExit(f"❌ Could not access bucket {bucket}: {e}")
-          EOF
-
-      - name: 🚀 Run vectorization pipeline
-        run: python -m pipeline.run_pipeline
+      # 🧠 2️⃣ Vectorizar documentos de cada carpeta detectada
+      - name: 🧠 Vectorize knowledge bases
+        run: |
+          echo "🚀 Step 2: Running full vectorization pipeline..."
+          python -m pipeline.run_pipeline
