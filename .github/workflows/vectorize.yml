@@ -1,27 +1,27 @@
-name: 📚 Update Knowledge Base
+name: 🔄 Sync & Vectorize Knowledge Bases
 
 on:
-  workflow_dispatch: {}
+  workflow_dispatch: {}         # 👈 Puedes lanzarlo manualmente desde GitHub
   push:
     branches:
-      - vectorizer-pipeline     # 👈 Para que se muestre y se ejecute en cada push
+      - vectorizer-pipeline     # 👈 Se lanza al hacer push a esta rama
   schedule:
-    - cron: "0 0 */5 * *"       # Cada 5 días
+    - cron: "0 6 */5 * *"       # 👈 Cada 5 días a las 6:00 UTC
 
 permissions:
-  id-token: write
+  id-token: write               # Para autenticación OIDC con AWS
   contents: read
 
 jobs:
-  update-knowledge-base:
+  sync-and-vectorize:
     runs-on: ubuntu-latest
 
     steps:
-      - name: 🛎️ Checkout repo
+      - name: 🛎️ Checkout repository
         uses: actions/checkout@v4
 
       - name: 🐍 Setup Python
-        uses: actions/setup-python@v4
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
 
@@ -36,25 +36,32 @@ jobs:
           role-to-assume: arn:aws:iam::958933161814:role/github-oidc-s3-access
           aws-region: eu-west-1
 
-      - name: 🔑 Load environment variables
+      - name: 🌍 Load environment variables
         run: |
           echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
           echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
-          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
           echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
 
-      - name: 🔍 Check environment
+      - name: 🔍 Check environment & S3 bucket access
         run: |
           echo "Checking environment..."
           python - <<'EOF'
-          import os, boto3
+          import os, boto3, botocore
           required = ["SUPABASE_URL", "SUPABASE_KEY", "OPENAI_API_KEY", "S3_BUCKET"]
           missing = [k for k in required if not os.getenv(k)]
           if missing:
               raise SystemExit(f"❌ Missing env vars: {', '.join(missing)}")
+
           s3 = boto3.client("s3")
-          print("✅ S3 connected. Buckets:", [b["Name"] for b in s3.list_buckets()["Buckets"]])
+          bucket = os.getenv("S3_BUCKET")
+
+          try:
+              s3.head_bucket(Bucket=bucket)
+              print(f"✅ S3 bucket '{bucket}' is accessible.")
+          except botocore.exceptions.ClientError as e:
+              raise SystemExit(f"❌ Could not access bucket {bucket}: {e}")
           EOF
 
       - name: 🚀 Run vectorization pipeline
