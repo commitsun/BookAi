@@ -56,7 +56,7 @@ def load_text_from_s3(key: str) -> str:
         raise ValueError(f"❌ Tipo de archivo no soportado: {ext}")
 
 
-def chunk_text(text: str, chunk_size=1000, overlap=100) -> List[str]:
+def chunk_text(text: str, chunk_size=1000, overlap=200) -> List[str]:
     """Divide el texto en fragmentos (chunks) usando LangChain."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -70,13 +70,15 @@ def chunk_text(text: str, chunk_size=1000, overlap=100) -> List[str]:
 # 🧠 Vectorización e inserción en Supabase
 # =====================================
 def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
-    """Vectoriza e inserta los chunks en la tabla del hotel correspondiente."""
+    """Vectoriza e inserta los chunks en la tabla del hotel correspondiente, conservando el orden original."""
     print(f"🧩 Generando embeddings para {doc_name}...")
 
     vectors = embeddings_model.embed_documents(chunks)
+
     rows = [
         {
             "id": str(uuid4()),
+            "position": i,  # 👈 índice del chunk (orden real)
             "content": chunk,
             "embedding": vector,
             "metadata": {"source": doc_name, "chunk": i},
@@ -85,7 +87,7 @@ def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
     ]
 
     supabase.table(table_name).insert(rows).execute()
-    print(f"✅ Insertados {len(rows)} chunks en {table_name}")
+    print(f"✅ Insertados {len(rows)} chunks en {table_name} (orden preservado)")
 
 
 # =====================================
