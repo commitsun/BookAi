@@ -2,6 +2,7 @@ import os
 from supabase import create_client
 from dotenv import load_dotenv
 
+# Cargar variables del entorno
 load_dotenv()
 
 SUPABASE_URL = os.getenv("SUPABASE_URL")
@@ -13,6 +14,19 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
+def ensure_pgvector_enabled():
+    """
+    Habilita la extensión pgvector si aún no existe.
+    Necesario para poder usar columnas del tipo VECTOR.
+    """
+    print("🧩 Verificando extensión pgvector...")
+    try:
+        result = supabase.rpc("execute_sql", {"sql": "create extension if not exists vector;"}).execute()
+        print("✅ Extensión pgvector habilitada correctamente.")
+    except Exception as e:
+        print(f"⚠️ No se pudo habilitar pgvector automáticamente: {e}")
+
+
 def ensure_kb_table_exists(hotel_id: str):
     """
     Crea una tabla de base de conocimiento (knowledge base) en Supabase
@@ -21,6 +35,9 @@ def ensure_kb_table_exists(hotel_id: str):
     table_name = f"kb_{hotel_id.lower()}"
 
     print(f"🧱 Verificando tabla: {table_name}")
+
+    # Primero asegurar que pgvector está habilitada
+    ensure_pgvector_enabled()
 
     ddl = f"""
     create table if not exists {table_name} (
@@ -33,7 +50,7 @@ def ensure_kb_table_exists(hotel_id: str):
     """
 
     try:
-        supabase.rpc("exec_sql", {"sql": ddl}).execute()
+        supabase.rpc("execute_sql", {"sql": ddl}).execute()
         print(f"✅ Tabla {table_name} creada o existente.")
     except Exception as e:
         print(f"⚠️ Error creando {table_name}: {e}")
