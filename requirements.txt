@@ -7,4 +7,5 @@ langchain
 langchain-community
 langchain-openai
 langchain-text-splitters>=0.1.0
-
+python-docx
+PyPDF2

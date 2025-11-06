@@ -7,6 +7,11 @@ from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 import boto3
 
+# 📦 Librerías adicionales para lectura de archivos
+from docx import Document
+from PyPDF2 import PdfReader
+from io import BytesIO
+
 # =====================================
 # 🔧 Cargar configuración
 # =====================================
@@ -28,9 +33,27 @@ embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 # 📄 Lectura y chunking de documentos
 # =====================================
 def load_text_from_s3(key: str) -> str:
-    """Descarga y lee el contenido de un archivo de texto plano desde S3."""
+    """
+    Descarga y lee el contenido de un archivo desde S3.
+    Soporta: .txt, .docx, .pdf
+    """
     obj = s3.get_object(Bucket=S3_BUCKET, Key=key)
-    return obj["Body"].read().decode("utf-8")
+    raw_data = obj["Body"].read()
+    ext = os.path.splitext(key)[-1].lower()
+
+    if ext == ".txt":
+        return raw_data.decode("utf-8", errors="ignore")
+
+    elif ext == ".docx":
+        doc = Document(BytesIO(raw_data))
+        return "\n".join([p.text for p in doc.paragraphs])
+
+    elif ext == ".pdf":
+        pdf = PdfReader(BytesIO(raw_data))
+        return "\n".join([page.extract_text() or "" for page in pdf.pages])
+
+    else:
+        raise ValueError(f"❌ Tipo de archivo no soportado: {ext}")
 
 
 def chunk_text(text: str, chunk_size=1000, overlap=100) -> List[str]:
@@ -50,25 +73,23 @@ def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
     """Vectoriza e inserta los chunks en la tabla del hotel correspondiente."""
     print(f"🧩 Generando embeddings para {doc_name}...")
 
-    # Generar embeddings en bloque
     vectors = embeddings_model.embed_documents(chunks)
-
-    rows = []
-    for i, (chunk, vector) in enumerate(zip(chunks, vectors)):
-        rows.append({
+    rows = [
+        {
             "id": str(uuid4()),
             "content": chunk,
             "embedding": vector,
             "metadata": {"source": doc_name, "chunk": i},
-        })
+        }
+        for i, (chunk, vector) in enumerate(zip(chunks, vectors))
+    ]
 
-    # Insertar en Supabase
     supabase.table(table_name).insert(rows).execute()
     print(f"✅ Insertados {len(rows)} chunks en {table_name}")
 
 
 # =====================================
-# 🚀 Función principal
+# 🚀 Vectorización por hotel
 # =====================================
 def vectorize_hotel_docs(hotel_folder: str):
     """
@@ -87,7 +108,7 @@ def vectorize_hotel_docs(hotel_folder: str):
 
     for obj in response["Contents"]:
         key = obj["Key"]
-        if key.endswith("/"):  # Saltar subcarpetas vacías
+        if key.endswith("/"):
             continue
 
         file_name = os.path.basename(key)
@@ -107,7 +128,6 @@ def vectorize_hotel_docs(hotel_folder: str):
 # ▶️ CLI
 # =====================================
 if __name__ == "__main__":
-    # Ejemplo: python -m pipeline.vectorizer Alda_Ponferrada
     import sys
     if len(sys.argv) < 2:
         print("❌ Uso: python -m pipeline.vectorizer <nombre_carpeta_hotel>")
