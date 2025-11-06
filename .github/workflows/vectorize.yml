@@ -2,8 +2,11 @@ name: 📚 Update Knowledge Base
 
 on:
   workflow_dispatch: {}
+  push:
+    branches:
+      - vectorizer-pipeline     # 👈 Para que se muestre y se ejecute en cada push
   schedule:
-    - cron: "0 0 */5 * *"   # cada 5 días
+    - cron: "0 0 */5 * *"       # Cada 5 días
 
 permissions:
   id-token: write
