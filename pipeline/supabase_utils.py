@@ -36,20 +36,57 @@ def ensure_pgvector_enabled():
 # ===============================================================
 def ensure_kb_table_exists(hotel_id: str):
     """
-    Crea o verifica la tabla KB de un hotel usando la función SQL remota.
-    Requiere que exista la función `ensure_kb_table_exists(hotel_name text)`
-    en Supabase.
+    Crea la tabla específica del hotel (p.ej. kb_alda_ponferrada)
+    y la función de búsqueda vectorial asociada.
     """
-    table_name = f"kb_{hotel_id.lower()}"
+    table_name = f"kb_{hotel_id.lower().replace(' ', '_')}"
     print(f"🧱 Verificando tabla: {table_name}")
 
     ensure_pgvector_enabled()
 
+    ddl = f"""
+    CREATE EXTENSION IF NOT EXISTS pgcrypto;
+    CREATE EXTENSION IF NOT EXISTS vector;
+
+    CREATE TABLE IF NOT EXISTS public.{table_name} (
+        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+        content TEXT,
+        embedding VECTOR(1536),
+        metadata JSONB,
+        created_at TIMESTAMPTZ DEFAULT now()
+    );
+
+    CREATE OR REPLACE FUNCTION public.match_documents(
+        filter JSONB,
+        match_count INT,
+        query_embedding VECTOR
+    )
+    RETURNS TABLE (
+        id UUID,
+        content TEXT,
+        metadata JSONB,
+        similarity FLOAT
+    )
+    LANGUAGE SQL STABLE AS $$
+        SELECT
+            id,
+            content,
+            metadata,
+            1 - ({table_name}.embedding <=> query_embedding) AS similarity
+        FROM public.{table_name}
+        WHERE
+            (filter IS NULL OR {table_name}.metadata @> filter)
+            AND embedding IS NOT NULL
+        ORDER BY {table_name}.embedding <=> query_embedding
+        LIMIT match_count;
+    $$;
+    """
+
     try:
-        supabase.rpc("ensure_kb_table_exists", {"hotel_name": hotel_id}).execute()
-        print(f"✅ Tabla {table_name} creada o existente.")
+        supabase.rpc("exec_sql", {"sql": ddl}).execute()
+        print(f"✅ Tabla y función configuradas para {table_name}.")
     except Exception as e:
-        print(f"⚠️ Error creando {table_name}: {e}")
+        print(f"⚠️ Error creando estructura {table_name}: {e}")
 
 
 # ===============================================================
