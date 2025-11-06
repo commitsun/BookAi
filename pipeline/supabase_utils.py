@@ -45,16 +45,17 @@ def ensure_kb_table_exists(hotel_id: str):
     ensure_pgvector_enabled()
 
     ddl = f"""
-    CREATE EXTENSION IF NOT EXISTS pgcrypto;
-    CREATE EXTENSION IF NOT EXISTS vector;
+        CREATE EXTENSION IF NOT EXISTS pgcrypto;
+        CREATE EXTENSION IF NOT EXISTS vector;
 
-    CREATE TABLE IF NOT EXISTS public.{table_name} (
-        id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-        content TEXT,
-        embedding VECTOR(1536),
-        metadata JSONB,
-        created_at TIMESTAMPTZ DEFAULT now()
-    );
+        CREATE TABLE IF NOT EXISTS public.{table_name} (
+            id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+            content TEXT,
+            embedding VECTOR(1536),
+            metadata JSONB,
+            position INT,  -- 👈 NUEVA COLUMNA
+            created_at TIMESTAMPTZ DEFAULT now()
+        );
 
     CREATE OR REPLACE FUNCTION public.match_documents(
         filter JSONB,
