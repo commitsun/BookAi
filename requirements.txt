@@ -6,5 +6,5 @@ tiktoken
 langchain
 langchain-community
 langchain-openai
-langchain-text-splitters
+langchain-text-splitters>=0.1.0
 

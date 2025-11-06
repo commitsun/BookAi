@@ -4,7 +4,7 @@ from typing import List
 from dotenv import load_dotenv
 from supabase import create_client
 from langchain_openai import OpenAIEmbeddings
-from langchain_text_splitter import RecursiveCharacterTextSplitter
+from langchain_text_splitters import RecursiveCharacterTextSplitter
 import boto3
 
 # =====================================
