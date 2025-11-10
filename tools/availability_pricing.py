@@ -12,16 +12,15 @@ para un hotel en Roomdoo, igual que en n8n.
 3️⃣ Devuelve los resultados en el mismo formato que n8n
 """
 
+import os
 import logging
-import httpx
+import aiohttp
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, Field
 from core.roomdoo_token import get_roomdoo_token
-from core.config import os
 
 router = APIRouter()
 log = logging.getLogger("availability_pricing")
-
 
 # =====================================================
 # 📥 INPUT MODEL
@@ -44,8 +43,15 @@ async def availability_pricing_tool(input_data: AvailabilityPricingInput):
       - Output: lista de habitaciones disponibles y precios
     """
     try:
+        log.info("🟢 Nueva consulta de disponibilidad y precios")
+        log.info(f"   📅 Check-in: {input_data.checkin}")
+        log.info(f"   📅 Check-out: {input_data.checkout}")
+        log.info(f"   👥 Ocupación: {input_data.occupancy}")
+        log.info(f"   🏨 Property ID: {input_data.pmsPropertyId}")
+
         # 1️⃣ Obtener token desde Supabase
-        token = get_roomdoo_token()
+        token = await get_roomdoo_token()
+        log.info(f"   🔐 Token obtenido (primeros 15 chars): {token[:15]}...")
 
         # 2️⃣ Construir URL
         base_url = os.getenv("ROOMDOO_AVAIL_URL")
@@ -53,34 +59,38 @@ async def availability_pricing_tool(input_data: AvailabilityPricingInput):
             raise HTTPException(status_code=500, detail="ROOMDOO_AVAIL_URL no configurado en .env")
 
         url = (
-            f"{base_url}"
-            f"?pmsPropertyId={input_data.pmsPropertyId}"
+            f"{base_url}?pmsPropertyId={input_data.pmsPropertyId}"
             f"&checkin={input_data.checkin}"
             f"&checkout={input_data.checkout}"
             f"&occupancy={input_data.occupancy}"
         )
 
+        log.info(f"   🌍 Llamando a Roomdoo: {url}")
+
         headers = {"Authorization": f"Bearer {token}"}
 
-        log.info(f"🔍 Consultando disponibilidad: {url}")
-
         # 3️⃣ Llamada HTTP a Roomdoo
-        async with httpx.AsyncClient(timeout=20) as client:
-            response = await client.get(url, headers=headers)
-            response.raise_for_status()
-            data = response.json()
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, headers=headers, timeout=30) as resp:
+                if resp.status != 200:
+                    text = await resp.text()
+                    log.error(f"❌ Roomdoo devolvió {resp.status}: {text}")
+                    raise HTTPException(status_code=resp.status, detail=text)
 
-        # 4️⃣ Respuesta formateada igual que n8n
-        return {
-            "success": True,
-            "data": data.get("response", data),
-            "results_count": len(data.get("response", data)),
-        }
+                data = await resp.json()
 
-    except httpx.HTTPStatusError as e:
-        log.error(f"❌ Error HTTP {e.response.status_code} en Roomdoo: {e}")
-        raise HTTPException(status_code=e.response.status_code, detail=e.response.text)
+        # 4️⃣ Log de resultado
+        log.info(f"✅ [Roomdoo] Respuesta recibida ({len(data)} items)")
+        for r in data:
+            log.info(
+                f"   🛏 {r.get('roomTypeName', 'Habitación')} | "
+                f"Disponibles: {r.get('avail')} | "
+                f"💶 Precio: {r.get('price')} €"
+            )
+
+        # 5️⃣ Respuesta igual que n8n
+        return {"success": True, "response": data, "results_count": len(data)}
 
     except Exception as e:
-        log.error(f"❌ Error general en availability_pricing: {e}", exc_info=True)
+        log.error(f"💥 Error en availability_pricing_tool: {e}", exc_info=True)
         raise HTTPException(status_code=500, detail=str(e))
