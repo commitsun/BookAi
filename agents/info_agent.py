@@ -2,18 +2,18 @@
 📚 InfoAgent v3 (modo factual y sin invenciones)
 ==========================================================================================
 Responde preguntas generales sobre el hotel: servicios, horarios, políticas, etc.
-Usa exclusivamente la base de conocimientos (MCP) y escala al encargado si no hay información válida.
+Usa exclusivamente la base de conocimientos (API HTTP del MCP Server)
+y escala al encargado si no hay información válida.
 """
 
 import re
 import logging
 import asyncio
 from langchain_openai import ChatOpenAI
-from langchain.tools import Tool
 
 from core.language_manager import language_manager
 from core.utils.normalize_reply import normalize_reply
-from core.mcp_client import mcp_client
+from core.mcp_client import call_knowledge_base  # 👈 usamos el nuevo método HTTP
 from core.utils.time_context import get_time_context
 from agents.interno_agent import InternoAgent  # 👈 Escalación interna
 
@@ -23,7 +23,6 @@ ESCALATE_SENTENCE = (
     "🕓 Un momento por favor, voy a consultarlo con el encargado. "
     "Permíteme contactar con el encargado."
 )
-
 
 # =====================================================
 # 🔍 Helper: detectar si parece volcado técnico interno
@@ -56,11 +55,11 @@ def _looks_like_internal_dump(text: str) -> bool:
 
 
 # =====================================================
-# 🧩 Tool principal (consulta MCP factual)
+# 🧩 Tool principal (consulta HTTP factual)
 # =====================================================
 async def hotel_information_tool(query: str) -> str:
     """
-    Devuelve respuesta directamente desde la base de conocimientos (MCP),
+    Devuelve respuesta directamente desde la base de conocimientos (API HTTP del MCP Server),
     sin generación adicional ni resumen.
     """
     try:
@@ -68,21 +67,29 @@ async def hotel_information_tool(query: str) -> str:
         if not q:
             return ESCALATE_SENTENCE
 
-        tools = await mcp_client.get_tools(server_name="InfoAgent")
-        if not tools:
-            log.warning("⚠️ No se encontraron herramientas MCP para InfoAgent.")
+        # 👇 Nueva llamada directa al endpoint HTTP del servidor MCP
+        result = await call_knowledge_base(q)
+
+        if not result or "error" in result:
+            log.error(f"❌ Error o respuesta nula desde knowledge_base: {result}")
             return ESCALATE_SENTENCE
 
-        info_tool = next((t for t in tools if "conocimiento" in t.name.lower()), None)
-        if not info_tool:
-            log.warning("⚠️ No se encontró 'Base_de_conocimientos_del_hotel' en MCP.")
+        if not result.get("data"):
+            log.warning("⚠️ La base de conocimientos no devolvió resultados.")
             return ESCALATE_SENTENCE
 
-        raw_reply = await info_tool.ainvoke({"input": q})
-        cleaned = normalize_reply(raw_reply, q, "InfoAgent").strip()
+        # ✅ Tomamos el contenido textual de los documentos
+        docs = result.get("data", [])
+        cleaned_text = "\n".join(d.get("content", "") for d in docs if isinstance(d, dict))
+
+        if not cleaned_text.strip():
+            log.warning("⚠️ Respuesta vacía o sin texto válido.")
+            return ESCALATE_SENTENCE
+
+        cleaned = normalize_reply(cleaned_text, q, "InfoAgent").strip()
 
         if not cleaned or len(cleaned) < 10:
-            log.warning("⚠️ Respuesta vacía o demasiado corta en KB.")
+            log.warning("⚠️ Respuesta demasiado corta en KB.")
             return ESCALATE_SENTENCE
         if _looks_like_internal_dump(cleaned):
             log.warning("⚠️ Dump técnico detectado, escalando.")
