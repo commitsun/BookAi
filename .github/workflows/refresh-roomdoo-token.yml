@@ -1,12 +1,12 @@
 name: 🔄 Refresh Roomdoo Token
 
 on:
-  push:
+  push:                     # 🔹 Se ejecuta automáticamente en cada push
     branches:
-      - mcp_server    # 👈 Solo se ejecuta al hacer push en esta rama
-  schedule:
-    - cron: "0 9 * * *" # Ejecuta todos los días a las 09:00 UTC (10:00 CET)
-  workflow_dispatch:     # Permite lanzarlo manualmente desde GitHub Actions
+      - mcp_server          # Solo cuando haces push a esta rama
+  schedule:                 # 🔹 Además, se ejecuta cada día a las 09:00 UTC
+    - cron: "0 9 * * *"
+  workflow_dispatch:        # 🔹 Permite lanzarlo manualmente si lo deseas
 
 jobs:
   refresh-token:
@@ -35,15 +35,19 @@ jobs:
 
           # 2️⃣ Guardar token en Supabase
           NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-
-          curl -s -X POST "$SUPABASE_URL/rest/v1/tokens_roomdoo" \
+          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SUPABASE_URL/rest/v1/tokens_roomdoo" \
             -H "apikey: $SUPABASE_KEY" \
             -H "Authorization: Bearer $SUPABASE_KEY" \
             -H "Content-Type: application/json" \
-            -d "{\"token\": \"roomdoo_token\", \"key\": \"$TOKEN\", \"created_at\": \"$NOW\"}" \
-            -o /dev/null
+            -d "{\"token\": \"roomdoo_token\", \"key\": \"$TOKEN\", \"created_at\": \"$NOW\"}")
 
-          echo "✅ Token actualizado en Supabase a las $NOW"
+          if [ "$RESPONSE_CODE" -eq 201 ] || [ "$RESPONSE_CODE" -eq 200 ]; then
+            echo "✅ Token actualizado en Supabase ($RESPONSE_CODE) a las $NOW"
+          else
+            echo "❌ Error al actualizar token en Supabase. Código: $RESPONSE_CODE"
+            exit 1
+          fi
+
           echo "🟢 Workflow completado con éxito."
 
     env:
