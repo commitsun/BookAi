@@ -11,3 +11,9 @@ services:
     volumes:
       - ./data:/app/data
     restart: unless-stopped
+    networks:
+      - bookai_shared
+
+networks:
+  bookai_shared:
+    external: true
