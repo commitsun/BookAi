@@ -1,53 +1,64 @@
-# mcp_server.py
-
+# main_mcp.py
 """
-MCP Server - BookAI
--------------------
-Servidor FastAPI que expone tools para agentes de IA.
-Por ahora:
-  - POST /tools/knowledge_base
-Sin autenticación, como n8n en tu configuración actual.
+MCP Server - Protocolo Real (BookAI)
+------------------------------------
+Servidor compatible con el cliente langchain_mcp_adapters.
+Expone la tool "knowledge_base" conectada a Supabase.
 """
 
 import logging
-from fastapi import FastAPI
-from fastapi.middleware.cors import CORSMiddleware
+from mcp.server.fastmcp import FastMCP
+from core.config import supabase_client, openai_client, MODEL_EMBEDDING
 
-from core.logging import audit_middleware
-from tools import knowledge_base
-
-logging.basicConfig(level=logging.INFO)
-log = logging.getLogger("MCPServer")
-
-app = FastAPI(
-    title="BookAI MCP Server",
-    description="Servidor MCP para base de conocimientos vectorizada (Supabase + OpenAI)",
-    version="1.0.0",
-)
-
-# CORS abierto (como n8n)
-app.add_middleware(
-    CORSMiddleware,
-    allow_origins=["*"],
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
-)
-
-# Auditoría simple
-app.middleware("http")(audit_middleware)
-
-# Registrar tools
-app.include_router(knowledge_base.router, prefix="/tools", tags=["Knowledge Base"])
+log = logging.getLogger("bookai_mcp")
+mcp = FastMCP("BookAI MCP Server")
 
 
-@app.get("/health")
-async def health_check():
-    return {"status": "ok", "message": "MCP Server activo", "version": "1.0.0"}
+@mcp.tool()
+async def knowledge_base(
+    query: str,
+    match_count: int = 7,
+    match_threshold: float = 0.75
+):
+    """
+    Tool: Consulta la base de conocimientos vectorizada de Alda Ponferrada.
+    """
+    try:
+        if not query.strip():
+            return {"error": "La consulta no puede estar vacía"}
+
+        log.info(f"🧠 Consulta KB: {query}")
+
+        # 1️⃣ Generar embedding
+        embedding_response = openai_client.embeddings.create(
+            model=MODEL_EMBEDDING,
+            input=query,
+        )
+        query_embedding = embedding_response.data[0].embedding
+
+        # 2️⃣ Llamar RPC en Supabase
+        rpc_response = supabase_client.rpc(
+            "match_documents",
+            {
+                "query_embedding": query_embedding,
+                "match_threshold": match_threshold,
+                "match_count": match_count,
+                "filter": None,
+            },
+        ).execute()
+
+        documents = rpc_response.data or []
+        return {
+            "success": True,
+            "results_count": len(documents),
+            "data": documents,
+        }
+
+    except Exception as e:
+        log.error(f"❌ Error en knowledge_base: {e}", exc_info=True)
+        return {"error": str(e)}
 
 
 if __name__ == "__main__":
-    import uvicorn
-
-    log.info("🚀 Iniciando MCP Server en http://localhost:8001 ...")
-    uvicorn.run(app, host="0.0.0.0", port=8001, reload=True)
+    log.info("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...")
+    mcp.run()
