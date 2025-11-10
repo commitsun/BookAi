@@ -52,40 +52,49 @@ class DispoPreciosAgent:
             try:
                 # Fechas por defecto (si el huésped no especifica)
                 today = datetime.date.today()
-                checkin = today + datetime.timedelta(days=7)
-                checkout = checkin + datetime.timedelta(days=2)
+                checkin_date = today + datetime.timedelta(days=7)
+                checkout_date = checkin_date + datetime.timedelta(days=2)
+
+                checkin = f"{checkin_date}T00:00:00"
+                checkout = f"{checkout_date}T00:00:00"
+                occupancy = 2
+                pms_property_id = 38  # demo
 
                 # 👇 Llamada directa al MCP Server local
                 result = await call_availability_pricing(
-                    checkin=str(checkin),
-                    checkout=str(checkout),
-                    occupancy=2,
-                    pms_property_id=38
+                    checkin=checkin,
+                    checkout=checkout,
+                    occupancy=occupancy,
+                    pms_property_id=pms_property_id,
                 )
 
                 if not result or "error" in result:
                     log.error(f"❌ Error desde availability_pricing: {result}")
                     return "No dispongo de disponibilidad en este momento."
 
-                rooms = result.get("response") or result.get("data") or []
+                rooms = result.get("data") or result.get("response") or []
                 if not rooms:
                     return "No hay disponibilidad para esas fechas."
 
-                # 🧩 Preparar prompt para el modelo
-                info = "\n".join(
-                    f"- {r.get('roomTypeName', 'Habitación')} "
-                    f"({r.get('avail', 0)} disponibles) — {r.get('price', '?')} €"
-                    for r in rooms
+                # 🧩 Construir respuesta directamente con los datos reales (sin LLM)
+                lines = []
+                for r in rooms:
+                    name = r.get("roomTypeName", "Habitación")
+                    avail = r.get("avail", 0)
+                    price = r.get("price", "?")
+                    lines.append(
+                        f"- {name}: {price} € por noche ({avail} hab. disponibles)"
+                    )
+
+                header = (
+                    f"Para las fechas del {checkin_date.strftime('%d/%m/%Y')} "
+                    f"al {checkout_date.strftime('%d/%m/%Y')} para {occupancy} personas, "
+                    f"tenemos estas opciones:\n\n"
                 )
 
-                prompt = (
-                    f"{get_time_context()}\n\n"
-                    f"Información de habitaciones y precios:\n{info}\n\n"
-                    f"El huésped pregunta: \"{query}\""
-                )
-
-                response = await self.llm.ainvoke(prompt)
-                return response.content.strip()
+                respuesta = header + "\n".join(lines)
+                log.info(f"✅ [DispoPreciosAgent/tool] Respuesta factual: {respuesta}")
+                return respuesta
 
             except Exception as e:
                 log.error(f"❌ Error en _availability_tool: {e}", exc_info=True)
