@@ -1,5 +1,4 @@
 import logging
-import json
 import datetime
 import asyncio
 from langchain_openai import ChatOpenAI
@@ -8,21 +7,19 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import Tool
 
 # Core imports
-from core.mcp_client import mcp_client
+from core.mcp_client import call_availability_pricing  # 👈 nuevo método HTTP
 from core.language_manager import language_manager
 from core.utils.normalize_reply import normalize_reply
 from core.utils.utils_prompt import load_prompt
-from core.utils.time_context import get_time_context  # 🕒 Contexto temporal global
+from core.utils.time_context import get_time_context
 
 log = logging.getLogger("DispoPreciosAgent")
 
 
 class DispoPreciosAgent:
     """
-    Subagente encargado de responder preguntas sobre disponibilidad,
-    tipos de habitación, precios y reservas.
-    Usa las tools 'buscar_token' y 'Disponibilidad_y_precios' del MCP.
-    Integrado con MemoryManager para trazabilidad completa.
+    Subagente encargado de responder preguntas sobre disponibilidad y precios.
+    Ahora usa directamente el MCP Server HTTP (sin MCP client).
     """
 
     def __init__(self, model_name: str = "gpt-4.1-mini", memory_manager=None):
@@ -30,73 +27,60 @@ class DispoPreciosAgent:
         self.llm = ChatOpenAI(model=self.model_name, temperature=0.2)
         self.memory_manager = memory_manager
 
-        # 🧩 Construcción inicial del prompt con contexto temporal
         base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
         self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
-        # Inicialización de tools y agente
         self.tools = [self._build_tool()]
         self.agent_executor = self._build_agent_executor()
 
-        log.info("💰 DispoPreciosAgent inicializado correctamente con memoria y contexto temporal.")
+        log.info("💰 DispoPreciosAgent inicializado correctamente (HTTP local).")
 
     # ----------------------------------------------------------
     def _get_default_prompt(self) -> str:
-        """Prompt por defecto si no existe el archivo en disco."""
+        """Prompt por defecto si no existe el archivo."""
         return (
             "Eres un agente especializado en disponibilidad y precios de un hotel.\n"
             "Tu función es responder con precisión sobre fechas, precios y tipos de habitación disponibles.\n\n"
-            "Usa la información proporcionada por el PMS y responde con tono amable y profesional.\n"
+            "Usa la información proporcionada por el PMS (Roomdoo) y responde con tono amable y profesional.\n"
             "Si la información no es suficiente, solicita detalles adicionales al huésped (fechas, número de personas, etc.)."
         )
 
     # ----------------------------------------------------------
     def _build_tool(self):
-        """Crea la tool que consulta disponibilidad y precios en el PMS vía MCP."""
+        """Tool HTTP directa que consulta disponibilidad y precios en el PMS."""
         async def _availability_tool(query: str):
             try:
-                tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
-                token_tool = next((t for t in tools if t.name == "buscar_token"), None)
-                dispo_tool = next((t for t in tools if t.name == "Disponibilidad_y_precios"), None)
-
-                if not token_tool or not dispo_tool:
-                    log.warning("⚠️ No se encontraron las tools necesarias en MCP.")
-                    return "No dispongo de disponibilidad en este momento."
-
-                # Obtener token de acceso
-                token_raw = await token_tool.ainvoke({})
-                token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
-                token = (
-                    token_data[0].get("key") if isinstance(token_data, list)
-                    else token_data.get("key")
-                )
-
-                if not token:
-                    log.error("❌ No se pudo obtener el token de acceso.")
-                    return "No se pudo obtener el token de acceso."
-
-                # Fechas por defecto: dentro de 7 días, estancia de 2 noches
+                # Fechas por defecto (si el huésped no especifica)
                 today = datetime.date.today()
                 checkin = today + datetime.timedelta(days=7)
                 checkout = checkin + datetime.timedelta(days=2)
 
-                params = {
-                    "checkin": f"{checkin}T00:00:00",
-                    "checkout": f"{checkout}T00:00:00",
-                    "occupancy": 2,
-                    "key": token,
-                }
+                # 👇 Llamada directa al MCP Server local
+                result = await call_availability_pricing(
+                    checkin=str(checkin),
+                    checkout=str(checkout),
+                    occupancy=2,
+                    pms_property_id=38
+                )
 
-                raw_reply = await dispo_tool.ainvoke(params)
-                rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+                if not result or "error" in result:
+                    log.error(f"❌ Error desde availability_pricing: {result}")
+                    return "No dispongo de disponibilidad en este momento."
 
-                if not rooms or not isinstance(rooms, list):
-                    return "No hay disponibilidad en las fechas indicadas."
+                rooms = result.get("response") or result.get("data") or []
+                if not rooms:
+                    return "No hay disponibilidad para esas fechas."
+
+                # 🧩 Preparar prompt para el modelo
+                info = "\n".join(
+                    f"- {r.get('roomTypeName', 'Habitación')} "
+                    f"({r.get('avail', 0)} disponibles) — {r.get('price', '?')} €"
+                    for r in rooms
+                )
 
                 prompt = (
                     f"{get_time_context()}\n\n"
-                    f"Información de habitaciones y precios (€/noche):\n\n"
-                    f"{json.dumps(rooms, ensure_ascii=False, indent=2)}\n\n"
+                    f"Información de habitaciones y precios:\n{info}\n\n"
                     f"El huésped pregunta: \"{query}\""
                 )
 
@@ -104,19 +88,19 @@ class DispoPreciosAgent:
                 return response.content.strip()
 
             except Exception as e:
-                log.error(f"❌ Error en availability_pricing_tool: {e}", exc_info=True)
+                log.error(f"❌ Error en _availability_tool: {e}", exc_info=True)
                 return "Ha ocurrido un problema al consultar precios o disponibilidad."
 
         return Tool(
             name="availability_pricing",
             func=lambda q: self._sync_run(_availability_tool, q),
-            description="Consulta disponibilidad, precios y tipos de habitación del hotel.",
+            description="Consulta disponibilidad, precios y tipos de habitación del hotel (HTTP local).",
             return_direct=True,
         )
 
     # ----------------------------------------------------------
     def _build_agent_executor(self):
-        """Crea el AgentExecutor con control de iteraciones y sin pasos intermedios."""
+        """Crea el AgentExecutor de LangChain."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.prompt_text),
             MessagesPlaceholder("chat_history"),
@@ -138,27 +122,24 @@ class DispoPreciosAgent:
 
     # ----------------------------------------------------------
     def _sync_run(self, coro, *args, **kwargs):
-        """Permite ejecutar async coroutines dentro de contextos sync (LangChain)."""
+        """Permite ejecutar async coroutines dentro de contextos sync."""
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-
         if loop.is_running():
             import nest_asyncio
             nest_asyncio.apply()
-
         return loop.run_until_complete(coro(*args, **kwargs))
 
     # ----------------------------------------------------------
     async def handle(self, pregunta: str, chat_history=None, chat_id: str = None) -> str:
-        """Entrada principal del subagente (modo asíncrono) con soporte de memoria."""
+        """Entrada principal del subagente (modo asíncrono)."""
         log.info(f"📩 [DispoPreciosAgent] Recibida pregunta: {pregunta}")
         lang = language_manager.detect_language(pregunta)
 
         try:
-            # 🔁 Refrescar contexto temporal antes de cada ejecución
             base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
             self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
@@ -172,20 +153,12 @@ class DispoPreciosAgent:
                 ""
             )
 
-            raw_output = language_manager.ensure_language(output, lang)
-            respuesta_final = normalize_reply(raw_output, pregunta, agent_name="DispoPreciosAgent")
+            respuesta_final = normalize_reply(
+                language_manager.ensure_language(output, lang),
+                pregunta,
+                agent_name="DispoPreciosAgent"
+            )
 
-            # 🧹 Limpieza de duplicados y redundancias
-            seen, cleaned = set(), []
-            for line in respuesta_final.splitlines():
-                line = line.strip()
-                if line and line not in seen:
-                    cleaned.append(line)
-                    seen.add(line)
-
-            respuesta_final = " ".join(cleaned).strip()
-
-            # 🧠 Guardar interacción en memoria
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
