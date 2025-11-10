@@ -1,71 +1,77 @@
+# =====================================================
 # mcp_server.py
+# =====================================================
 """
-MCP Server - Protocolo Real (BookAI)
+BookAI MCP Server (HTTP API)
 ------------------------------------
-Servidor compatible con el cliente langchain_mcp_adapters.
-Expone la tool "knowledge_base" conectada a Supabase.
+Servidor REST compatible con `langchain_mcp_adapters`
+y con n8n.
+
+Expone el endpoint:
+  POST /tools/knowledge_base
+para consultar la base de conocimientos vectorizada.
 """
 
 import logging
-from mcp.server.fastmcp import FastMCP
-from core.config import supabase_client, openai_client, MODEL_EMBEDDING
+from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
+from core.logging import audit_middleware
+from tools import knowledge_base
 
-log = logging.getLogger("bookai_mcp")
-mcp = FastMCP("BookAI MCP Server")
+# =====================================================
+# ⚙️ CONFIGURACIÓN BASE
+# =====================================================
 
+app = FastAPI(
+    title="BookAI MCP Server",
+    description="Servidor MCP HTTP compatible con n8n / LangChain streamable_http",
+    version="1.0.0",
+)
 
-@mcp.tool()
-async def knowledge_base(
-    query: str,
-    match_count: int = 7,
-    match_threshold: float = 0.75
-):
-    """
-    Tool: Consulta la base de conocimientos vectorizada de Alda Ponferrada.
-    """
-    try:
-        if not query.strip():
-            return {"error": "La consulta no puede estar vacía"}
+# CORS abierto para compatibilidad
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
-        log.info(f"🧠 Consulta KB: {query}")
+# Middleware de auditoría simple
+app.middleware("http")(audit_middleware)
 
-        # 1️⃣ Generar embedding
-        embedding_response = openai_client.embeddings.create(
-            model=MODEL_EMBEDDING,
-            input=query,
-        )
-        query_embedding = embedding_response.data[0].embedding
+# Logger global
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+)
+log = logging.getLogger("MCPServer")
 
-        # 2️⃣ Llamar RPC en Supabase
-        rpc_response = supabase_client.rpc(
-            "match_documents",
-            {
-                "query_embedding": query_embedding,
-                "match_threshold": match_threshold,
-                "match_count": match_count,
-                "filter": None,
-            },
-        ).execute()
+# =====================================================
+# 🔌 ENDPOINTS PRINCIPALES
+# =====================================================
 
-        documents = rpc_response.data or []
-        return {
-            "success": True,
-            "results_count": len(documents),
-            "data": documents,
-        }
+# Tool principal (base de conocimientos)
+app.include_router(knowledge_base.router, prefix="/tools", tags=["Knowledge Base"])
 
-    except Exception as e:
-        log.error(f"❌ Error en knowledge_base: {e}", exc_info=True)
-        return {"error": str(e)}
+# =====================================================
+# 🩺 HEALTH CHECK
+# =====================================================
 
+@app.get("/health")
+async def health_check():
+    """Verifica el estado del servidor MCP."""
+    return {
+        "status": "ok",
+        "message": "MCP Server activo",
+        "version": "1.0.0"
+    }
+
+# =====================================================
+# ▶️ EJECUCIÓN LOCAL
+# =====================================================
 
 if __name__ == "__main__":
-    import traceback
-    try:
-        print("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...", flush=True)
-        log.info("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...")
-        mcp.run()
-    except Exception as e:
-        print("❌ Error fatal al iniciar el MCP Server:", flush=True)
-        traceback.print_exc()
-        log.error(f"❌ Error fatal: {e}", exc_info=True)
+    import uvicorn
+    log.info("🚀 Iniciando MCP Server HTTP en http://localhost:8001 ...")
+    uvicorn.run(app, host="0.0.0.0", port=8001)
