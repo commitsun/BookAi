@@ -7,16 +7,15 @@ BookAI MCP Server (HTTP API)
 Servidor REST compatible con `langchain_mcp_adapters`
 y con n8n.
 
-Expone el endpoint:
-  POST /tools/knowledge_base
-para consultar la base de conocimientos vectorizada.
+Expone los endpoints:
+  POST /tools/knowledge_base       → Consulta base de conocimientos vectorizada
+  POST /tools/availability_pricing → Consulta disponibilidad y precios en Roomdoo
 """
 
 import logging
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from core.logging import audit_middleware
-from tools import knowledge_base
+from tools import knowledge_base, availability_pricing
 
 # =====================================================
 # ⚙️ CONFIGURACIÓN BASE
@@ -28,19 +27,20 @@ app = FastAPI(
     version="1.0.0",
 )
 
-# CORS abierto para compatibilidad
+# -----------------------------------------------------
+# 🌐 Configuración CORS
+# -----------------------------------------------------
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=["*"],          # CORS abierto para compatibilidad
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-# Middleware de auditoría simple
-app.middleware("http")(audit_middleware)
-
-# Logger global
+# -----------------------------------------------------
+# 🪵 Logger global
+# -----------------------------------------------------
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
@@ -51,8 +51,11 @@ log = logging.getLogger("MCPServer")
 # 🔌 ENDPOINTS PRINCIPALES
 # =====================================================
 
-# Tool principal (base de conocimientos)
+# Tool 1️⃣: Base de Conocimientos
 app.include_router(knowledge_base.router, prefix="/tools", tags=["Knowledge Base"])
+
+# Tool 2️⃣: Disponibilidad y Precios
+app.include_router(availability_pricing.router, prefix="/tools", tags=["Availability & Pricing"])
 
 # =====================================================
 # 🩺 HEALTH CHECK

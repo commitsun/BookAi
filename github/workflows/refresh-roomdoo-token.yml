@@ -1,0 +1,51 @@
+name: 🔄 Refresh Roomdoo Token
+
+on:
+  schedule:
+    - cron: "0 9 * * *" # Ejecuta todos los días a las 09:00 UTC (10:00 CET)
+  workflow_dispatch:     # Permite ejecutarlo manualmente desde la pestaña Actions
+
+jobs:
+  refresh-token:
+    name: Refresh Roomdoo Token in Supabase
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: 🧠 Login en Roomdoo y actualizar token
+        run: |
+          echo "🔐 Iniciando login en Roomdoo..."
+
+          # 1️⃣ Login en Roomdoo
+          RESPONSE=$(curl -s -X POST "$ROOMDOO_LOGIN_URL" \
+            -H "Content-Type: application/json" \
+            -d "{\"username\": \"$ROOMDOO_USERNAME\", \"password\": \"$ROOMDOO_PASSWORD\"}")
+
+          TOKEN=$(echo "$RESPONSE" | jq -r '.token')
+
+          if [ "$TOKEN" == "null" ] || [ -z "$TOKEN" ]; then
+            echo "❌ No se recibió token válido de Roomdoo."
+            echo "Respuesta completa: $RESPONSE"
+            exit 1
+          fi
+
+          echo "✅ Token obtenido correctamente."
+
+          # 2️⃣ Guardar token en Supabase
+          NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
+
+          curl -s -X POST "$SUPABASE_URL/rest/v1/tokens_roomdoo" \
+            -H "apikey: $SUPABASE_KEY" \
+            -H "Authorization: Bearer $SUPABASE_KEY" \
+            -H "Content-Type: application/json" \
+            -d "{\"token\": \"roomdoo_token\", \"key\": \"$TOKEN\", \"created_at\": \"$NOW\"}" \
+            -o /dev/null
+
+          echo "✅ Token actualizado en Supabase a las $NOW"
+          echo "🟢 Workflow completado con éxito."
+
+    env:
+      ROOMDOO_LOGIN_URL: ${{ secrets.ROOMDOO_LOGIN_URL }}
+      ROOMDOO_USERNAME: ${{ secrets.ROOMDOO_USERNAME }}
+      ROOMDOO_PASSWORD: ${{ secrets.ROOMDOO_PASSWORD }}
+      SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+      SUPABASE_KEY: ${{ secrets.SUPABASE_KEY }}
