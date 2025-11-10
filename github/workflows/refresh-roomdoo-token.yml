@@ -1,9 +1,12 @@
 name: 🔄 Refresh Roomdoo Token
 
 on:
+  push:
+    branches:
+      - mcp_server    # 👈 Solo se ejecuta al hacer push en esta rama
   schedule:
     - cron: "0 9 * * *" # Ejecuta todos los días a las 09:00 UTC (10:00 CET)
-  workflow_dispatch:     # Permite ejecutarlo manualmente desde la pestaña Actions
+  workflow_dispatch:     # Permite lanzarlo manualmente desde GitHub Actions
 
 jobs:
   refresh-token:
