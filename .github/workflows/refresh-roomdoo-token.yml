@@ -1,12 +1,12 @@
 name: 🔄 Refresh Roomdoo Token
 
 on:
-  push:                     # 🔹 Se ejecuta automáticamente en cada push
+  schedule:
+    - cron: "0 9 * * *" # Ejecuta todos los días a las 09:00 UTC (10:00 CET)
+  push:
     branches:
-      - mcp_server          # Solo cuando haces push a esta rama
-  schedule:                 # 🔹 Además, se ejecuta cada día a las 09:00 UTC
-    - cron: "0 9 * * *"
-  workflow_dispatch:        # 🔹 Permite lanzarlo manualmente si lo deseas
+      - mcp_server
+  workflow_dispatch: # Permite ejecutarlo manualmente
 
 jobs:
   refresh-token:
@@ -31,24 +31,25 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Token obtenido correctamente. "
+          echo "✅ Token obtenido correctamente."
 
-          # 2️⃣ Guardar token en Supabase
+          # 2️⃣ Guardar/actualizar token en Supabase (upsert)
           NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
-          RESPONSE_CODE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SUPABASE_URL/rest/v1/tokens_roomdoo" \
+
+          RESPONSE_SUPABASE=$(curl -s -o /dev/null -w "%{http_code}" -X POST "$SUPABASE_URL/rest/v1/tokens_roomdoo" \
             -H "apikey: $SUPABASE_KEY" \
             -H "Authorization: Bearer $SUPABASE_KEY" \
             -H "Content-Type: application/json" \
+            -H "Prefer: resolution=merge-duplicates" \
             -d "{\"token\": \"roomdoo_token\", \"key\": \"$TOKEN\", \"created_at\": \"$NOW\"}")
 
-          if [ "$RESPONSE_CODE" -eq 201 ] || [ "$RESPONSE_CODE" -eq 200 ]; then
-            echo "✅ Token actualizado en Supabase ($RESPONSE_CODE) a las $NOW"
+          if [ "$RESPONSE_SUPABASE" -ge 200 ] && [ "$RESPONSE_SUPABASE" -lt 300 ]; then
+            echo "✅ Token actualizado en Supabase (HTTP $RESPONSE_SUPABASE) a las $NOW"
+            echo "🟢 Workflow completado con éxito."
           else
-            echo "❌ Error al actualizar token en Supabase. Código: $RESPONSE_CODE"
+            echo "❌ Error al actualizar token en Supabase. Código: $RESPONSE_SUPABASE"
             exit 1
           fi
-
-          echo "🟢 Workflow completado con éxito."
 
     env:
       ROOMDOO_LOGIN_URL: ${{ secrets.ROOMDOO_LOGIN_URL }}
