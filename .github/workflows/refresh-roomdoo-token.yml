@@ -31,7 +31,7 @@ jobs:
             exit 1
           fi
 
-          echo "✅ Token obtenido correctamente."
+          echo "✅ Token obtenido correctamente. "
 
           # 2️⃣ Guardar token en Supabase
           NOW=$(date -u +"%Y-%m-%dT%H:%M:%SZ")
