@@ -1,15 +1,13 @@
+version: "3.9"
+
 services:
-  hotelai-app:
+  mcp-server:
     build: .
-    container_name: bookai
-    tty: true
-    stdin_open: true
-    env_file:
-      - .env   
-    volumes:
-      - .:/app
+    container_name: bookai_mcp_server
     ports:
-      - "8000:8000"
-    command: >
-      uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1 --reload
-    restart: always
+      - "8001:8001"
+    env_file:
+      - .env
+    volumes:
+      - ./data:/app/data
+    restart: unless-stopped

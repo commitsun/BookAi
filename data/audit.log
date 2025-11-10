@@ -1,0 +1,3 @@
+{"timestamp": "2025-11-10T07:33:40.298209", "method": "GET", "path": "/health", "client_ip": "172.18.0.1", "status_code": 200}
+{"timestamp": "2025-11-10T07:34:08.527390", "method": "POST", "path": "/tools/knowledge_base", "client_ip": "172.18.0.1", "status_code": 500}
+{"timestamp": "2025-11-10T07:37:33.309428", "method": "POST", "path": "/tools/knowledge_base", "client_ip": "172.18.0.1", "status_code": 200}

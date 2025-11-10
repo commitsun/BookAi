@@ -1,17 +1,24 @@
+# Dockerfile - BOOKAI MCP Server
+
 FROM python:3.11-slim
 
 WORKDIR /app
 
+# Instalar dependencias del sistema (por si alguna lib las necesita)
+RUN apt-get update && apt-get install -y build-essential && rm -rf /var/lib/apt/lists/*
+
+# Copiar requirements e instalarlos
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Corrige bug conocido de FastMCP (log)
-RUN sed -i 's/logger.info(f"Starting MCP server /# logger.info(f"Starting MCP server /' /usr/local/lib/python3.11/site-packages/fastmcp/server/server.py
-
-ENV PYTHONPATH=/app
+# Copiar el resto del código
 COPY . .
 
-ENV DOTENV_PATH=/app/.env
+# Crear directorio de logs (por si acaso)
+RUN mkdir -p data
 
-EXPOSE 8000
-CMD ["uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--reload"]
+# Exponer puerto del MCP server
+EXPOSE 8001
+
+# Comando por defecto: lanzar el servidor FastAPI con uvicorn
+CMD ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8001"]

@@ -1,24 +1,31 @@
 # core/config.py
-from dotenv import load_dotenv
-import os
 
+import os
+from supabase import create_client
+from openai import OpenAI
+from dotenv import load_dotenv
+
+# Cargar variables de .env (útil en local)
 load_dotenv()
 
-class Settings:
-    """Configuración centralizada del proyecto HOTEL_AI"""
+SUPABASE_URL = os.getenv("SUPABASE_URL")
+SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
 
-    OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not SUPABASE_URL or not SUPABASE_KEY:
+    raise RuntimeError("❌ Falta configuración de Supabase en variables de entorno")
 
-    # WhatsApp / Meta
-    WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
-    WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
-    WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+if not OPENAI_API_KEY:
+    raise RuntimeError("❌ Falta OPENAI_API_KEY en variables de entorno")
 
-    # Telegram / encargado
-    TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
-    TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")
+# Cliente Supabase
+supabase_client = create_client(SUPABASE_URL, SUPABASE_KEY)
 
-    # MCP / Supabase
-    ENDPOINT_MCP = os.getenv("ENDPOINT_MCP")
-    SUPABASE_URL = os.getenv("SUPABASE_URL")
-    SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+# Cliente OpenAI
+openai_client = OpenAI(api_key=OPENAI_API_KEY)
+
+# Modelo de embeddings (igual que en n8n)
+MODEL_EMBEDDING = "text-embedding-3-small"
+
+# Tabla de knowledge base actual (un hotel)
+DEFAULT_KB_TABLE = "kb_alda_ponferrada"
