@@ -1,4 +1,4 @@
-# main_mcp.py
+# mcp_server.py
 """
 MCP Server - Protocolo Real (BookAI)
 ------------------------------------
@@ -60,5 +60,12 @@ async def knowledge_base(
 
 
 if __name__ == "__main__":
-    log.info("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...")
-    mcp.run()
+    import traceback
+    try:
+        print("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...", flush=True)
+        log.info("🚀 Iniciando MCP Server (Protocolo MCP) en puerto 8001 ...")
+        mcp.run()
+    except Exception as e:
+        print("❌ Error fatal al iniciar el MCP Server:", flush=True)
+        traceback.print_exc()
+        log.error(f"❌ Error fatal: {e}", exc_info=True)

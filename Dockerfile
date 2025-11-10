@@ -20,5 +20,5 @@ RUN mkdir -p data
 # Exponer puerto del MCP server
 EXPOSE 8001
 
-# Comando por defecto: lanzar el servidor FastAPI con uvicorn
-CMD ["uvicorn", "mcp_server:app", "--host", "0.0.0.0", "--port", "8001"]
+# Comando por defecto: lanzar el servidor MCP nativo
+CMD ["python", "mcp_server.py"]
