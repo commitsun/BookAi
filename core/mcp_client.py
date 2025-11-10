@@ -10,13 +10,14 @@ logger = logging.getLogger(__name__)
 
 # Leer endpoint desde .env
 mcp_url = os.getenv("ENDPOINT_MCP")
+mcp_local = "http://bookai_mcp_server:8001"
 if not mcp_url:
     raise RuntimeError("❌ Falta la variable ENDPOINT_MCP en el .env")
 
 # 🔗 Conexiones MCP activas
 # Solo los agentes que realmente usan workflows remotos
 mcp_connections = {
-    "InfoAgent": {"transport": "streamable_http", "url": mcp_url},
+    "InfoAgent": {"transport": "streamable_http", "url": mcp_local},
     "DispoPreciosAgent": {"transport": "streamable_http", "url": mcp_url},
     # InternoAgent NO usa MCP — es local (Telegram + Supabase)
 }

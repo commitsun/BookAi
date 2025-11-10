@@ -13,3 +13,9 @@ services:
     command: >
       uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1 --reload
     restart: always
+    networks:
+      - bookai_shared
+
+networks:
+  bookai_shared:
+    external: true
