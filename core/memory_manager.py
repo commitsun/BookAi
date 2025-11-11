@@ -4,7 +4,6 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from core.db import get_conversation_history, save_message
 
-
 log = logging.getLogger("MemoryManager")
 
 
@@ -15,10 +14,12 @@ class MemoryManager:
     - Mantiene un buffer temporal por `conversation_id`
     - Guarda y recupera mensajes de la tabla `chat_history` en Supabase
     - Mezcla automáticamente mensajes recientes de RAM + DB
+    - 🆕 Añade soporte para flags de estado (ej. escalación activa)
     """
 
     def __init__(self, max_runtime_messages: int = 12, db_history_days: int = 7):
         self.runtime_memory: Dict[str, List[Dict[str, Any]]] = {}
+        self.state_flags: Dict[str, Dict[str, Any]] = {}  # 🆕 flags de sesión por chat_id
         self.max_runtime_messages = max_runtime_messages
         self.db_history_days = db_history_days
 
@@ -80,8 +81,6 @@ class MemoryManager:
         No añade etiquetas ni prefijos en el contenido.
         """
         cid = self._clean_id(conversation_id)
-
-        # Normaliza el rol
         valid_roles = {"user", "assistant", "system", "tool"}
         normalized_role = role if role in valid_roles else "assistant"
 
@@ -103,22 +102,20 @@ class MemoryManager:
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
 
-
     # ----------------------------------------------------------------------
     def clear(self, conversation_id: str) -> None:
-        """
-        Limpia la memoria temporal de una conversación.
-        """
+        """Limpia la memoria temporal de una conversación."""
         cid = self._clean_id(conversation_id)
         if cid in self.runtime_memory:
             del self.runtime_memory[cid]
             log.info(f"🧹 Memoria temporal limpiada para {cid}")
+        if cid in self.state_flags:  # 🆕 limpiar flags también
+            del self.state_flags[cid]
+            log.info(f"🧹 Flags de estado limpiados para {cid}")
+
     # ----------------------------------------------------------------------
     def update_memory(self, conversation_id: str, role: str, content: str) -> None:
-        """
-        Alias retrocompatible de `save()` usado por los agentes antiguos (InfoAgent, etc.)
-        Permite guardar mensajes en memoria sin romper compatibilidad.
-        """
+        """Alias retrocompatible de `save()` usado por agentes antiguos."""
         try:
             self.save(conversation_id=conversation_id, role=role, content=content)
         except Exception as e:
@@ -128,9 +125,6 @@ class MemoryManager:
     def get_memory_as_messages(self, conversation_id: str, limit: int = 10):
         """
         🔄 Devuelve la memoria en formato LangChain (HumanMessage / AIMessage / SystemMessage).
-
-        Esto permite que los agentes puedan reconstruir el contexto correctamente
-        sin errores de tipo (dict → ChatMessage).
         """
         from langchain.schema import HumanMessage, AIMessage, SystemMessage
 
@@ -141,7 +135,6 @@ class MemoryManager:
             for msg in raw_messages:
                 role = msg.get("role", "assistant")
                 content = msg.get("content", "")
-
                 if not content:
                     continue
 
@@ -160,3 +153,24 @@ class MemoryManager:
         except Exception as e:
             log.error(f"⚠️ Error al convertir memoria a mensajes LangChain: {e}", exc_info=True)
             return []
+
+    # ======================================================================
+    # 🆕  MÉTODOS NUEVOS: Flags persistentes (estado de escalación, etc.)
+    # ======================================================================
+    def set_flag(self, conversation_id: str, flag_name: str, value: Any = True) -> None:
+        """Marca un flag de estado (ej. escalación activa)."""
+        cid = self._clean_id(conversation_id)
+        self.state_flags.setdefault(cid, {})[flag_name] = value
+        log.debug(f"🚩 Flag '{flag_name}' = {value} para {cid}")
+
+    def get_flag(self, conversation_id: str, flag_name: str) -> Optional[Any]:
+        """Recupera un flag de estado (None si no existe)."""
+        cid = self._clean_id(conversation_id)
+        return self.state_flags.get(cid, {}).get(flag_name)
+
+    def clear_flag(self, conversation_id: str, flag_name: str) -> None:
+        """Elimina un flag de estado."""
+        cid = self._clean_id(conversation_id)
+        if cid in self.state_flags and flag_name in self.state_flags[cid]:
+            del self.state_flags[cid][flag_name]
+            log.debug(f"🧹 Flag '{flag_name}' eliminado para {cid}")

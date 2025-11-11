@@ -211,14 +211,36 @@ async def process_user_message(
 
         if "aprobado" not in estado_out:
             log.warning(f"🚨 Respuesta rechazada por Supervisor Output: {motivo_out}")
+
+            # 🧠 Recuperar historial reciente del huésped
+            hist_text = ""
+            try:
+                raw_hist = memory_manager.get_memory(chat_id, limit=6)
+                if raw_hist:
+                    lines = []
+                    for m in raw_hist:
+                        role = m.get("role")
+                        prefix = "Huésped" if role == "user" else "Asistente"
+                        lines.append(f"{prefix}: {m.get('content','')}")
+                    hist_text = "\n".join(lines)
+            except Exception as e:
+                log.warning(f"⚠️ No se pudo recuperar historial para escalación: {e}")
+
+            # 🧩 Combinar contexto con historial
+            context_full = (
+                f"Respuesta rechazada: {response_raw[:150]}\n\n"
+                f"🧠 Historial reciente:\n{hist_text}"
+            )
+
             await interno_agent.escalate(
                 guest_chat_id=chat_id,
-                guest_message=user_message,
+                guest_message=user_message,  # último mensaje literal
                 escalation_type="bad_response",
                 reason=motivo_out,
-                context=f"Respuesta rechazada: {response_raw[:150]}",
+                context=context_full,
             )
             return None
+
 
         localized = language_manager.ensure_language(response_raw, guest_lang)
         return localized

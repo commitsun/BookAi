@@ -1,7 +1,8 @@
 import json
 import logging
+import re
 from fastmcp import FastMCP
-from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
+from core.config import ModelConfig, ModelTier
 from core.observability import ls_context
 
 log = logging.getLogger("SupervisorOutputAgent")
@@ -11,11 +12,8 @@ log = logging.getLogger("SupervisorOutputAgent")
 # =============================================================
 
 mcp = FastMCP("SupervisorOutputAgent")
-
-# ✅ LLM centralizado (usa gpt-4.1 desde .env)
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
-# Cargar prompt desde archivo
 with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
     SUPERVISOR_OUTPUT_PROMPT = f.read()
 
@@ -55,29 +53,65 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
             return f"Interno({json.dumps(fallback, ensure_ascii=False)})"
 
 
-# Registrar como herramienta MCP
+# Registrar herramienta MCP
 auditar_respuesta = mcp.tool()(_auditar_respuesta_func)
 
 # =============================================================
-# 🚦 CLASE PRINCIPAL CON MEMORIA
+# 🚦 CLASE PRINCIPAL CON MEMORIA Y CONTROL ANTI-LOOP
 # =============================================================
 
 class SupervisorOutputAgent:
     """
-    Agente de auditoría de salida con integración de memoria.
-    Guarda cada interacción (entrada y salida) para mantener trazabilidad.
+    Agente de auditoría de salida con integración de memoria y detección de loops.
     """
 
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
 
     async def validate(self, user_input: str, agent_response: str, chat_id: str = None) -> dict:
-        """Normaliza la salida del modelo y aplica tolerancia contextual."""
+        """Evalúa la respuesta y aplica reglas de tolerancia + detección de loops."""
         try:
+            # =====================================================
+            # 🚨 DETECCIÓN DE BUCLES DE INCISOS / REPETICIÓN
+            # =====================================================
+            inciso_pattern = re.compile(
+                r"(estoy consultando|voy a consultar|un momento|permíteme|déjame).*encargado", re.IGNORECASE
+            )
+            repetitions = len(re.findall(inciso_pattern, agent_response))
+
+            if repetitions >= 3:
+                log.warning("♻️ Posible loop de incisos detectado → marcar como error controlado.")
+                return {
+                    "estado": "Rechazado",
+                    "motivo": "Loop detectado (repetición excesiva de incisos)",
+                    "sugerencia": "Detener ejecución y escalar al encargado",
+                }
+
+            # =====================================================
+            # 🚀 DETECTOR DE MENSAJES DE ESCALACIÓN LEGÍTIMOS
+            # =====================================================
+            ESCALATION_PATTERNS = [
+                r"(un momento|déjame|voy a|permíteme|contactando|consultando).*(encargado|equipo|gerente|hotel)",
+                r"(estoy|comunicando|contactar).*(encargado|equipo|hotel)",
+                r"(dame|dame un).*(momento|segundo|instante).*consult",
+            ]
+
+            for pattern in ESCALATION_PATTERNS:
+                if re.search(pattern, agent_response.lower()):
+                    log.info("✅ Mensaje de acompañamiento / escalación legítimo → aprobado automáticamente.")
+                    return {
+                        "estado": "Aprobado",
+                        "motivo": "Mensaje de cortesía o escalación válido",
+                        "response": agent_response,
+                        "sugerencia": None,
+                    }
+
+            # =====================================================
+            # 🧠 ANÁLISIS CON EL LLM (modo auditor)
+            # =====================================================
             raw = await _auditar_respuesta_func(user_input, agent_response)
             salida = (raw or "").strip()
 
-            # 🧠 Guardar auditoría en memoria si está habilitada
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
@@ -89,84 +123,73 @@ class SupervisorOutputAgent:
                 "¿te gustaría", "¿prefieres", "¿deseas", "¿quieres",
                 "puedo ayudarte", "¿necesitas más información"
             ]
-            if (
-                any(t in agent_response.lower() for t in conversational_tokens)
-                or any(token in agent_response for token in ["1.", "2.", "•", "-", "\n\n"])
-                or len(agent_response) > 80
-            ):
-                log.info("🩵 Respuesta extensa o conversacional → tolerancia activa")
 
             # =====================================================
-            # Caso 1: salida directa “Aprobado”
+            # 🎯 REGLAS DE DECISIÓN
             # =====================================================
+
+            # Caso 1: salida directa “Aprobado”
             if salida.lower().startswith("aprobado"):
                 return {"estado": "Aprobado", "motivo": "Respuesta correcta aprobada"}
 
-            # =====================================================
             # Caso 2: salida tipo Interno({...})
-            # =====================================================
             if salida.startswith("Interno(") and salida.endswith(")"):
                 inner = salida[len("Interno("):-1].strip()
                 try:
                     data = json.loads(inner)
                     estado = str(data.get("estado", "")).lower()
 
-                    if any(pal in estado for pal in ["rechazado", "no aprobado"]):
-                        if (
-                            len(agent_response.split()) > 8
-                            and not any(bad in agent_response.lower() for bad in ["insulto", "odio", "violencia", "sexual"])
-                        ):
-                            log.warning("⚠️ Rechazo leve detectado, pero la respuesta es coherente → Aprobada.")
-                            return {
-                                "estado": "Aprobado",
-                                "motivo": "Rechazo leve corregido por tolerancia contextual",
-                                "sugerencia": ""
-                            }
-                        log.warning(f"🚨 Escalación detectada por SupervisorOutput: {data}")
+                    if "rechazado" in estado or "no aprobado" in estado:
+                        log.warning(f"🚨 Rechazo confirmado por SupervisorOutput: {data}")
                         return data
 
                     if "revisión" in estado:
                         return {"estado": "Revisión Necesaria", "motivo": data.get("motivo", "")}
 
                     return {"estado": "Aprobado", "motivo": data.get("motivo", "Aprobado por defecto")}
-
                 except json.JSONDecodeError:
-                    log.warning("⚠️ JSON inválido dentro de Interno(), aprobado por seguridad.")
-                    return {"estado": "Aprobado", "motivo": "Formato irregular pero sin indicios negativos"}
+                    log.warning("⚠️ JSON irregular en Interno(), aprobado por seguridad.")
+                    return {"estado": "Aprobado", "motivo": "Formato irregular pero sin errores"}
 
             # =====================================================
-            # Caso 3: salida tipo texto con “Estado: ...”
+            # 🧩 Caso 3: salida con “rechazado” explícito → genera contexto enriquecido
             # =====================================================
-            if "estado:" in salida.lower():
-                estado_line = next((l for l in salida.splitlines() if "estado:" in l.lower()), "")
-                estado_val = estado_line.lower()
+            if "rechazado" in salida.lower():
+                log.warning("🚨 Rechazo textual detectado por modelo auditor.")
 
-                if any(k in estado_val for k in ["rechazado", "no aprobado"]):
-                    if (
-                        len(agent_response) > 80
-                        or any(t in agent_response for t in ["1.", "2.", "•", "-", "\n\n"])
-                        or any(x in agent_response.lower() for x in conversational_tokens)
-                    ):
-                        log.info("🩵 Rechazo ignorado (respuesta extensa o lista detectada).")
-                        return {"estado": "Aprobado", "motivo": "Respuesta extensa aceptada"}
-                    return {"estado": "Rechazado", "motivo": "Modelo marcó explícitamente rechazo"}
+                # 🧾 Recuperar historial reciente (si existe en memoria)
+                historial = ""
+                if self.memory_manager and chat_id:
+                    try:
+                        conv = self.memory_manager.get_history(chat_id)
+                        if conv:
+                            ultimos = conv[-6:]
+                            formatted = []
+                            for m in ultimos:
+                                role = "Huésped" if m.get("role") == "user" else "Asistente"
+                                content = m.get("content", "").strip()
+                                formatted.append(f"{role}: {content}")
+                            historial = "\n".join(formatted)
+                    except Exception as e:
+                        log.warning(f"⚠️ No se pudo recuperar historial para el contexto: {e}")
 
-                if "revisión" in estado_val:
-                    return {"estado": "Revisión Necesaria", "motivo": "Modelo solicita revisión"}
+                # 🧠 Construir contexto extendido (como antes)
+                contexto_extendido = (
+                    f"Respuesta rechazada: {agent_response}\n\n"
+                    f"Historial reciente:\n{historial if historial else '(sin historial disponible)'}"
+                )
 
-                return {"estado": "Aprobado", "motivo": "Modelo indicó aprobación textual"}
+                return {
+                    "estado": "Rechazado",
+                    "motivo": "Modelo marcó rechazo textual",
+                    "context": contexto_extendido,  # <— 🔥 clave: esto es lo que InternoAgent usa
+                }
 
             # =====================================================
-            # Caso 4: salida libre con “aprobado”
+            # 🩵 Caso 4: Aprobado por defecto
             # =====================================================
-            if "aprobado" in salida.lower() and "rechazado" not in salida.lower():
-                return {"estado": "Aprobado", "motivo": "Texto indica aprobación"}
-
-            # =====================================================
-            # Caso 5: formato desconocido → aprobado por seguridad
-            # =====================================================
-            log.warning(f"⚠️ Formato no conforme → aprobado por defecto.\nSalida: {salida}")
-            return {"estado": "Aprobado", "motivo": "Formato no conforme pero sin errores detectados"}
+            log.info("🩵 Aprobado por defecto (sin indicios de error o loop).")
+            return {"estado": "Aprobado", "motivo": "Sin indicios negativos detectados"}
 
         except Exception as e:
             log.error(f"⚠️ Error en validate (output): {e}", exc_info=True)
