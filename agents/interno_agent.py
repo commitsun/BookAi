@@ -1,9 +1,6 @@
 """
-🤖 Interno Agent v5 - Agente Reactivo con Memoria Integrada
-===========================================================
-Gestiona el flujo interno de escalaciones entre huésped y encargado.
-- Guarda todas las interacciones en memoria (huésped ↔ encargado).
-- Permite trazabilidad de cada escalación.
+🤖 InternoAgent v6 — Agente Reactivo con Memoria y Prompt Dinámico
+Gestiona el flujo de escalaciones huésped ↔ encargado.
 """
 
 import logging
@@ -11,31 +8,26 @@ from datetime import datetime
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
-
 from tools.interno_tool import create_interno_tools, ESCALATIONS_STORE
+from core.utils.utils_prompt import load_prompt  # ✅ nuevo import
+from core.utils.time_context import get_time_context  # para contexto temporal
 
 log = logging.getLogger("InternoAgent")
 
-# =============================================================
-# 🧠 CREACIÓN DEL AGENTE REACTIVO
-# =============================================================
 
 def create_interno_agent():
-    """Crea el agente interno con herramientas y modelo LLM."""
+    """Crea el agente interno usando el prompt de utils_prompt."""
     llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
 
-    try:
-        with open("prompts/interno_prompt.txt", "r", encoding="utf-8") as f:
-            interno_prompt = f.read()
-    except FileNotFoundError:
-        interno_prompt = (
-            "Eres el agente interno del hotel. Gestionas escalaciones entre huésped y encargado."
-        )
+    # ✅ carga del prompt desde core.utils.utils_prompt
+    base_prompt = load_prompt("interno_prompt.txt") or (
+        "Eres el agente interno del hotel. Gestionas escalaciones entre huésped y encargado."
+    )
+    final_prompt = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
     tools = create_interno_tools()
-
     prompt = ChatPromptTemplate.from_messages([
-        ("system", interno_prompt),
+        ("system", final_prompt),
         MessagesPlaceholder("chat_history", optional=True),
         ("user", "{input}"),
         MessagesPlaceholder("agent_scratchpad"),
@@ -45,23 +37,14 @@ def create_interno_agent():
     return AgentExecutor(agent=agent, tools=tools, verbose=True)
 
 
-# =============================================================
-# 🤖 CLASE PRINCIPAL CON MEMORIA
-# =============================================================
-
 class InternoAgent:
-    """Orquesta el flujo entre el encargado (Telegram) y el huésped (WhatsApp),
-    con trazabilidad en memoria.
-    """
+    """Orquesta el flujo entre encargado y huésped, con memoria persistente."""
 
     def __init__(self, memory_manager=None):
         self.executor = create_interno_agent()
         self.escalations = ESCALATIONS_STORE
-        self.memory_manager = memory_manager  # 🧠 integración aquí
+        self.memory_manager = memory_manager
 
-    # =========================================================
-    # 🔺 1️⃣ Crear nueva escalación
-    # =========================================================
     async def escalate(self, guest_chat_id, guest_message, escalation_type, reason, context=""):
         escalation_id = f"esc_{guest_chat_id}_{int(datetime.utcnow().timestamp())}"
         user_input = f"""
@@ -78,7 +61,6 @@ Usa la tool 'notificar_encargado' con estos datos.
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
         output = (result.get("output") or str(result)).strip()
 
-        # 🧠 Guardar evento en memoria
         if self.memory_manager:
             self.memory_manager.update_memory(
                 guest_chat_id,
@@ -89,19 +71,11 @@ Usa la tool 'notificar_encargado' con estos datos.
         log.info(f"📢 Escalación creada {escalation_id} → {guest_chat_id}")
         return output
 
-    # =========================================================
-    # 🧾 2️⃣ Procesar respuesta del encargado → generar borrador
-    # =========================================================
     async def process_manager_reply(self, escalation_id, manager_reply):
-        """
-        Procesa la respuesta del encargado (por Telegram):
-        - Si es la primera vez, genera el borrador inicial.
-        - Si es un ajuste posterior, reformula con el prompt empático.
-        """
+        """Procesa respuesta del encargado (Telegram) → generar o ajustar borrador."""
         manager_reply_clean = manager_reply.strip().lower()
         guest_chat_id = self._get_chat_from_escalation(escalation_id)
 
-        # 🧠 Registrar la intervención del encargado
         if self.memory_manager and guest_chat_id:
             self.memory_manager.update_memory(
                 guest_chat_id,
@@ -109,7 +83,6 @@ Usa la tool 'notificar_encargado' con estos datos.
                 manager_reply
             )
 
-        # Si ya hay borrador → ajustes
         if escalation_id in self.escalations and self.escalations[escalation_id].draft_response:
             if "ok" not in manager_reply_clean and "confirm" not in manager_reply_clean:
                 user_input = f"""
@@ -120,19 +93,14 @@ Usa la tool 'confirmar_y_enviar_respuesta' con confirmed=False y adjustments="{m
 """
                 result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
                 output = (result.get("output") or "").strip()
-
-                # Guardar en memoria
                 if self.memory_manager and guest_chat_id:
                     self.memory_manager.update_memory(
                         guest_chat_id,
-                        f"[InternoAgent] Ajustes solicitados por encargado ({escalation_id})",
+                        f"[InternoAgent] Ajustes solicitados ({escalation_id})",
                         output
                     )
-
-                log.info(f"🧾 Nuevo borrador ajustado para {escalation_id}: {output[:100]}...")
                 return output
 
-        # Si no había borrador previo → generar uno nuevo
         user_input = f"""
 El encargado respondió a la escalación {escalation_id}:
 \"{manager_reply}\"
@@ -140,27 +108,15 @@ Usa la tool 'generar_borrador_respuesta'.
 """
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
         output = (result.get("output") or "").strip()
-
-        # 🧠 Guardar en memoria
         if self.memory_manager and guest_chat_id:
             self.memory_manager.update_memory(
                 guest_chat_id,
                 f"[InternoAgent] Nuevo borrador generado ({escalation_id})",
                 output
             )
-
-        log.info(f"🧾 Borrador inicial generado para {escalation_id}: {output[:100]}...")
         return output
 
-    # =========================================================
-    # ✅ 3️⃣ Confirmar y enviar respuesta final al huésped
-    # =========================================================
     async def send_confirmed_response(self, escalation_id, confirmed=True, adjustments=""):
-        """
-        Maneja la confirmación o ajustes finales del encargado.
-        - Si confirmed=True → se envía al huésped por WhatsApp.
-        - Si confirmed=False con texto → se reformula el borrador.
-        """
         user_input = f"""
 Confirmación para la escalación {escalation_id}:
 - Confirmado: {confirmed}
@@ -171,7 +127,6 @@ Usa la tool 'confirmar_y_enviar_respuesta'.
         result = await self.executor.ainvoke({"input": user_input, "chat_history": []})
         output = (result.get("output") or "").strip()
 
-        # 🧠 Guardar en memoria
         guest_chat_id = self._get_chat_from_escalation(escalation_id)
         if self.memory_manager and guest_chat_id:
             self.memory_manager.update_memory(
@@ -179,15 +134,9 @@ Usa la tool 'confirmar_y_enviar_respuesta'.
                 f"[InternoAgent] Confirmación final ({escalation_id}) → confirmed={confirmed}",
                 output
             )
-
-        log.info(f"📤 Respuesta final procesada para {escalation_id}: {output[:100]}...")
         return output
 
-    # =========================================================
-    # 🔍 MÉTODO AUXILIAR: buscar chat_id desde el registro
-    # =========================================================
     def _get_chat_from_escalation(self, escalation_id: str):
-        """Obtiene el chat_id asociado a una escalación si está registrado."""
         esc = self.escalations.get(escalation_id)
         if not esc:
             return None

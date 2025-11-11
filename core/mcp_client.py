@@ -17,7 +17,7 @@ if not mcp_url:
 # 🔗 Conexiones MCP activas
 # Solo los agentes que realmente usan workflows remotos
 mcp_connections = {
-    "InfoAgent": {"transport": "streamable_http", "url": mcp_local},
+    "InfoAgent": {"transport": "streamable_http", "url": mcp_url},
     "DispoPreciosAgent": {"transport": "streamable_http", "url": mcp_url},
     # InternoAgent NO usa MCP — es local (Telegram + Supabase)
 }
