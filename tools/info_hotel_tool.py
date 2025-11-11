@@ -1,8 +1,19 @@
+"""
+🏨 InfoHotelTool — Información general del hotel
+================================================
+Convierte el subagente de información del hotel (InfoAgent)
+en una herramienta LangChain compatible con el MainAgent.
+Responde preguntas sobre servicios, instalaciones, horarios,
+políticas, amenities y más.
+"""
+
 import logging
+import asyncio
 from typing import Optional
 from pydantic import BaseModel, Field
 from langchain.tools import StructuredTool
 from agents.info_agent import InfoAgent
+from core.config import ModelConfig, ModelTier  # ✅ Modelo centralizado
 
 log = logging.getLogger("InfoHotelTool")
 
@@ -26,15 +37,18 @@ class InfoHotelTool:
         self.memory_manager = memory_manager
         self.chat_id = chat_id
 
-        # ✅ CORREGIDO: Propagar memory_manager al subagente
+        # ✅ Usar configuración centralizada del modelo desde core/config.py
+        model_name, temperature = ModelConfig.get_model(ModelTier.SUBAGENT)
+
         self.agent = InfoAgent(
-            model_name="gpt-4.1-mini",
-            memory_manager=memory_manager
+            memory_manager=memory_manager,
+            model_name=model_name,
+            temperature=temperature,
         )
 
-        log.info(f"✅ InfoHotelTool inicializado para chat {chat_id}")
+        log.info(f"✅ InfoHotelTool inicializado para chat {chat_id} (modelo={model_name})")
 
-
+    # ----------------------------------------------------------
     async def _procesar_consulta(self, consulta: str) -> str:
         """Delega la consulta al subagente de información del hotel."""
         try:
@@ -48,14 +62,13 @@ class InfoHotelTool:
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo obtener memoria: {e}")
 
-
-            # ⚠️ CORRECCIÓN: usar await al invocar al subagente
+            # ⚠️ Invocar subagente de forma asíncrona
             respuesta = await self.agent.invoke(
                 user_input=consulta,
                 chat_history=history
             )
 
-            # Verificar si requiere escalación
+            # Detectar si requiere escalación
             if (
                 "ESCALAR_A_INTERNO" in respuesta
                 or self._is_escalation_needed(respuesta)
@@ -73,6 +86,7 @@ class InfoHotelTool:
                 "Por favor, reformula tu consulta o contacta directamente con el hotel."
             )
 
+    # ----------------------------------------------------------
     def _is_escalation_needed(self, respuesta: str) -> bool:
         """Detecta si la respuesta requiere escalar al encargado."""
         keywords = [
@@ -85,6 +99,7 @@ class InfoHotelTool:
         ]
         return any(k in respuesta.lower() for k in keywords)
 
+    # ----------------------------------------------------------
     def as_tool(self) -> StructuredTool:
         """Convierte la clase en una tool compatible con LangChain."""
         return StructuredTool(
@@ -97,14 +112,14 @@ class InfoHotelTool:
                 " - Horarios y ubicación\n"
                 "Si la respuesta es 'ESCALATION_REQUIRED', usa la herramienta 'Interno' para escalar."
             ),
-            func=self._sync_wrapper,  # 🧩 adaptador para entorno sync
+            func=self._sync_wrapper,  # 🧩 adaptador para entornos sync
             coroutine=self._procesar_consulta,  # 🧩 llamada asíncrona real
             args_schema=InfoHotelInput,
         )
 
+    # ----------------------------------------------------------
     def _sync_wrapper(self, consulta: str) -> str:
         """Permite usar el tool desde entornos sin soporte async."""
-        import asyncio
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -116,6 +131,7 @@ class InfoHotelTool:
         return loop.run_until_complete(self._procesar_consulta(consulta))
 
 
+# ----------------------------------------------------------
 def create_info_hotel_tool(memory_manager=None, chat_id: str = "") -> StructuredTool:
     """Factory para crear la herramienta de información del hotel."""
     return InfoHotelTool(memory_manager=memory_manager, chat_id=chat_id).as_tool()

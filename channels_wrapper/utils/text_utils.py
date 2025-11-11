@@ -54,7 +54,7 @@ async def fragment_text_with_ai(text: str, max_fragments: int = 9) -> list[str]:
     if not text or len(text.strip()) < 40:
         return [text.strip()] if text else []
 
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.3)
+    llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.3)
 
     prompt = f"""
 Eres un experto en dividir textos largos en mensajes cortos y naturales.

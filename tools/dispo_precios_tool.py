@@ -1,4 +1,3 @@
-#dispo-precios-tool.py
 """
 🏨 Disponibilidad y Precios Tool - Subagente como herramienta
 ==============================================================
@@ -12,6 +11,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from langchain.tools import StructuredTool
 from agents.dispo_precios_agent import DispoPreciosAgent
+from core.config import ModelConfig, ModelTier  # ✅ Import centralizado
 
 log = logging.getLogger("DispoPreciosTool")
 
@@ -41,14 +41,18 @@ class DispoPreciosTool:
         self.memory_manager = memory_manager
         self.chat_id = chat_id
 
-        # ✅ CORREGIDO: propagar memory_manager al subagente
+        # ✅ Usa el modelo centralizado desde ModelConfig (SUBAGENT)
+        model_name, temperature = ModelConfig.get_model(ModelTier.SUBAGENT)
+
         self.agent = DispoPreciosAgent(
-            model_name="gpt-4.1-mini",
-            memory_manager=memory_manager
+            memory_manager=memory_manager,
+            model_name=model_name,
+            temperature=temperature,
         )
 
-        log.info(f"✅ DispoPreciosTool inicializado para chat {chat_id}")
+        log.info(f"✅ DispoPreciosTool inicializado para chat {chat_id} (modelo={model_name})")
 
+    # ----------------------------------------------------------
     def _procesar_consulta(self, consulta: str) -> str:
         """
         Delega la consulta al subagente de disponibilidad y precios.
@@ -80,7 +84,7 @@ class DispoPreciosTool:
                 "Por favor, reformula tu consulta o contacta directamente con el hotel."
             )
 
-    
+    # ----------------------------------------------------------
     def as_tool(self) -> StructuredTool:
         """
         Convierte esta clase en una herramienta compatible con LangChain.
@@ -107,6 +111,7 @@ class DispoPreciosTool:
         )
 
 
+# ----------------------------------------------------------
 def create_dispo_precios_tool(memory_manager=None, chat_id: str = "") -> StructuredTool:
     """
     Factory function para crear la herramienta de disponibilidad y precios.

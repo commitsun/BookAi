@@ -29,7 +29,6 @@ from core.language_manager import language_manager
 from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 
-# 🆕 InternoAgent v4 (ReAct)
 from agents.interno_agent import InternoAgent
 from core.escalation_manager import register_escalation, get_escalation
 
@@ -60,7 +59,6 @@ app = FastAPI(title="HotelAI - Sistema de Agentes ReAct v4")
 # COMPONENTES GLOBALES
 # =============================================================
 
-
 memory_manager = MemoryManager()
 
 # ✅ Propagar memory_manager a todos los agentes supervisores e internos
@@ -76,7 +74,7 @@ ESCALATION_TRACKING = {}   # message_id ↔ escalation_id
 CHAT_LANG = {}             # chat_id ↔ idioma
 TELEGRAM_PENDING_CONFIRMATIONS = {}  # chat_id → escalación pendiente de confirmación
 
-log.info("✅ Sistema inicializado con Agente Interno v4 (ReAct)")
+log.info("✅ Sistema inicializado con Agente Interno (ReAct)")
 
 # =============================================================
 # 🔧 FIX: persistencia mínima del mapeo (para reinicios de contenedor)
@@ -84,12 +82,14 @@ log.info("✅ Sistema inicializado con Agente Interno v4 (ReAct)")
 
 TRACK_FILE = "/tmp/escalation_tracking.pkl"
 
+
 def save_tracking():
     try:
         with open(TRACK_FILE, "wb") as f:
             pickle.dump(ESCALATION_TRACKING, f)
     except Exception as e:
         log.warning(f"⚠️ No se pudo guardar tracking: {e}")
+
 
 def load_tracking():
     if os.path.exists(TRACK_FILE):
@@ -100,26 +100,34 @@ def load_tracking():
         except Exception as e:
             log.warning(f"⚠️ No se pudo cargar tracking: {e}")
 
+
 load_tracking()
 
 # =============================================================
 # PIPELINE PRINCIPAL
 # =============================================================
 
-async def process_user_message(user_message: str, chat_id: str, hotel_name: str = "Hotel", channel: str = "whatsapp") -> str:
+
+async def process_user_message(
+    user_message: str,
+    chat_id: str,
+    hotel_name: str = "Hotel",
+    channel: str = "whatsapp",
+) -> str | None:
     """
     Flujo principal:
       1. Detección de idioma
       2. Supervisor Input
       3. Main Agent
       4. Supervisor Output
-      5. Escalación → InternoAgent v4
+      5. Escalación → InternoAgent
     """
     try:
         log.info(f"📨 Nuevo mensaje de {chat_id}: {user_message[:150]}")
 
         # ---------------------------------------------------------
         # 1️⃣ Detección de idioma
+        # ---------------------------------------------------------
         try:
             guest_lang = language_manager.detect_language(user_message)
         except Exception:
@@ -129,6 +137,7 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
 
         # ---------------------------------------------------------
         # 2️⃣ Supervisor Input
+        # ---------------------------------------------------------
         input_validation = await supervisor_input.validate(user_message)
         estado_in = input_validation.get("estado", "Aprobado")
         motivo_in = input_validation.get("motivo", "")
@@ -140,31 +149,35 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
                 guest_message=user_message,
                 escalation_type="inappropriate",
                 reason=motivo_in,
-                context="Rechazado por Supervisor Input"
+                context="Rechazado por Supervisor Input",
             )
             return None  # Modo silencioso: solo escalamos
 
         # ---------------------------------------------------------
         # 3️⃣ Main Agent
+        # ---------------------------------------------------------
         try:
             history = memory_manager.get_memory_as_messages(chat_id)
         except Exception as e:
             log.warning(f"⚠️ No se pudo obtener memoria: {e}")
             history = []
 
+        # Callback que envía respuestas intermedias (incisos)
         async def send_inciso_callback(msg: str):
-            localized = language_manager.ensure_language(msg, guest_lang)
-            await channel_manager.send_message(chat_id, localized, channel=channel)
+            try:
+                localized = language_manager.ensure_language(msg, guest_lang)
+                await channel_manager.send_message(chat_id, localized, channel=channel)
+            except Exception as e:
+                log.error(f"❌ Error enviando inciso: {e}")
 
+        # ✅ Creación del MainAgent con configuración centralizada (ModelConfig)
         main_agent = create_main_agent(
             memory_manager=memory_manager,
             send_callback=send_inciso_callback,
-            interno_agent=interno_agent,  # ✅ Instancia compartida
-            model_name="gpt-4o",
-            temperature=0.3,
+            interno_agent=interno_agent,  # instancia compartida global
         )
 
-
+        # 🚀 Invocar el MainAgent con historial y contexto
         response_raw = await main_agent.ainvoke(
             user_input=user_message,
             chat_id=chat_id,
@@ -172,13 +185,14 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
             chat_history=history,
         )
 
+        # 🧩 Validación de respuesta del MainAgent
         if not response_raw:
             await interno_agent.escalate(
                 guest_chat_id=chat_id,
                 guest_message=user_message,
                 escalation_type="info_not_found",
                 reason="Main Agent no devolvió respuesta",
-                context="Respuesta vacía o nula"
+                context="Respuesta vacía o nula",
             )
             return None
 
@@ -187,9 +201,10 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
 
         # ---------------------------------------------------------
         # 4️⃣ Supervisor Output
+        # ---------------------------------------------------------
         output_validation = await supervisor_output.validate(
             user_input=user_message,
-            agent_response=response_raw
+            agent_response=response_raw,
         )
         estado_out = (output_validation.get("estado", "Aprobado") or "").lower()
         motivo_out = output_validation.get("motivo", "")
@@ -201,7 +216,7 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
                 guest_message=user_message,
                 escalation_type="bad_response",
                 reason=motivo_out,
-                context=f"Respuesta rechazada: {response_raw[:150]}"
+                context=f"Respuesta rechazada: {response_raw[:150]}",
             )
             return None
 
@@ -215,7 +230,7 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
             guest_message=user_message,
             escalation_type="info_not_found",
             reason=f"Error crítico: {str(e)}",
-            context="Excepción general en process_user_message"
+            context="Excepción general en process_user_message",
         )
         return None
 
@@ -223,6 +238,7 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
 # =============================================================
 # ENDPOINTS WEBHOOKS WHATSAPP
 # =============================================================
+
 
 @app.get("/webhook")
 async def verify_webhook(request: Request):
@@ -258,12 +274,13 @@ async def whatsapp_webhook(request: Request):
         # ==========================================================
         elif msg_type == "audio":
             from channels_wrapper.utils.media_utils import transcribe_audio
-            from core.config import Settings as C
 
             media_id = msg.get("audio", {}).get("id")
             if media_id:
                 log.info(f"🎧 Audio recibido (media_id={media_id}), iniciando transcripción...")
-                text = transcribe_audio(media_id, C.WHATSAPP_TOKEN, C.OPENAI_API_KEY)
+                whatsapp_token = os.getenv("WHATSAPP_TOKEN", "")
+                openai_key = os.getenv("OPENAI_API_KEY", "")
+                text = transcribe_audio(media_id, whatsapp_token, openai_key)
                 log.info(f"📝 Transcripción completada: {text}")
 
         # ==========================================================
@@ -278,7 +295,10 @@ async def whatsapp_webhook(request: Request):
         # 🧠 Buffer inteligente de mensajes (para agrupar texto)
         # ==========================================================
         async def _process_buffered(cid: str, combined_text: str, version: int):
-            log.info(f"🧠 Procesando lote buffered v{version} → {cid}\n🧩 Mensajes combinados:\n{combined_text}")
+            log.info(
+                f"🧠 Procesando lote buffered v{version} → {cid}\n"
+                f"🧩 Mensajes combinados:\n{combined_text}"
+            )
             resp = await process_user_message(combined_text, cid, channel="whatsapp")
 
             if not resp:
@@ -289,9 +309,7 @@ async def whatsapp_webhook(request: Request):
                 await channel_manager.send_message(uid, txt, channel="whatsapp")
 
             # Fragmentación y envío con ritmo humano
-            from channels_wrapper.utils.text_utils import send_fragmented_async
             await send_fragmented_async(send_to_channel, cid, resp)
-
 
         # Añadir mensaje al buffer
         await buffer_manager.add_message(sender, text, _process_buffered)
@@ -304,8 +322,9 @@ async def whatsapp_webhook(request: Request):
 
 
 # =============================================================
-# TELEGRAM WEBHOOK - InternoAgent v4 (UNIFICADO)
+# TELEGRAM WEBHOOK - InternoAgent (UNIFICADO)
 # =============================================================
+
 
 @app.post("/webhook/telegram")
 async def telegram_webhook_handler(request: Request):
@@ -366,9 +385,11 @@ async def telegram_webhook_handler(request: Request):
         # 2️⃣ Respuesta nueva (reply al mensaje de escalación)
         # =========================================================
         if original_msg_id is not None:
-            escalation_id = get_escalation(str(original_msg_id))  # 👈 usa la función global, no el diccionario local
+            escalation_id = get_escalation(str(original_msg_id))
             if not escalation_id:
-                log.warning(f"⚠️ No se encontró escalación asociada a message_id={original_msg_id}")
+                log.warning(
+                    f"⚠️ No se encontró escalación asociada a message_id={original_msg_id}"
+                )
             else:
                 draft_result = await interno_agent.process_manager_reply(
                     escalation_id=escalation_id,
@@ -396,12 +417,13 @@ async def telegram_webhook_handler(request: Request):
 # HEALTHCHECK
 # =============================================================
 
+
 @app.get("/health")
 async def health_check():
     return {
         "status": "healthy",
         "version": "v4-react",
-        "description": "Sistema de agentes con InternoAgent v4 (ReAct) + buffer WhatsApp",
+        "description": "Sistema de agentes con InternoAgent ReAct + buffer WhatsApp",
     }
 
 
@@ -411,5 +433,6 @@ async def health_check():
 
 if __name__ == "__main__":
     import uvicorn
-    log.info("🚀 Iniciando servidor con InternoAgent v4 ReAct...")
+
+    log.info("🚀 Iniciando servidor con InternoAgent ReAct...")
     uvicorn.run(app, host="0.0.0.0", port=8000)

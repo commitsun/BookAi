@@ -1,3 +1,11 @@
+"""
+💰 DispoPreciosAgent v4 — Disponibilidad, precios y reservas
+-------------------------------------------------------------
+Responde preguntas sobre tipos de habitación, precios y disponibilidad.
+Usa las tools 'buscar_token' y 'Disponibilidad_y_precios' del MCP.
+Integrado con MemoryManager y configuración LLM centralizada.
+"""
+
 import logging
 import json
 import datetime
@@ -12,7 +20,8 @@ from core.mcp_client import mcp_client
 from core.language_manager import language_manager
 from core.utils.normalize_reply import normalize_reply
 from core.utils.utils_prompt import load_prompt
-from core.utils.time_context import get_time_context  # 🕒 Contexto temporal global
+from core.utils.time_context import get_time_context
+from core.config import ModelConfig, ModelTier  # ✅ nuevo import
 
 log = logging.getLogger("DispoPreciosAgent")
 
@@ -21,13 +30,30 @@ class DispoPreciosAgent:
     """
     Subagente encargado de responder preguntas sobre disponibilidad,
     tipos de habitación, precios y reservas.
-    Usa las tools 'buscar_token' y 'Disponibilidad_y_precios' del MCP.
-    Integrado con MemoryManager para trazabilidad completa.
+    Usa MCP Tools y un LLM centralizado (gpt-4.1 por defecto).
     """
 
-    def __init__(self, model_name: str = "gpt-4.1-mini", memory_manager=None):
-        self.model_name = model_name
-        self.llm = ChatOpenAI(model=self.model_name, temperature=0.2)
+    def __init__(self, memory_manager=None, model_name=None, temperature=None):
+        """
+        memory_manager: instancia opcional de MemoryManager
+        model_name / temperature: opcionales. Si no se pasan, se leen de ModelConfig (SUBAGENT).
+        """
+        # ✅ Modelo centralizado + posibilidad de override
+        if model_name is not None or temperature is not None:
+            default_name, default_temp = ModelConfig.get_model(ModelTier.SUBAGENT)
+            if model_name is None:
+                model_name = default_name
+            if temperature is None:
+                temperature = default_temp
+            self.llm = ChatOpenAI(model=model_name, temperature=temperature)
+            self.model_name = model_name
+            self.temperature = temperature
+        else:
+            # Usa configuración centralizada tal cual
+            self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
+            # Valores de referencia para logs
+            self.model_name, self.temperature = ModelConfig.get_model(ModelTier.SUBAGENT)
+
         self.memory_manager = memory_manager
 
         # 🧩 Construcción inicial del prompt con contexto temporal
@@ -38,7 +64,10 @@ class DispoPreciosAgent:
         self.tools = [self._build_tool()]
         self.agent_executor = self._build_agent_executor()
 
-        log.info("💰 DispoPreciosAgent inicializado correctamente con memoria y contexto temporal.")
+        log.info(
+            f"💰 DispoPreciosAgent inicializado correctamente "
+            f"(modelo={self.model_name}, temp={self.temperature})"
+        )
 
     # ----------------------------------------------------------
     def _get_default_prompt(self) -> str:
@@ -46,12 +75,13 @@ class DispoPreciosAgent:
         return (
             "Eres un agente especializado en disponibilidad y precios de un hotel.\n"
             "Tu función es responder con precisión sobre fechas, precios y tipos de habitación disponibles.\n\n"
-            "Usa la información proporcionada por el PMS y responde con tono amable y profesional.\n"
-            "Si la información no es suficiente, solicita detalles adicionales al huésped (fechas, número de personas, etc.)."
+            "Usa la información del PMS y responde con tono amable y profesional.\n"
+            "Si la información no es suficiente, solicita detalles adicionales al huésped "
+            "(fechas, número de personas, tipo de habitación, etc.)."
         )
 
     # ----------------------------------------------------------
-    def _build_tool(self):
+    def _build_tool(self) -> Tool:
         """Crea la tool que consulta disponibilidad y precios en el PMS vía MCP."""
         async def _availability_tool(query: str):
             try:
@@ -115,7 +145,7 @@ class DispoPreciosAgent:
         )
 
     # ----------------------------------------------------------
-    def _build_agent_executor(self):
+    def _build_agent_executor(self) -> AgentExecutor:
         """Crea el AgentExecutor con control de iteraciones y sin pasos intermedios."""
         prompt = ChatPromptTemplate.from_messages([
             ("system", self.prompt_text),
@@ -132,7 +162,7 @@ class DispoPreciosAgent:
             verbose=True,
             return_intermediate_steps=False,
             handle_parsing_errors=True,
-            max_iterations=4,
+            max_iterations=6,
             max_execution_time=60
         )
 
@@ -185,7 +215,7 @@ class DispoPreciosAgent:
 
             respuesta_final = " ".join(cleaned).strip()
 
-            # 🧠 Guardar interacción en memoria
+            # 💾 Guardar interacción en memoria
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,

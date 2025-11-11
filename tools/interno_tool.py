@@ -17,11 +17,11 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 from pydantic import BaseModel
 from langchain_core.tools import tool
-from langchain_openai import ChatOpenAI
 
+# 🧩 Core imports
 from core.language_manager import language_manager
 from core.escalation_db import save_escalation, update_escalation
-from core.config import Settings as C
+from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
 
 log = logging.getLogger("InternoTool")
@@ -134,7 +134,6 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 try:
                     from core.escalation_manager import register_escalation
                     register_escalation(sent_message_id, escalation_id)
-
                     log.info(f"📎 Registrado message_id={sent_message_id} → escalación={escalation_id}")
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo registrar message_id → {e}")
@@ -159,7 +158,9 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         return f"Error: Escalación {escalation_id} no encontrada."
 
     esc = ESCALATIONS_STORE[escalation_id]
-    llm = ChatOpenAI(model="gpt-4o-mini", temperature=0.2)
+
+    # ✅ Usa configuración centralizada para el modelo del agente interno
+    llm = ModelConfig.get_llm(ModelTier.INTERNAL)
 
     try:
         target_lang = language_manager.detect_language(esc.guest_message)
@@ -223,7 +224,6 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
     if not confirmed and adjustments:
         new_draft = generar_borrador(escalation_id, esc.draft_response or "", adjustment=adjustments)
 
-        # 🔧 Eliminar encabezados e instrucciones duplicadas del borrador interno
         clean_draft = new_draft
         for marker in [
             "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
@@ -236,12 +236,10 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
         formatted = (
             "📝 *Nuevo borrador generado según tus ajustes:*\n\n"
             f"{clean_draft.strip()}\n\n"
-            
             "✏️ Si deseas más cambios, vuelve a escribirlos.\n"
             "✅ Si estás conforme, responde con 'OK' para enviarlo al huésped."
         )
         return formatted
-
 
     # ✅ Caso 2: confirmado → envío final
     if confirmed:
@@ -306,4 +304,3 @@ def create_interno_tools():
         generar_borrador_tool,
         confirmar_y_enviar_tool,
     ]
-

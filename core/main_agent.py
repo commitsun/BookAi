@@ -9,7 +9,6 @@
 
 import logging
 from typing import Optional, List, Callable
-from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import StructuredTool
@@ -17,7 +16,7 @@ from langchain.tools import StructuredTool
 # Tools del sistema
 from tools.think_tool import create_think_tool
 from tools.inciso_tool import create_inciso_tool
-from tools.interno_tool import create_interno_tools, ESCALATIONS_STORE  # ✅ corregido
+from tools.interno_tool import create_interno_tools, ESCALATIONS_STORE
 from tools.dispo_precios_tool import create_dispo_precios_tool
 from tools.info_hotel_tool import create_info_hotel_tool
 
@@ -25,6 +24,7 @@ from tools.info_hotel_tool import create_info_hotel_tool
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
 from core.memory_manager import MemoryManager
+from core.config import ModelConfig, ModelTier
 
 # 🆕 InternoAgent v4
 from agents.interno_agent import InternoAgent
@@ -42,33 +42,22 @@ class MainAgent:
 
     def __init__(
         self,
-        model_name: str = "gpt-4.1-mini",
-        temperature: float = 0.3,
         memory_manager: Optional[MemoryManager] = None,
         send_message_callback: Optional[Callable] = None,
         interno_agent: Optional[InternoAgent] = None,
     ):
+        # LLM base centralizado
+        self.llm = ModelConfig.get_llm(ModelTier.MAIN)
 
-        self.model_name = model_name
-        self.temperature = temperature
         self.memory_manager = memory_manager
         self.send_callback = send_message_callback
-
-        # LLM base
-        self.llm = ChatOpenAI(
-            model=self.model_name,
-            temperature=self.temperature,
-            streaming=False
-        )
+        self.interno_agent = interno_agent
 
         # Prompt base (dinámico + fallback)
         base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
         self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
-        # 🆕 Agente Interno (ReAct) — se inyecta desde main.py
-        self.interno_agent = interno_agent
-
-        log.info(f"✅ MainAgent inicializado con modelo {model_name}")
+        log.info("✅ MainAgent inicializado con configuración centralizada (gpt-4.1)")
 
     # --------------------------------------------------
     def _get_default_prompt(self) -> str:
@@ -97,7 +86,7 @@ class MainAgent:
     def _build_tools(self, chat_id: str, hotel_name: str = "Hotel") -> List[StructuredTool]:
         """Crea las herramientas disponibles para el agente principal."""
         tools = [
-            create_think_tool(model_name="gpt-4.1-mini"),
+            create_think_tool(model_name="gpt-4.1"),
             create_inciso_tool(send_callback=self.send_callback),
             create_dispo_precios_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_info_hotel_tool(memory_manager=self.memory_manager, chat_id=chat_id),
@@ -154,13 +143,13 @@ class MainAgent:
                 agent=chain_agent,
                 tools=tools,
                 verbose=True,
-                max_iterations=15,
+                max_iterations=20,
                 max_execution_time=90,
                 handle_parsing_errors=True,
                 return_intermediate_steps=False
             )
 
-            # 🚀 Ejecutar agente (async para soportar tools coroutine)
+            # 🚀 Ejecutar agente
             result = await executor.ainvoke({
                 "input": user_input,
                 "chat_history": chat_history or []
@@ -193,8 +182,7 @@ class MainAgent:
                     reason="El MainAgent no encontró información o detectó una consulta que requiere intervención humana.",
                     context=f"Respuesta generada: {response[:150]}"
                 )
-                # Modo silencioso (no responde al huésped)
-                return None
+                return None  # modo silencioso
 
             # 💾 Guardar conversación
             if self.memory_manager and chat_id:
@@ -210,19 +198,16 @@ class MainAgent:
 
         except Exception as e:
             log.error(f"❌ Error en MainAgent para chat {chat_id}: {e}", exc_info=True)
-
-            # 🔧 Escalar errores críticos a Interno
             try:
                 await self.interno_agent.escalate(
                     guest_chat_id=chat_id,
                     guest_message=user_input,
-                    escalation_type="info_not_found",
+                    escalation_type="error_runtime",
                     reason=f"Error crítico en ejecución del MainAgent: {str(e)}",
                     context="Error no controlado en la orquestación principal."
                 )
             except Exception as e2:
                 log.error(f"⚠️ Error durante la escalación interna: {e2}", exc_info=True)
-
             return None
 
         finally:
@@ -234,15 +219,10 @@ def create_main_agent(
     memory_manager: Optional[MemoryManager] = None,
     send_callback: Optional[Callable] = None,
     interno_agent: Optional[InternoAgent] = None,
-    model_name: str = "gpt-4.1-mini",
-    temperature: float = 0.3,
 ) -> MainAgent:
     """Factory para crear el MainAgent configurado."""
     return MainAgent(
-        model_name=model_name,
-        temperature=temperature,
         memory_manager=memory_manager,
         send_message_callback=send_callback,
         interno_agent=interno_agent,
     )
-

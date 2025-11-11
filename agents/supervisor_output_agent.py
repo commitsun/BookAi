@@ -1,7 +1,7 @@
 import json
 import logging
 from fastmcp import FastMCP
-from langchain_openai import ChatOpenAI
+from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
 from core.observability import ls_context
 
 log = logging.getLogger("SupervisorOutputAgent")
@@ -11,7 +11,9 @@ log = logging.getLogger("SupervisorOutputAgent")
 # =============================================================
 
 mcp = FastMCP("SupervisorOutputAgent")
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.3)
+
+# ✅ LLM centralizado (usa gpt-4.1 desde .env)
+llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
 # Cargar prompt desde archivo
 with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
@@ -53,8 +55,8 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
             return f"Interno({json.dumps(fallback, ensure_ascii=False)})"
 
 
+# Registrar como herramienta MCP
 auditar_respuesta = mcp.tool()(_auditar_respuesta_func)
-
 
 # =============================================================
 # 🚦 CLASE PRINCIPAL CON MEMORIA

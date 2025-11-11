@@ -1,7 +1,7 @@
 import json
 import logging
 from fastmcp import FastMCP
-from langchain_openai import ChatOpenAI
+from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
 from core.observability import ls_context
 
 log = logging.getLogger("SupervisorInputAgent")
@@ -11,7 +11,9 @@ log = logging.getLogger("SupervisorInputAgent")
 # =============================================================
 
 mcp = FastMCP("SupervisorInputAgent")
-llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.2)
+
+# ✅ LLM centralizado (usa gpt-4.1 desde .env)
+llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
 # Cargar prompt
 with open("prompts/supervisor_input_prompt.txt", "r", encoding="utf-8") as f:
