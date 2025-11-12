@@ -23,6 +23,7 @@ class AvailabilityPricingInput(BaseModel):
 async def availability_pricing_tool(input_data: AvailabilityPricingInput):
     """Consulta disponibilidad y precios en Roomdoo."""
     try:
+        # 👇 Eliminar el await (la función no es async)
         token = get_roomdoo_token()
 
         base_url = os.getenv("ROOMDOO_AVAIL_URL")
@@ -58,7 +59,6 @@ async def availability_pricing_tool(input_data: AvailabilityPricingInput):
                 "data": items,
                 "results_count": len(items),
             }
-
 
     except httpx.HTTPStatusError as e:
         log.error(f"❌ Error HTTP {e.response.status_code} en Roomdoo: {e}")
