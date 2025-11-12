@@ -154,7 +154,7 @@ class MainAgent:
                 agent=chain_agent,
                 tools=tools,
                 verbose=True,
-                max_iterations=15,
+                max_iterations=20,
                 max_execution_time=90,
                 handle_parsing_errors=True,
                 return_intermediate_steps=False
