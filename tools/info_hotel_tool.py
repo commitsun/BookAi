@@ -52,7 +52,8 @@ class InfoHotelTool:
             # ⚠️ CORRECCIÓN: usar await al invocar al subagente
             respuesta = await self.agent.invoke(
                 user_input=consulta,
-                chat_history=history
+                chat_history=history,
+                chat_id=self.chat_id,
             )
 
             # Verificar si requiere escalación

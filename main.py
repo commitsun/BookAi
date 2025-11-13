@@ -34,6 +34,7 @@ from agents.interno_agent import InternoAgent
 from core.escalation_manager import register_escalation, get_escalation
 
 from core.message_buffer import MessageBufferManager
+from core.consent_manager import consent_manager
 from channels_wrapper.utils.text_utils import send_fragmented_async
 
 # =============================================================
@@ -143,6 +144,67 @@ async def process_user_message(user_message: str, chat_id: str, hotel_name: str 
                 context="Rechazado por Supervisor Input"
             )
             return None  # Modo silencioso: solo escalamos
+
+        # ---------------------------------------------------------
+        # 🤝 Confirmación pendiente para escalar al encargado
+        # ---------------------------------------------------------
+        pending_consent = consent_manager.get_pending(chat_id)
+        if pending_consent:
+            decision = consent_manager.classify_reply(user_message)
+            log.info(
+                "🤝 Respuesta sobre confirmación pendiente (%s): %s",
+                chat_id,
+                decision,
+            )
+
+            if decision == "yes":
+                consent_manager.clear(chat_id)
+
+                context_details = pending_consent.context or "Confirmación manual desde InfoAgent"
+
+                await interno_agent.escalate(
+                    guest_chat_id=pending_consent.chat_id,
+                    guest_message=pending_consent.guest_message,
+                    escalation_type=pending_consent.escalation_type,
+                    reason=pending_consent.reason,
+                    context=f"{context_details}\nConfirmación huésped: {user_message}",
+                )
+
+                ack = language_manager.ensure_language(
+                    "Perfecto, consulto con el encargado y te aviso en cuanto tenga una respuesta.",
+                    guest_lang,
+                )
+
+                if memory_manager:
+                    memory_manager.save(chat_id, "user", user_message)
+                    memory_manager.save(chat_id, "assistant", ack)
+
+                return ack
+
+            if decision == "no":
+                consent_manager.clear(chat_id)
+
+                ack = language_manager.ensure_language(
+                    "De acuerdo, si necesitas algo más estaré pendiente.",
+                    guest_lang,
+                )
+
+                if memory_manager:
+                    memory_manager.save(chat_id, "user", user_message)
+                    memory_manager.save(chat_id, "assistant", ack)
+
+                return ack
+
+            reminder = language_manager.ensure_language(
+                "Solo necesito saber si quieres que lo consulte con el encargado. Responde 'sí' o 'no', por favor.",
+                guest_lang,
+            )
+
+            if memory_manager:
+                memory_manager.save(chat_id, "user", user_message)
+                memory_manager.save(chat_id, "assistant", reminder)
+
+            return reminder
 
         # ---------------------------------------------------------
         # 3️⃣ Main Agent

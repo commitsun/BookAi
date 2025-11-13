@@ -11,6 +11,7 @@ import asyncio
 from langchain_openai import ChatOpenAI
 from langchain.tools import Tool
 
+from core.consent_manager import consent_manager
 from core.language_manager import language_manager
 from core.utils.normalize_reply import normalize_reply
 from core.mcp_client import mcp_client
@@ -22,6 +23,11 @@ log = logging.getLogger("InfoAgent")
 ESCALATE_SENTENCE = (
     "🕓 Un momento por favor, voy a consultarlo con el encargado. "
     "Permíteme contactar con el encargado."
+)
+
+CONSENT_PROMPT = (
+    "No he encontrado esa información en la base de conocimientos. "
+    "¿Quieres que pregunte al encargado por ti? Responde 'sí' o 'no', por favor."
 )
 
 
@@ -163,26 +169,34 @@ class InfoAgent:
             )
 
             if _looks_like_internal_dump(respuesta_final) or no_info or respuesta_final == ESCALATE_SENTENCE:
-                log.warning("⚠️ Escalación automática: no se encontró información útil.")
-                msg = (
-                    f"❓ *Consulta del huésped:*\n{user_input}\n\n"
-                    "🧠 *Contexto:*\nEl sistema no encontró información relevante en la base de conocimiento."
-                )
+                log.warning("⚠️ InfoAgent no halló información en KB. Solicitando confirmación para escalar.")
 
-                # 🧠 Registrar escalación también en memoria
-                if self.memory_manager and chat_id:
-                    self.memory_manager.update_memory(
-                        chat_id,
-                        role="system",
-                        content="[InfoAgent] Escalación automática al encargado por falta de información factual."
+                if chat_id:
+                    consent_manager.request_consent(
+                        chat_id=chat_id,
+                        guest_message=user_input,
+                        escalation_type="info_not_found",
+                        reason="Falta de información relevante en la base de conocimiento.",
+                        context="Confirmación solicitada por InfoAgent",
                     )
 
+                    if self.memory_manager:
+                        self.memory_manager.update_memory(
+                            chat_id,
+                            role="system",
+                            content="[InfoAgent] Se solicitó confirmación al huésped para consultar al encargado.",
+                        )
+
+                    prompt = language_manager.ensure_language(CONSENT_PROMPT, lang)
+                    return prompt
+
+                # Fallback: sin chat_id no podemos solicitar confirmación → escalar directo
                 await self.interno_agent.escalate(
                     guest_chat_id=chat_id,
                     guest_message=user_input,
-                    escalation_type="info_no_encontrada",
+                    escalation_type="info_not_found",
                     reason="Falta de información relevante en la base de conocimiento.",
-                    context="Escalación automática desde InfoAgent (modo factual)"
+                    context="Escalación automática desde InfoAgent (sin chat_id)",
                 )
                 return language_manager.ensure_language(ESCALATE_SENTENCE, lang)
 
