@@ -7,7 +7,6 @@ Usa la base de conocimiento (MCP) y escala al encargado si no hay información v
 import re
 import logging
 import asyncio
-from langchain.tools import Tool
 
 # Core imports
 from core.language_manager import language_manager
@@ -17,15 +16,7 @@ from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 from core.config import ModelConfig, ModelTier  # ✅ configuración centralizada
 
-# Interno Agent (para escalaciones)
-from agents.interno_agent import InternoAgent
-
 log = logging.getLogger("InfoAgent")
-
-ESCALATE_SENTENCE = (
-    "🕓 Un momento por favor, voy a consultarlo con el encargado. "
-    "Permíteme contactar con el encargado."
-)
 
 
 # =============================================================
@@ -59,27 +50,27 @@ async def hotel_information_tool(query: str) -> str:
     try:
         q = (query or "").strip()
         if not q:
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
 
         tools = await mcp_client.get_tools(server_name="InfoAgent")
         if not tools:
             log.warning("⚠️ No se encontraron herramientas MCP para InfoAgent.")
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
 
         info_tool = next((t for t in tools if "conocimiento" in t.name.lower()), None)
         if not info_tool:
             log.warning("⚠️ No se encontró 'Base_de_conocimientos_del_hotel' en MCP.")
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
 
         raw_reply = await info_tool.ainvoke({"input": q})
         cleaned = normalize_reply(raw_reply, q, "InfoAgent").strip()
 
         if not cleaned or len(cleaned) < 10:
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
         if _looks_like_internal_dump(cleaned):
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
         if "no hay resultados" in cleaned.lower() or "no encontrado" in cleaned.lower():
-            return ESCALATE_SENTENCE
+            return "ESCALATION_REQUIRED"
 
         cleaned = re.sub(r"[*#>\-]+", "", cleaned)
         cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
@@ -87,11 +78,11 @@ async def hotel_information_tool(query: str) -> str:
 
     except Exception as e:
         log.error(f"❌ Error en hotel_information_tool: {e}", exc_info=True)
-        return ESCALATE_SENTENCE
+        return "ESCALATION_REQUIRED"
 
 
 # =============================================================
-# 🧠 InfoAgent — factual, con escalación automática
+# 🧠 InfoAgent — factual, solicita confirmación de escalación
 # =============================================================
 class InfoAgent:
     """Agente factual — usa ModelConfig y prompt de utils_prompt."""
@@ -103,22 +94,16 @@ class InfoAgent:
             model_name: (opcional) Modelo a usar. Si no se pasa, se toma del ModelConfig centralizado.
             temperature: (opcional) Temperatura del modelo.
         """
-        # ✅ Compatibilidad con llamadas antiguas y nuevas
         self.memory_manager = memory_manager
 
         if model_name or temperature:
-            # Si se especifica explícitamente, crear un LLM con esos valores
             from langchain_openai import ChatOpenAI
             name = model_name or "gpt-4.1"
             temp = temperature if temperature is not None else 0.3
             self.llm = ChatOpenAI(model=name, temperature=temp)
         else:
-            # Si no se pasa, usar el modelo centralizado (config.py)
             self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
 
-        self.interno_agent = InternoAgent(memory_manager=memory_manager)
-
-        # 🧩 Prompt factual (importado con fallback)
         base_prompt = load_prompt("info_hotel_prompt.txt") or (
             "Eres un agente de información del hotel. "
             "Responde solo con datos verificables de la base MCP y escala al encargado si no tienes información."
@@ -148,11 +133,23 @@ class InfoAgent:
         chat_history = chat_history or []
 
         try:
-            # 🧩 Consultar la base MCP
             respuesta_final = await hotel_information_tool(user_input)
+
+            if respuesta_final == "ESCALATION_REQUIRED":
+                log.warning("⚠️ La base MCP no devolvió información suficiente. Se solicitará confirmación al huésped.")
+                if self.memory_manager and chat_id:
+                    self.memory_manager.update_memory(
+                        chat_id,
+                        role="system",
+                        content=(
+                            "[InfoAgent] Base de conocimiento sin datos útiles. "
+                            "Se recomienda confirmar escalación con el encargado."
+                        ),
+                    )
+                return "ESCALATION_REQUIRED"
+
             respuesta_final = language_manager.ensure_language(respuesta_final, lang)
 
-            # 💾 Guardar memoria contextual
             if self.memory_manager and chat_id:
                 self.memory_manager.update_memory(
                     chat_id,
@@ -160,28 +157,38 @@ class InfoAgent:
                     content=f"[InfoAgent] Entrada: {user_input}\n\nRespuesta factual: {respuesta_final}"
                 )
 
-            # 🚨 Detección de falta de información
+            lower_response = respuesta_final.lower()
             no_info = any(
-                p in respuesta_final.lower()
+                p in lower_response
                 for p in [
-                    "no dispongo", "no tengo información", "consultarlo con el encargado",
-                    "permíteme contactar", "no hay resultados", "no encontrado"
+                    "no dispongo",
+                    "no disponemos",
+                    "no tengo información",
+                    "consultarlo con el encargado",
+                    "permíteme contactar",
+                    "no hay resultados",
+                    "no encontrado",
+                    "¿te gustaría consultar por algún otro servicio",
+                    "te gustaría consultar por algún otro servicio",
+                    "te gustaria consultar por algun otro servicio",
                 ]
             )
 
-            if _looks_like_internal_dump(respuesta_final) or no_info or respuesta_final == ESCALATE_SENTENCE:
-                log.warning("⚠️ Escalación automática por falta de información factual.")
-                await self.interno_agent.escalate(
-                    guest_chat_id=chat_id,
-                    guest_message=user_input,
-                    escalation_type="info_no_encontrada",
-                    reason="Falta de información factual en la base de conocimiento.",
-                    context="Escalación automática desde InfoAgent (factual)"
-                )
-                return language_manager.ensure_language(ESCALATE_SENTENCE, lang)
+            if _looks_like_internal_dump(respuesta_final) or no_info:
+                log.warning("⚠️ Respuesta ambigua o insuficiente. Se solicitará confirmación de escalación.")
+                if self.memory_manager and chat_id:
+                    self.memory_manager.update_memory(
+                        chat_id,
+                        role="system",
+                        content=(
+                            "[InfoAgent] Respuesta insuficiente en MCP. "
+                            "Sugerir confirmación con el encargado."
+                        ),
+                    )
+                return "ESCALATION_REQUIRED"
 
             log.info(f"✅ [InfoAgent] Respuesta factual: {respuesta_final[:200]}")
-            return respuesta_final or ESCALATE_SENTENCE
+            return respuesta_final or "ESCALATION_REQUIRED"
 
         except Exception as e:
             log.error(f"💥 Error en InfoAgent.invoke: {e}", exc_info=True)
@@ -190,12 +197,4 @@ class InfoAgent:
                     chat_id, role="system",
                     content=f"[InfoAgent] Error interno: {e}"
                 )
-
-            await self.interno_agent.escalate(
-                guest_chat_id=chat_id,
-                guest_message=user_input,
-                escalation_type="error_runtime",
-                reason="Error interno en InfoAgent",
-                context="Fallo durante procesamiento"
-            )
-            return language_manager.ensure_language(ESCALATE_SENTENCE, lang)
+            return "ESCALATION_REQUIRED"

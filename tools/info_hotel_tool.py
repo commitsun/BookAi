@@ -67,6 +67,9 @@ class InfoHotelTool:
                 user_input=consulta,
                 chat_history=history
             )
+            if respuesta == "ESCALATION_REQUIRED":
+                log.warning("⚠️ InfoAgent sugirió escalación tras confirmar falta de información.")
+                return "ESCALATION_REQUIRED"
 
             # Detectar si requiere escalación
             if (
