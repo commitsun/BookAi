@@ -47,8 +47,16 @@ logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
 )
+
+# Silenciar el spam de LangSmith cuando se alcanzan límites o fallos de red
+for noisy_logger in ("langsmith", "langsmith.client"):
+    logging.getLogger(noisy_logger).setLevel(logging.ERROR)
+
 log = logging.getLogger("Main")
 
+# Silenciar ruido de LangSmith cuando se alcanza el límite mensual
+logging.getLogger("langsmith").setLevel(logging.ERROR)
+logging.getLogger("langsmith.client").setLevel(logging.ERROR)
 # =============================================================
 # FASTAPI APP
 # =============================================================
