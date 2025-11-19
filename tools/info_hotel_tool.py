@@ -9,11 +9,9 @@ políticas, amenities y más.
 
 import logging
 import asyncio
-from typing import Optional
 from pydantic import BaseModel, Field
 from langchain.tools import StructuredTool
 from agents.info_agent import InfoAgent
-from core.config import ModelConfig, ModelTier  # ✅ Modelo centralizado
 
 log = logging.getLogger("InfoHotelTool")
 
@@ -37,16 +35,9 @@ class InfoHotelTool:
         self.memory_manager = memory_manager
         self.chat_id = chat_id
 
-        # ✅ Usar configuración centralizada del modelo desde core/config.py
-        model_name, temperature = ModelConfig.get_model(ModelTier.SUBAGENT)
+        self.agent = InfoAgent(memory_manager=memory_manager)
 
-        self.agent = InfoAgent(
-            memory_manager=memory_manager,
-            model_name=model_name,
-            temperature=temperature,
-        )
-
-        log.info(f"✅ InfoHotelTool inicializado para chat {chat_id} (modelo={model_name})")
+        log.info(f"✅ InfoHotelTool inicializado para chat {chat_id}")
 
     # ----------------------------------------------------------
     async def _procesar_consulta(self, consulta: str) -> str:
@@ -63,9 +54,9 @@ class InfoHotelTool:
                     log.warning(f"⚠️ No se pudo obtener memoria: {e}")
 
             # ⚠️ Invocar subagente de forma asíncrona
-            respuesta = await self.agent.invoke(
-                user_input=consulta,
-                chat_history=history
+            respuesta = await self.agent.ainvoke(
+                chat_history=history,
+                chat_id=self.chat_id or "",
             )
             if respuesta == "ESCALATION_REQUIRED":
                 log.warning("⚠️ InfoAgent sugirió escalación tras confirmar falta de información.")

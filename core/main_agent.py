@@ -96,7 +96,8 @@ class MainAgent:
             create_sub_agent_tool(
                 name="base_conocimientos",
                 description=(
-                    "Consulta la base de conocimientos: servicios, políticas, horarios, amenidades, ubicación."
+                    "Busca información factual del hotel. Intenta primero la base de conocimientos y, "
+                    "si no hay datos, recurre a Google antes de escalar."
                 ),
                 sub_agent=info_agent,
                 memory_manager=self.memory_manager,
@@ -195,29 +196,32 @@ class MainAgent:
         )
 
     async def _delegate_escalation_to_interno(
-        self,
-        *,
-        user_input: str,
-        chat_id: str,
-        motivo: str,
-        escalation_type: str,
-        context: str,
-    ):
-        if not self.interno_agent:
-            log.error("⚠️ Se intentó escalar pero no hay InternoAgent configurado")
-            return
+            self,
+            *,
+            user_input: str,
+            chat_id: str,
+            motivo: str,
+            escalation_type: str,
+            context: str,
+        ):
+            if not self.interno_agent:
+                log.error("⚠️ Se intentó escalar pero no hay InternoAgent configurado")
+                return
 
-        try:
-            await self.interno_agent.handle_guest_escalation(
-                chat_id=chat_id,
-                guest_message=user_input,
-                reason=motivo,
-                escalation_type=escalation_type,
-                context=context,
-                confirmation_flag=FLAG_ESCALATION_CONFIRMATION_PENDING,
-            )
-        except Exception as exc:
-            log.error(f"❌ Error delegando escalación a InternoAgent: {exc}", exc_info=True)
+            try:
+                query = (
+                    f"[ESCALATION REQUEST]\n"
+                    f"Motivo: {motivo}\n"
+                    f"Mensaje del huésped: {user_input}\n"
+                    f"Tipo: {escalation_type}\n"
+                    f"Contexto: {context}\n"
+                    f"Chat ID: {chat_id}"
+                )
+
+                await self.interno_agent.ainvoke(query=query, chat_id=chat_id)
+
+            except Exception as exc:
+                log.error(f"❌ Error delegando escalación a InternoAgent: {exc}", exc_info=True)
 
     async def ainvoke(
         self,

@@ -49,7 +49,7 @@ async def get_filtered_tools(server_name: str):
         for t in tools:
             n = t.name.lower()
 
-            if server_name == "InfoAgent" and any(k in n for k in ["base", "conocimiento", "knowledge", "token"]):
+            if server_name == "InfoAgent" and any(k in n for k in ["base", "conocimiento", "knowledge", "google", "web","search"]):
                 filtered.append(t)
 
             elif server_name == "DispoPreciosAgent" and any(k in n for k in ["disponibilidad", "precio", "token"]):

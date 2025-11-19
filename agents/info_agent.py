@@ -1,200 +1,296 @@
-"""
-📚 InfoAgent v4 — factual y sin invenciones
-Responde preguntas generales sobre el hotel.
-Usa la base de conocimiento (MCP) y escala al encargado si no hay información válida.
+"""InfoAgent v5 — AgentExecutor con KB + Google Search.
+
+Este módulo implementa la arquitectura propuesta en la incidencia:
+- Tool 1: Base de conocimientos (MCP)
+- Tool 2: Búsqueda en Google (placeholder)
+El LLM decide qué herramienta usar y solo escala si ambas fallan.
 """
 
-import re
-import logging
+from __future__ import annotations
+
 import asyncio
+import logging
+from typing import ClassVar, List, Optional
 
-# Core imports
-from core.language_manager import language_manager
-from core.utils.normalize_reply import normalize_reply
+from langchain.agents import AgentExecutor, create_openai_tools_agent
+from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
+from langchain.tools import BaseTool
+from pydantic import BaseModel, Field
+
+from core.config import ModelConfig, ModelTier
 from core.mcp_client import mcp_client
+from core.utils.normalize_reply import normalize_reply
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
-from core.config import ModelConfig, ModelTier  # ✅ configuración centralizada
 
 log = logging.getLogger("InfoAgent")
 
-
-# =============================================================
-# 🔍 Detección de dumps técnicos o respuestas anómalas
-# =============================================================
-def _looks_like_internal_dump(text: str) -> bool:
-    """Detecta texto técnico interno o volcado anómalo."""
-    if not text:
-        return False
-
-    dump_patterns = ["traceback", "error", "exception", "{", "}", "SELECT ", "sql", "schema"]
-    if any(pat.lower() in text.lower() for pat in dump_patterns):
-        return True
-
-    keywords_ok = [
-        "gimnasio", "desayuno", "recepción", "parking",
-        "mascotas", "wifi", "check-in", "restaurante",
-        "habitaciones", "coworking", "lavandería"
-    ]
-    if len(text.split()) > 1200 and not any(k in text.lower() for k in keywords_ok):
-        return True
-
-    return False
+ESCALATION_TOKEN = "ESCALATION_REQUIRED"
 
 
-# =============================================================
-# 🧩 Tool principal — consulta factual a MCP
-# =============================================================
-async def hotel_information_tool(query: str) -> str:
-    """Consulta factual desde la base de conocimiento (MCP)."""
+async def _invoke_google_search(query: str) -> Optional[str]:
+    """
+    Consulta la herramienta `google` expuesta por el MCP para InfoAgent.
+    Devuelve el texto limpio o None si no hay resultados útiles.
+    """
+    question = (query or "").strip()
+    if not question:
+        return None
+
     try:
-        q = (query or "").strip()
-        if not q:
-            return "ESCALATION_REQUIRED"
-
         tools = await mcp_client.get_tools(server_name="InfoAgent")
-        if not tools:
-            log.warning("⚠️ No se encontraron herramientas MCP para InfoAgent.")
-            return "ESCALATION_REQUIRED"
+        google_tool = next((t for t in tools if "google" in t.name.lower()), None)
+        if not google_tool:
+            log.warning("GoogleSearchTool: no se encontró la tool 'google' en el MCP.")
+            return None
 
-        info_tool = next((t for t in tools if "conocimiento" in t.name.lower()), None)
-        if not info_tool:
-            log.warning("⚠️ No se encontró 'Base_de_conocimientos_del_hotel' en MCP.")
-            return "ESCALATION_REQUIRED"
-
-        raw_reply = await info_tool.ainvoke({"input": q})
-        cleaned = normalize_reply(raw_reply, q, "InfoAgent").strip()
-
-        if not cleaned or len(cleaned) < 10:
-            return "ESCALATION_REQUIRED"
-        if _looks_like_internal_dump(cleaned):
-            return "ESCALATION_REQUIRED"
-        if "no hay resultados" in cleaned.lower() or "no encontrado" in cleaned.lower():
-            return "ESCALATION_REQUIRED"
-
-        cleaned = re.sub(r"[*#>\-]+", "", cleaned)
-        cleaned = re.sub(r"\s{2,}", " ", cleaned).strip()
+        raw_reply = await google_tool.ainvoke({"query": question})
+        cleaned = normalize_reply(raw_reply, question, "InfoAgent").strip()
+        if not cleaned or len(cleaned) < 5:
+            return None
         return cleaned
 
-    except Exception as e:
-        log.error(f"❌ Error en hotel_information_tool: {e}", exc_info=True)
-        return "ESCALATION_REQUIRED"
+    except Exception as exc:
+        log.error("GoogleSearchTool: error consultando MCP: %s", exc, exc_info=True)
+        return None
 
 
-# =============================================================
-# 🧠 InfoAgent — factual, solicita confirmación de escalación
-# =============================================================
-class InfoAgent:
-    """Agente factual — usa ModelConfig y prompt de utils_prompt."""
+class GoogleSearchInput(BaseModel):
+    """Schema para búsqueda en Google."""
 
-    def __init__(self, memory_manager=None, model_name=None, temperature=None):
-        """
-        Args:
-            memory_manager: Gestor de memoria contextual.
-            model_name: (opcional) Modelo a usar. Si no se pasa, se toma del ModelConfig centralizado.
-            temperature: (opcional) Temperatura del modelo.
-        """
-        self.memory_manager = memory_manager
+    query: str = Field(
+        ...,
+        description="Consulta a buscar en Google (máximo 100 caracteres).",
+        max_length=100,
+    )
 
-        if model_name or temperature:
-            from langchain_openai import ChatOpenAI
-            name = model_name or "gpt-4.1"
-            temp = temperature if temperature is not None else 0.3
-            self.llm = ChatOpenAI(model=name, temperature=temp)
-        else:
-            self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
 
-        base_prompt = load_prompt("info_hotel_prompt.txt") or (
-            "Eres un agente de información del hotel. "
-            "Responde solo con datos verificables de la base MCP y escala al encargado si no tienes información."
-        )
-        self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
+class GoogleSearchTool(BaseTool):
+    """Tool que realiza búsquedas en Google usando un placeholder."""
 
-        log.info(f"✅ InfoAgent inicializado (modelo={self.llm.model_name})")
+    name: ClassVar[str] = "google_search"
+    description: ClassVar[str] = (
+        "Busca información en Google usando Gemini API. Úsalo cuando la base "
+        "de conocimientos no tenga respuesta o la información sea insuficiente."
+    )
+    args_schema: ClassVar[type[BaseModel]] = GoogleSearchInput
 
-    # --------------------------------------------------
-    def _sync_run(self, coro, *args, **kwargs):
-        """Ejecuta async dentro de sync context (para compatibilidad LangChain)."""
+    async def _arun(self, query: str) -> str:
+        query = (query or "").strip()
+        if not query:
+            return "Necesito una consulta para buscar en Google."
+
+        try:
+            log.info("GoogleSearchTool: consultando MCP para %s", query[:80])
+            result_text = await _invoke_google_search(query)
+            if not result_text:
+                return "Google Search no devolvió resultados útiles."
+            return result_text
+        except Exception as exc:
+            log.error("Error en GoogleSearchTool: %s", exc, exc_info=True)
+            return f"Error buscando en Google: {exc}"
+
+    def _run(self, query: str) -> str:
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
             loop = asyncio.new_event_loop()
             asyncio.set_event_loop(loop)
-        if loop.is_running():
-            import nest_asyncio
-            nest_asyncio.apply()
-        return loop.run_until_complete(coro(*args, **kwargs))
+        return loop.run_until_complete(self._arun(query))
 
-    # --------------------------------------------------
-    async def invoke(self, user_input: str, chat_history: list = None, chat_id: str = None) -> str:
-        """Responde consultas factuales del huésped."""
-        log.info(f"📩 [InfoAgent] Consulta: {user_input}")
-        lang = language_manager.detect_language(user_input)
-        chat_history = chat_history or []
+
+class KBSearchInput(BaseModel):
+    query: str = Field(
+        ...,
+        description="Consulta sobre servicios, políticas, horarios o ubicación del hotel.",
+    )
+
+
+class KBSearchTool(BaseTool):
+    """Tool que consulta la base de conocimientos (MCP)."""
+
+    name: ClassVar[str] = "base_conocimientos"
+    description: ClassVar[str] = (
+        "Busca información en la base de conocimientos del hotel. "
+        "Úsalo siempre antes de intentar otras opciones."
+    )
+    args_schema: ClassVar[type[BaseModel]] = KBSearchInput
+
+    async def _arun(self, query: str) -> Optional[str]:
+        question = (query or "").strip()
+        if not question:
+            return "Por favor, formula una pregunta concreta."
 
         try:
-            respuesta_final = await hotel_information_tool(user_input)
+            tools = await mcp_client.get_tools(server_name="InfoAgent")
+            if not tools:
+                log.warning("KBSearchTool: no hay herramientas MCP disponibles.")
+                return None
 
-            if respuesta_final == "ESCALATION_REQUIRED":
-                log.warning("⚠️ La base MCP no devolvió información suficiente. Se solicitará confirmación al huésped.")
-                if self.memory_manager and chat_id:
-                    self.memory_manager.update_memory(
-                        chat_id,
-                        role="system",
-                        content=(
-                            "[InfoAgent] Base de conocimiento sin datos útiles. "
-                            "Se recomienda confirmar escalación con el encargado."
-                        ),
-                    )
-                return "ESCALATION_REQUIRED"
+            kb_tool = next((t for t in tools if "conocimiento" in t.name.lower()), None)
+            if not kb_tool:
+                log.warning("KBSearchTool: no se encontró la herramienta de conocimientos.")
+                return None
 
-            respuesta_final = language_manager.ensure_language(respuesta_final, lang)
+            raw_reply = await kb_tool.ainvoke({"input": question})
+            cleaned = normalize_reply(raw_reply, question, "InfoAgent").strip()
+            if not cleaned or len(cleaned) < 10:
+                log.warning("KBSearchTool: respuesta demasiado corta.")
+                return None
 
-            if self.memory_manager and chat_id:
-                self.memory_manager.update_memory(
-                    chat_id,
-                    role="assistant",
-                    content=f"[InfoAgent] Entrada: {user_input}\n\nRespuesta factual: {respuesta_final}"
+            error_tokens = ["traceback", "error", "exception", "select", "schema"]
+            if any(token in cleaned.lower() for token in error_tokens):
+                log.warning("KBSearchTool: respuesta con indicios de error interno.")
+                return None
+
+            no_info_tokens = [
+                "no dispongo",
+                "no tengo información",
+                "no hay resultados",
+                "no encontrado",
+                "no se encontró",
+            ]
+            if any(token in cleaned.lower() for token in no_info_tokens):
+                log.info("KBSearchTool: KB no tiene información útil.")
+                return None
+
+            log.info("KBSearchTool: información obtenida correctamente.")
+            return cleaned
+        except Exception as exc:
+            log.error("KBSearchTool error: %s", exc, exc_info=True)
+            return None
+
+    def _run(self, query: str) -> Optional[str]:
+        try:
+            loop = asyncio.get_event_loop()
+        except RuntimeError:
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+        return loop.run_until_complete(self._arun(query))
+
+
+class InfoAgent:
+    """Agente factual basado en AgentExecutor con múltiples herramientas."""
+
+    def __init__(self, memory_manager=None):
+        self.memory_manager = memory_manager
+        self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
+        self.tools: List[BaseTool] = [KBSearchTool(), GoogleSearchTool()]
+
+        base_prompt = _load_info_prompt()
+        self.base_prompt = base_prompt or (
+            "Eres un agente especializado en información del hotel. "
+            "Responde solo con datos verificados y evita inventar."
+        )
+
+        log.info("InfoAgent v5 inicializado con AgentExecutor y herramientas múltiples.")
+
+    async def ainvoke(
+        self,
+        user_input: str,
+        chat_id: str,
+        chat_history: Optional[List] = None,
+        context_window: int = 10,
+    ) -> str:
+        if not user_input:
+            return ESCALATION_TOKEN
+
+        chat_history = chat_history or []
+        if not chat_history and self.memory_manager and chat_id:
+            try:
+                chat_history = self.memory_manager.get_memory_as_messages(
+                    conversation_id=chat_id,
+                    limit=context_window,
                 )
+            except Exception as exc:
+                log.warning("No se pudo recuperar historial para InfoAgent: %s", exc)
+                chat_history = []
 
-            lower_response = respuesta_final.lower()
-            no_info = any(
-                p in lower_response
-                for p in [
-                    "no dispongo",
-                    "no disponemos",
-                    "no tengo información",
-                    "consultarlo con el encargado",
-                    "permíteme contactar",
-                    "no hay resultados",
-                    "no encontrado",
-                    "¿te gustaría consultar por algún otro servicio",
-                    "te gustaría consultar por algún otro servicio",
-                    "te gustaria consultar por algun otro servicio",
-                ]
+        system_prompt = (
+            f"{get_time_context()}\n\n{self.base_prompt}\n\n"
+            "ORDEN ESTRICTO DE HERRAMIENTAS:\n"
+            "1) Usa 'base_conocimientos' para consultar la KB del hotel.\n"
+            "2) Si no hay respuesta, usa 'google_search' para buscar en la web.\n"
+            "3) Solo si ambas fallan, indica claramente que necesitas escalar.\n\n"
+            "Instrucciones adicionales:\n"
+            "- No inventes datos.\n"
+            "- Aclara la fuente (KB vs Google).\n"
+            "- Si sigues sin datos tras ambos intentos, di que necesitas escalar."
+        )
+
+        prompt_template = ChatPromptTemplate.from_messages(
+            [
+                ("system", system_prompt),
+                MessagesPlaceholder(variable_name="chat_history", optional=True),
+                ("human", "{input}"),
+                MessagesPlaceholder(variable_name="agent_scratchpad", optional=True),
+            ]
+        )
+
+        agent = create_openai_tools_agent(
+            llm=self.llm,
+            tools=self.tools,
+            prompt=prompt_template,
+        )
+
+        executor = AgentExecutor(
+            agent=agent,
+            tools=self.tools,
+            verbose=True,
+            max_iterations=15,
+            handle_parsing_errors=True,
+            max_execution_time=60,
+        )
+
+        try:
+            result = await executor.ainvoke(
+                {
+                    "input": user_input,
+                    "chat_history": chat_history,
+                }
             )
+            output = (result.get("output") or "").strip()
 
-            if _looks_like_internal_dump(respuesta_final) or no_info:
-                log.warning("⚠️ Respuesta ambigua o insuficiente. Se solicitará confirmación de escalación.")
-                if self.memory_manager and chat_id:
-                    self.memory_manager.update_memory(
-                        chat_id,
-                        role="system",
-                        content=(
-                            "[InfoAgent] Respuesta insuficiente en MCP. "
-                            "Sugerir confirmación con el encargado."
-                        ),
-                    )
-                return "ESCALATION_REQUIRED"
 
-            log.info(f"✅ [InfoAgent] Respuesta factual: {respuesta_final[:200]}")
-            return respuesta_final or "ESCALATION_REQUIRED"
+        except Exception as exc:
+            log.error("Error ejecutando InfoAgent: %s", exc, exc_info=True)
+            return f"Error consultando la información del hotel: {exc}"
 
-        except Exception as e:
-            log.error(f"💥 Error en InfoAgent.invoke: {e}", exc_info=True)
-            if self.memory_manager and chat_id:
-                self.memory_manager.update_memory(
-                    chat_id, role="system",
-                    content=f"[InfoAgent] Error interno: {e}"
-                )
-            return "ESCALATION_REQUIRED"
+        if self.memory_manager and chat_id:
+            try:
+                self.memory_manager.save(chat_id, "user", user_input)
+                if output:
+                    self.memory_manager.save(chat_id, "assistant", f"[InfoAgent] {output}")
+            except Exception as exc:
+                log.warning("No se pudo guardar memoria en InfoAgent: %s", exc)
+
+        if not output or self._needs_escalation(output):
+            return ESCALATION_TOKEN
+
+        return output
+
+    async def handle(self, pregunta: str, chat_id: str, **_) -> str:
+        return await self.ainvoke(user_input=pregunta, chat_id=chat_id)
+
+    @staticmethod
+    def _needs_escalation(text: str) -> bool:
+        lowered = text.lower()
+        triggers = [
+            "no tengo información",
+            "no dispongo",
+            "consultar al encargado",
+            "necesito escalar",
+            "no puedo confirmarlo",
+            "escalar al encargado",
+        ]
+        return any(token in lowered for token in triggers)
+
+
+def _load_info_prompt() -> Optional[str]:
+    try:
+        return load_prompt("info_hotel_prompt.txt").strip()
+    except FileNotFoundError:
+        return None
+    except Exception as exc:
+        log.warning("No se pudo cargar info_hotel_prompt: %s", exc)
+        return None

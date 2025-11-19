@@ -29,7 +29,7 @@ class MemoryManager:
         return str(conversation_id).replace("+", "").strip()
 
     # ----------------------------------------------------------------------
-    def get_memory(self, conversation_id: str, limit: int = 10) -> List[Dict[str, Any]]:
+    def get_memory(self, conversation_id: str, limit: int = 15) -> List[Dict[str, Any]]:
         """
         Recupera el contexto (mensajes recientes) combinando Supabase + memoria local.
         Devuelve una lista de dicts con `role`, `content`, `created_at`.
