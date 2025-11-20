@@ -215,13 +215,34 @@ class DispoPreciosAgent:
 
             respuesta_final = " ".join(cleaned).strip()
 
-            # 💾 Guardar interacción en memoria
+            # 💾 Guardar interacción en memoria (pregunta/respuesta sin prefijos)
             if self.memory_manager and chat_id:
-                self.memory_manager.update_memory(
-                    chat_id,
-                    role="assistant",
-                    content=f"[DispoPreciosAgent] Entrada: {pregunta}\n\nRespuesta: {respuesta_final}"
-                )
+                pregunta_clean = (pregunta or "").strip()
+                respuesta_clean = respuesta_final.strip()
+
+                try:
+                    if pregunta_clean:
+                        self.memory_manager.save(
+                            conversation_id=chat_id,
+                            role="user",
+                            content=pregunta_clean,
+                        )
+
+                    if respuesta_clean:
+                        self.memory_manager.save(
+                            conversation_id=chat_id,
+                            role="assistant",
+                            content=respuesta_clean,
+                        )
+
+                    log.debug(
+                        "💾 Contexto guardado en memoria (%s): Q='%s...' A='%s...'",
+                        chat_id,
+                        pregunta_clean[:30],
+                        respuesta_clean[:30],
+                    )
+                except Exception as mm_err:
+                    log.warning("⚠️ No se pudo guardar memoria para %s: %s", chat_id, mm_err)
 
             log.info(f"✅ [DispoPreciosAgent] Respuesta final: {respuesta_final[:200]}")
             return respuesta_final or "No dispongo de disponibilidad en este momento."

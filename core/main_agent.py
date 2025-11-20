@@ -250,7 +250,7 @@ class MainAgent:
                 self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
 
                 if chat_history is None:
-                    chat_history = self.memory_manager.get_memory_as_messages(chat_id, limit=20)
+                    chat_history = self.memory_manager.get_memory_as_messages(chat_id, limit=30)
                 chat_history = chat_history or []
 
                 tools = self.build_tools(chat_id, hotel_name)
