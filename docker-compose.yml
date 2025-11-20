@@ -5,7 +5,7 @@ services:
     tty: true
     stdin_open: true
     env_file:
-      - .env   
+      - .env
     volumes:
       - .:/app
     ports:
@@ -14,8 +14,8 @@ services:
       uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1 --reload
     restart: always
     networks:
-      - bookai_shared
+      - default
 
 networks:
-  bookai_shared:
-    external: true
+  default:
+    driver: bridge
