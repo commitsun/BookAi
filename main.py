@@ -111,6 +111,66 @@ def load_tracking():
 
 load_tracking()
 
+
+def _extract_clean_draft(text: str) -> str:
+    """
+    Devuelve solo el borrador limpio generado por el InternoAgent,
+    eliminando razonamiento intermedio o metadata que no debería ver el encargado.
+    """
+    if not text:
+        return text
+
+    draft_markers = [
+        "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
+        "📝 *Nuevo borrador generado",
+        "📝 BORRADOR",
+    ]
+
+    metadata_markers = [
+        "[- Origen:",
+        "- Origen:",
+        "- Acción requerida:",
+        "- Contenido:",
+        "- Evidencia:",
+        "- Estado:",
+        "Utilizo la herramienta",
+        "¿Desea que esta directriz",
+    ]
+
+    lines = text.splitlines()
+    clean_lines = []
+    in_draft = False
+    skip_next_blank = False
+
+    for line in lines:
+        stripped = line.strip()
+
+        if any(marker in line for marker in draft_markers):
+            in_draft = True
+            clean_lines.append(line)
+            skip_next_blank = False
+            continue
+
+        if any(marker in line for marker in metadata_markers):
+            skip_next_blank = True
+            continue
+
+        if skip_next_blank and not stripped:
+            skip_next_blank = False
+            continue
+
+        if in_draft:
+            clean_lines.append(line)
+        elif not any(marker in line for marker in metadata_markers):
+            clean_lines.append(line)
+
+    result = "\n".join(clean_lines).strip()
+
+    if not in_draft:
+        return text
+
+    return result or text
+
 # =============================================================
 # PIPELINE PRINCIPAL
 # =============================================================
@@ -429,7 +489,7 @@ async def telegram_webhook_handler(request: Request):
                 TELEGRAM_PENDING_CONFIRMATIONS[chat_id] = escalation_id
                 save_tracking()  # 🔧 guarda el tracking actualizado
 
-                confirmation_msg = draft_result
+                confirmation_msg = _extract_clean_draft(draft_result)
 
                 await channel_manager.send_message(chat_id, confirmation_msg, channel="telegram")
                 log.info(f"📝 Borrador generado y enviado a {chat_id}")
