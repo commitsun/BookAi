@@ -96,7 +96,7 @@ class InternoAgent:
                 tools=tools,
                 verbose=True,
                 max_iterations=15,
-                return_intermediate_steps=False,
+                return_intermediate_steps=True,
                 handle_parsing_errors=True,
                 max_execution_time=60,
             )
@@ -305,16 +305,11 @@ class InternoAgent:
     def _get_default_prompt(self) -> str:
         return (
             "Eres el Agente Interno del Sistema de IA Hotelera.\n"
-            "Coordinas entre encargado y huésped.\n\n"
-            "IMPORTANTE:\n"
-            "- NO incluyas razonamiento ni análisis en tu output\n"
-            "- SOLO llama a las tools necesarias\n"
-            "- El output de las tools ya está formateado para el encargado\n"
-            "- NO agregues explicaciones adicionales\n\n"
+            "Coordinas entre encargado y huésped.\n"
             "Herramientas disponibles:\n"
-            "- notificar_encargado: Envía la escalación al encargado\n"
-            "- generar_borrador_respuesta: Crea borrador profesional para el huésped\n"
-            "- confirmar_y_enviar_respuesta: Envía la respuesta final al huésped\n"
+            "- notificar_encargado\n"
+            "- generar_borrador_respuesta\n"
+            "- confirmar_y_enviar_respuesta\n"
         )
 
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
