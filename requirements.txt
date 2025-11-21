@@ -29,3 +29,5 @@ langdetect
 # === Extra ===
 datetime
 nest_asyncio
+boto3
+python-docx

@@ -7,6 +7,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import re
 from datetime import datetime
 from typing import Any, List, Optional
 
@@ -311,6 +312,110 @@ class InternoAgent:
             "- generar_borrador_respuesta\n"
             "- confirmar_y_enviar_respuesta\n"
         )
+
+    async def ask_add_to_knowledge_base(
+        self,
+        chat_id: str,
+        escalation_id: str,
+        topic: str,
+        response_content: str,
+        hotel_name: str,
+        superintendente_agent=None,
+    ) -> str:
+        """
+        Preguntar al encargado si quiere agregar la respuesta a KB
+        Llamado después de que se envía respuesta al huésped
+        """
+
+        try:
+            log.info("Preguntando sobre agregar a KB: %s", topic)
+
+            draft = self._create_kb_draft(
+                topic=topic,
+                content=response_content,
+            )
+
+            await self._safe_call(
+                getattr(self.memory_manager, "save", None),
+                conversation_id=chat_id,
+                role="system",
+                content=f"[KB_DRAFT_PENDING] {escalation_id}",
+            )
+
+            question = f"""¿Te gustaría agregar esta información a la base de conocimientos del hotel?
+📋 TEMA: {topic}
+📝 CONTENIDO:
+{draft}
+---
+Responde:
+✅ "sí" / "ok" / "confirmar" → Agregar
+❌ "no" / "descartar" → Rechazar
+📝 Cualquier otro texto → Ajustar el borrador
+"""
+
+            return question
+
+        except Exception as exc:
+            log.error("Error en ask_add_to_knowledge_base: %s", exc)
+            raise
+
+    async def process_kb_response(
+        self,
+        chat_id: str,
+        escalation_id: str,
+        manager_response: str,
+        topic: str,
+        draft_content: str,
+        hotel_name: str,
+        superintendente_agent=None,
+    ) -> str:
+        """Procesar respuesta del encargado sobre agregar a KB"""
+
+        response_lower = manager_response.lower().strip()
+
+        if any(word in response_lower for word in ["sí", "si", "ok", "confirmar", "confirmo"]):
+            if not superintendente_agent:
+                return "⚠️ Superintendente no disponible para procesar"
+
+            log.info("Encargado aprobó agregar a KB: %s", topic)
+
+            result = await superintendente_agent.handle_kb_addition(
+                topic=topic,
+                content=draft_content,
+                encargado_id=chat_id,
+                hotel_name=hotel_name,
+                source="escalation",
+            )
+
+            return result.get("message", "Error procesando KB addition")
+
+        if any(word in response_lower for word in ["no", "no gracias", "descartar"]):
+            return "✓ Información descartada. No se agregó a la base de conocimientos."
+
+        adjusted_draft = f"{draft_content}\n\n[Feedback del encargado: {manager_response}]"
+
+        await self._safe_call(
+            getattr(self.memory_manager, "save", None),
+            conversation_id=chat_id,
+            role="system",
+            content=f"[KB_DRAFT_ADJUSTED] {escalation_id}",
+        )
+
+        return f"✓ He anotado tu feedback. Aquí está el borrador ajustado:\n\n{adjusted_draft}\n\n¿Ahora sí lo agregamos?"
+
+    def _create_kb_draft(self, topic: str, content: str) -> str:
+        """Crear borrador limpio y estructurado para KB"""
+
+        cleaned = re.sub(r"\n\n+", "\n", content.strip())
+        cleaned = re.sub(r"\s+", " ", cleaned)
+
+        lines = [
+            cleaned,
+            f"\n[Tema: {topic}]",
+            f"[Añadido: {datetime.utcnow().strftime('%d/%m/%Y')}]",
+        ]
+
+        return "\n".join(lines)
 
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
         if not self.memory_manager:

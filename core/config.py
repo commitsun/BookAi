@@ -64,6 +64,11 @@ class Settings:
     TEMP_SUBAGENT = float(os.getenv("TEMP_SUBAGENT", "0.2"))
     TEMP_SUPERVISOR = float(os.getenv("TEMP_SUPERVISOR", "0.2"))
     TEMP_INTERNAL = float(os.getenv("TEMP_INTERNAL", "0.2"))
+    TEMP_SUPERINTENDENTE = float(os.getenv("SUPERINTENDENTE_TEMP", "0.2"))
+
+    SUPERINTENDENTE_MODEL = os.getenv("SUPERINTENDENTE_MODEL", MODEL_INTERNAL)
+    SUPERINTENDENTE_S3_PREFIX = os.getenv("SUPERINTENDENTE_S3_PREFIX", "")
+    SUPERINTENDENTE_S3_DOC = os.getenv("SUPERINTENDENTE_S3_DOC", "")
 
 
 # =============================================================
@@ -74,6 +79,7 @@ class ModelTier(str, Enum):
     SUBAGENT = "subagent"      # Subagentes (InfoAgent, DispoPreciosAgent)
     SUPERVISOR = "supervisor"  # Validadores Input/Output
     INTERNAL = "internal"      # Escalaciones internas
+    SUPERINTENDENTE = "superintendente"  # Gestión de conocimiento/estrategia
 
 
 # =============================================================
@@ -101,6 +107,10 @@ class ModelConfig:
         ModelTier.INTERNAL: {
             "name": Settings.MODEL_INTERNAL,
             "temperature": Settings.TEMP_INTERNAL,
+        },
+        ModelTier.SUPERINTENDENTE: {
+            "name": Settings.SUPERINTENDENTE_MODEL,
+            "temperature": Settings.TEMP_SUPERINTENDENTE,
         },
     }
 

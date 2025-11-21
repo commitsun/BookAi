@@ -98,7 +98,8 @@ class ChannelManager:
             # 👇 Fuerza el chat_id correcto para Telegram
             if channel == "telegram":
                 from core.config import Settings as C
-                chat_id = C.TELEGRAM_CHAT_ID or chat_id
+                # Solo usa el chat de entorno si no se proporcionó ninguno
+                chat_id = chat_id or C.TELEGRAM_CHAT_ID
 
             send_fn = getattr(channel_obj, "send_message", None)
             if not send_fn:

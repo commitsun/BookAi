@@ -30,7 +30,9 @@ from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 
 from agents.interno_agent import InternoAgent
+from agents.superintendente_agent import SuperintendenteAgent
 from core.escalation_manager import register_escalation, get_escalation
+from core.db import supabase
 
 from core.message_buffer import MessageBufferManager
 from channels_wrapper.utils.text_utils import send_fragmented_async
@@ -72,15 +74,23 @@ memory_manager = MemoryManager()
 # ✅ Propagar memory_manager a todos los agentes supervisores e internos
 supervisor_input = SupervisorInputAgent(memory_manager=memory_manager)
 supervisor_output = SupervisorOutputAgent(memory_manager=memory_manager)
-interno_agent = InternoAgent(memory_manager=memory_manager)
-
 channel_manager = ChannelManager()
 buffer_manager = MessageBufferManager(idle_seconds=6.0)
+interno_agent = InternoAgent(memory_manager=memory_manager)
+superintendente_agent = SuperintendenteAgent(
+    memory_manager=memory_manager,
+    supabase_client=supabase,
+    channel_manager=channel_manager,
+)
+log.info("✅ SuperintendenteAgent inicializado")
 
 # Diccionarios auxiliares
 ESCALATION_TRACKING = {}   # message_id ↔ escalation_id
 CHAT_LANG = {}             # chat_id ↔ idioma
 TELEGRAM_PENDING_CONFIRMATIONS = {}  # chat_id → escalación pendiente de confirmación
+TELEGRAM_PENDING_KB_ADDITION = {}  # {chat_id: {escalation_id, topic, content, hotel_name}}
+SUPERINTENDENTE_CHATS = {}  # {encargado_id: {hotel_name, last_message, ...}}
+SUPERINTENDENTE_PENDING_WA = {}  # {chat_id: {guest_id, message}}
 
 log.info("✅ Sistema inicializado con Agente Interno (ReAct)")
 
@@ -170,6 +180,15 @@ def _extract_clean_draft(text: str) -> str:
         return text
 
     return result or text
+
+
+def _sanitize_wa_message(msg: str) -> str:
+    """Devuelve un mensaje corto y limpio para WhatsApp (solo la primera línea útil)."""
+    if not msg:
+        return msg
+    lines = [ln.strip() for ln in msg.splitlines() if ln.strip()]
+    core = lines[0] if lines else msg
+    return core.strip().strip('\"“”')
 
 # =============================================================
 # PIPELINE PRINCIPAL
@@ -437,12 +456,20 @@ async def telegram_webhook_handler(request: Request):
             return JSONResponse({"status": "ignored"})
 
         log.info(f"💬 Telegram ({chat_id}): {text}")
+        text_lower = text.lower()
 
         # =========================================================
         # 1️⃣ Confirmación o ajustes de un borrador pendiente
         # =========================================================
         if chat_id in TELEGRAM_PENDING_CONFIRMATIONS:
-            escalation_id = TELEGRAM_PENDING_CONFIRMATIONS[chat_id]
+            pending_conf = TELEGRAM_PENDING_CONFIRMATIONS[chat_id]
+            if isinstance(pending_conf, dict):
+                escalation_id = pending_conf.get("escalation_id")
+                manager_reply = pending_conf.get("manager_reply", "")
+            else:
+                escalation_id = pending_conf
+                manager_reply = ""
+
             text_lower = text.lower()
 
             # ✅ Si dice "ok" → confirmar envío
@@ -463,13 +490,203 @@ async def telegram_webhook_handler(request: Request):
             # 🚀 Solo se limpia si ya se confirmó definitivamente
             if confirmed:
                 TELEGRAM_PENDING_CONFIRMATIONS.pop(chat_id, None)
+            elif isinstance(pending_conf, dict):
+                TELEGRAM_PENDING_CONFIRMATIONS[chat_id] = {
+                    "escalation_id": escalation_id,
+                    "manager_reply": adjustments or manager_reply,
+                }
 
             # 🗂 Guardar tracking persistente
             save_tracking()
 
             await channel_manager.send_message(chat_id, f"{resp}", channel="telegram")
+            if confirmed and manager_reply:
+                topic = manager_reply.split("\n")[0][:50]
+                kb_question = await interno_agent.ask_add_to_knowledge_base(
+                    chat_id=chat_id,
+                    escalation_id=escalation_id or "",
+                    topic=topic,
+                    response_content=manager_reply,
+                    hotel_name="Hotel Default",
+                    superintendente_agent=superintendente_agent,
+                )
+
+                TELEGRAM_PENDING_KB_ADDITION[chat_id] = {
+                    "escalation_id": escalation_id,
+                    "topic": topic,
+                    "content": manager_reply,
+                    "hotel_name": "Hotel Default",
+                }
+
+                await channel_manager.send_message(
+                    chat_id,
+                    kb_question,
+                    channel="telegram",
+                )
+
+                log.info("Pregunta KB enviada: %s", escalation_id)
+
             log.info(f"✅ Procesado mensaje de confirmación/ajuste para escalación {escalation_id}")
             return JSONResponse({"status": "processed"})
+
+        # =========================================================
+        # 1️⃣ bis - Ruta explícita para Superintendente con mismo bot
+        # Trigger: /super ...  o modo persistido sin reply ni flujos activos
+        # =========================================================
+        if text_lower.startswith("/super_exit"):
+            SUPERINTENDENTE_CHATS.pop(chat_id, None)
+            await channel_manager.send_message(
+                chat_id,
+                "Has salido del modo Superintendente.",
+                channel="telegram",
+            )
+            return JSONResponse({"status": "processed"})
+
+        super_mode = text_lower.startswith("/super")
+        in_super_session = (
+            chat_id in SUPERINTENDENTE_CHATS
+            and chat_id not in TELEGRAM_PENDING_CONFIRMATIONS
+            and chat_id not in TELEGRAM_PENDING_KB_ADDITION
+            and original_msg_id is None
+        )
+
+        # =========================================================
+        # 1️⃣ ter - Confirmación/ajuste de envío WhatsApp directo (Superintendente)
+        # =========================================================
+        if chat_id in SUPERINTENDENTE_PENDING_WA:
+            pending = SUPERINTENDENTE_PENDING_WA[chat_id]
+            resp_lower = text_lower
+            guest_id = pending.get("guest_id")
+            draft_msg = pending.get("message", "")
+
+            if any(x in resp_lower for x in ["enviar", "ok", "confirmar", "si", "sí", "sii", "siii", "dale", "manda"]):
+                log.info(f"[WA_CONFIRM] Enviando mensaje a {guest_id} desde {chat_id}")
+                await channel_manager.send_message(
+                    guest_id,
+                        draft_msg,
+                    channel="whatsapp",
+                )
+                SUPERINTENDENTE_PENDING_WA.pop(chat_id, None)
+                await channel_manager.send_message(
+                    chat_id,
+                    f"✅ Enviado a {guest_id}: {draft_msg}",
+                    channel="telegram",
+                )
+                return JSONResponse({"status": "wa_sent"})
+
+            if any(x in resp_lower for x in ["cancel", "cancelar", "no"]):
+                log.info(f"[WA_CONFIRM] Cancelado por {chat_id}")
+                SUPERINTENDENTE_PENDING_WA.pop(chat_id, None)
+                await channel_manager.send_message(
+                    chat_id,
+                    "Operación cancelada.",
+                    channel="telegram",
+                )
+                return JSONResponse({"status": "wa_cancelled"})
+
+            # Ajuste del borrador
+            log.info(f"[WA_CONFIRM] Ajuste de borrador por {chat_id}")
+            SUPERINTENDENTE_PENDING_WA[chat_id]["message"] = _sanitize_wa_message(text)
+            await channel_manager.send_message(
+                chat_id,
+                f"📝 Borrador actualizado:\n{text}\n\nResponde 'sí' para enviar o 'no' para descartar.",
+                channel="telegram",
+            )
+            return JSONResponse({"status": "wa_updated"})
+
+        # =========================================================
+        # 1️⃣ ter-bis - Confirmación WA sin estado en memoria volátil (recuperar de memoria_manager)
+        # =========================================================
+        if any(x in text_lower for x in ["enviar", "ok", "confirmar", "si", "sí", "sii", "siii", "dale", "manda"]):
+            try:
+                recent = memory_manager.get_memory(chat_id, limit=10)
+                marker = "[WA_DRAFT]|"
+                last_draft = None
+                for msg in reversed(recent):
+                    content = msg.get("content", "")
+                    if marker in content:
+                        last_draft = content[content.index(marker):]
+                        break
+                if last_draft:
+                    parts = last_draft.split("|", 2)
+                    if len(parts) == 3:
+                        guest_id, msg_raw = parts[1], parts[2]
+                        msg = _sanitize_wa_message(msg_raw)
+                        await channel_manager.send_message(
+                            guest_id,
+                            msg,
+                            channel="whatsapp",
+                        )
+                        await memory_manager.save(chat_id, "system", f"[WA_SENT]|{guest_id}|{msg}")
+                        await channel_manager.send_message(
+                            chat_id,
+                            f"✅ Mensaje enviado a {guest_id}:\n{msg}",
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "wa_sent_recovered"})
+            except Exception as exc:
+                log.error(f"[WA_CONFIRM_RECOVERY] Error: {exc}", exc_info=True)
+
+        if super_mode or in_super_session:
+            payload = text.split(" ", 1)[1].strip() if " " in text else ""
+            hotel_name = SUPERINTENDENTE_CHATS.get(chat_id, {}).get("hotel_name", "Hotel Default")
+            SUPERINTENDENTE_CHATS[chat_id] = {"hotel_name": hotel_name}
+
+            try:
+                response = await superintendente_agent.ainvoke(
+                    user_input=payload or "Hola, ¿en qué puedo ayudarte?",
+                    encargado_id=chat_id,
+                    hotel_name=hotel_name,
+                )
+
+                # 🚦 Detectar borrador WA en la respuesta (aunque no sea el inicio)
+                marker = "[WA_DRAFT]|"
+                if marker in response:
+                    draft_payload = response[response.index(marker):]
+                    parts = draft_payload.split("|", 2)
+                    if len(parts) == 3:
+                        guest_id, msg_raw = parts[1], parts[2]
+                        msg = _sanitize_wa_message(msg_raw)
+                        SUPERINTENDENTE_PENDING_WA[chat_id] = {
+                            "guest_id": guest_id,
+                            "message": msg,
+                        }
+                        log.info(f"[WA_DRAFT] Registrado draft para {guest_id} desde {chat_id}")
+                        try:
+                            await memory_manager.save(
+                                conversation_id=chat_id,
+                                role="system",
+                                content=f"[WA_DRAFT]|{guest_id}|{msg}",
+                            )
+                        except Exception:
+                            pass
+                        preview = (
+                            f"📝 Borrador WhatsApp para {guest_id}:\n{msg}\n\n"
+                            "Responde 'sí' para enviar, 'no' para descartar o escribe ajustes."
+                        )
+                        await channel_manager.send_message(
+                            chat_id,
+                            preview,
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "wa_draft"})
+
+                await channel_manager.send_message(
+                    chat_id,
+                    response,
+                    channel="telegram",
+                )
+
+                return JSONResponse({"status": "processed"})
+
+            except Exception as exc:
+                log.error(f"Error procesando en Superintendente (mismo bot): {exc}")
+                await channel_manager.send_message(
+                    chat_id,
+                    f"❌ Error procesando tu solicitud: {exc}",
+                    channel="telegram",
+                )
+                return JSONResponse({"status": "error"}, status_code=500)
 
         # =========================================================
         # 2️⃣ Respuesta nueva (reply al mensaje de escalación)
@@ -486,7 +703,10 @@ async def telegram_webhook_handler(request: Request):
                     manager_reply=text,
                 )
 
-                TELEGRAM_PENDING_CONFIRMATIONS[chat_id] = escalation_id
+                TELEGRAM_PENDING_CONFIRMATIONS[chat_id] = {
+                    "escalation_id": escalation_id,
+                    "manager_reply": text,
+                }
                 save_tracking()  # 🔧 guarda el tracking actualizado
 
                 confirmation_msg = _extract_clean_draft(draft_result)
@@ -494,6 +714,34 @@ async def telegram_webhook_handler(request: Request):
                 await channel_manager.send_message(chat_id, confirmation_msg, channel="telegram")
                 log.info(f"📝 Borrador generado y enviado a {chat_id}")
                 return JSONResponse({"status": "draft_sent"})
+
+        # =========================================================
+        # 3️⃣ Respuesta a preguntas de KB pendientes
+        # =========================================================
+        if chat_id in TELEGRAM_PENDING_KB_ADDITION:
+            pending_kb = TELEGRAM_PENDING_KB_ADDITION[chat_id]
+
+            kb_response = await interno_agent.process_kb_response(
+                chat_id=chat_id,
+                escalation_id=pending_kb.get("escalation_id", ""),
+                manager_response=text,
+                topic=pending_kb.get("topic", ""),
+                draft_content=pending_kb.get("content", ""),
+                hotel_name=pending_kb.get("hotel_name", "Hotel Default"),
+                superintendente_agent=superintendente_agent,
+            )
+
+            if "agregad" in kb_response.lower() or "✅" in kb_response:
+                TELEGRAM_PENDING_KB_ADDITION.pop(chat_id, None)
+
+            await channel_manager.send_message(
+                chat_id,
+                kb_response,
+                channel="telegram",
+            )
+
+            save_tracking()
+            return JSONResponse({"status": "processed"})
 
         log.info("ℹ️ Mensaje de Telegram ignorado (sin contexto de escalación activo).")
         return JSONResponse({"status": "ignored"})

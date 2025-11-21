@@ -62,7 +62,10 @@ class TelegramChannel(BaseChannel):
             return
 
         url = f"https://api.telegram.org/bot{TELEGRAM_BOT_TOKEN}/sendMessage"
-        data = {"chat_id": str(user_id), "text": text, "parse_mode": "Markdown"}
+        data = {
+            "chat_id": str(user_id),
+            "text": text,
+        }
 
         try:
             r = requests.post(url, json=data, timeout=10)

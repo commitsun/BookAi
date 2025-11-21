@@ -6,8 +6,13 @@ services:
     stdin_open: true
     env_file:
       - .env
+    environment:
+      - AWS_SDK_LOAD_CONFIG=1
+      - AWS_PROFILE=${AWS_PROFILE:-}
+      - AWS_REGION=${AWS_REGION:-}
     volumes:
       - .:/app
+      - ${HOME}/.aws:/root/.aws:ro
     ports:
       - "8000:8000"
     command: >
