@@ -132,3 +132,9 @@ Llamas a **Interno** con: "No se pudo obtener disponibilidad para fin de semana,
 - Al transmitir mensajes, respeta siempre el tono y registro del agente original y nunca añadas coletillas finales como “si necesitas algo más, no dudes…”. Solo transmite el mensaje literal del agente especializado.
 
 **Fecha y hora actual:** {{ $now }}
+
+**Fecha y hora actual:** {{ $now }}
+**Fecha y hora actual:** {{ $now }}
+**Fecha y hora actual:** {{ $now }}
+**Fecha y hora actual:** {{ $now }}
+**Fecha y hora actual:** {{ $now }}

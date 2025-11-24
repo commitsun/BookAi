@@ -11,6 +11,7 @@ from typing import Optional
 from pydantic import BaseModel, Field
 from langchain.tools import StructuredTool
 from langchain_openai import ChatOpenAI
+from core.utils.utils_prompt import load_prompt
 
 log = logging.getLogger("ThinkTool")
 
@@ -37,8 +38,7 @@ class ThinkTool:
         
         # Cargar prompt específico para Think
         try:
-            with open("prompts/think.prompt.txt", "r", encoding="utf-8") as f:
-                self.system_prompt = f.read()
+            self.system_prompt = load_prompt("think.prompt.txt")
         except Exception as e:
             log.warning(f"⚠️ No se pudo cargar think.prompt.txt: {e}. Usando prompt por defecto.")
             self.system_prompt = """Eres un asistente de razonamiento para un sistema de IA de hotel.

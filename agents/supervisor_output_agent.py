@@ -4,6 +4,7 @@ import re
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier
 from core.observability import ls_context
+from core.utils.utils_prompt import load_prompt
 
 log = logging.getLogger("SupervisorOutputAgent")
 
@@ -14,8 +15,9 @@ log = logging.getLogger("SupervisorOutputAgent")
 mcp = FastMCP("SupervisorOutputAgent")
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
-with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
-    SUPERVISOR_OUTPUT_PROMPT = f.read()
+def _get_prompt() -> str:
+    return load_prompt("supervisor_output_prompt.txt")
+    log.info("📜 Prompt SupervisorOutput cargado (%d chars)", len(SUPERVISOR_OUTPUT_PROMPT))
 
 # =============================================================
 # 🧠 FUNCIÓN PRINCIPAL DE AUDITORÍA
@@ -23,6 +25,7 @@ with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
 
 async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> str:
     """Evalúa si la respuesta del agente es adecuada, segura y coherente."""
+    prompt = _get_prompt()
     with ls_context(
         name="SupervisorOutputAgent.auditar_respuesta",
         metadata={"input_usuario": input_usuario, "respuesta_agente": respuesta_agente},
@@ -35,7 +38,7 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
             )
 
             response = await llm.ainvoke([
-                {"role": "system", "content": SUPERVISOR_OUTPUT_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": content},
             ])
 

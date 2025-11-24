@@ -3,6 +3,7 @@ import logging
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
 from core.observability import ls_context
+from core.utils.utils_prompt import load_prompt
 
 log = logging.getLogger("SupervisorInputAgent")
 
@@ -15,9 +16,9 @@ mcp = FastMCP("SupervisorInputAgent")
 # ✅ LLM centralizado (usa gpt-4.1 desde .env)
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
-# Cargar prompt
-with open("prompts/supervisor_input_prompt.txt", "r", encoding="utf-8") as f:
-    SUPERVISOR_INPUT_PROMPT = f.read()
+def _get_prompt() -> str:
+    return load_prompt("supervisor_input_prompt.txt")
+    log.info("📜 Prompt SupervisorInput cargado (%d chars)", len(SUPERVISOR_INPUT_PROMPT))
 
 # =============================================================
 # 🧩 FUNCIÓN PRINCIPAL DE EVALUACIÓN
@@ -28,6 +29,7 @@ async def _evaluar_input_func(mensaje_usuario: str) -> str:
     Evalúa si el mensaje del huésped es apropiado según el prompt.
     Devuelve texto en formato 'Aprobado' o 'Interno({...})'.
     """
+    prompt = _get_prompt()
     with ls_context(
         name="SupervisorInputAgent.evaluar_input",
         metadata={"mensaje_usuario": mensaje_usuario},
@@ -35,7 +37,7 @@ async def _evaluar_input_func(mensaje_usuario: str) -> str:
     ):
         try:
             response = await llm.ainvoke([
-                {"role": "system", "content": SUPERVISOR_INPUT_PROMPT},
+                {"role": "system", "content": prompt},
                 {"role": "user", "content": mensaje_usuario},
             ])
             output = (response.content or "").strip()
