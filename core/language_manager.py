@@ -1,10 +1,47 @@
 # core/language_manager.py
 import os
+import re
 from functools import lru_cache
 from typing import Optional
 from langchain_openai import ChatOpenAI
 
 OPENAI_MODEL = "gpt-4.1-mini"
+
+
+@lru_cache(maxsize=1)
+def _ack_tokens() -> set[str]:
+    """
+    Lista configurable de tokens de acuse/saludo que no deben cambiar el idioma.
+    Configurable vía env `LANG_ACK_TOKENS` (coma separada). Fallback: lista base.
+    """
+    env_tokens = os.getenv("LANG_ACK_TOKENS", "")
+    tokens = {t.strip().lower() for t in env_tokens.split(",") if t.strip()}
+    if tokens:
+        return tokens
+    return {
+        "ok",
+        "okay",
+        "okey",
+        "oki",
+        "ciao",
+        "chao",
+    }
+
+
+def _normalize_ack(text: str) -> str:
+    """
+    Normaliza un acuse breve para compararlo con la lista de tokens.
+    - Lowercase
+    - Quita espacios y signos de puntuación simples
+    - Reduce repeticiones largas (okkk -> okk)
+    """
+    if not text:
+        return ""
+    txt = text.lower()
+    txt = txt.strip("¡!.,;:-¿?\"'[](){} ")
+    txt = re.sub(r"\s+", "", txt)
+    txt = re.sub(r"(.)\1{2,}", r"\1\1", txt)
+    return txt
 
 
 class LanguageManager:
@@ -22,16 +59,8 @@ class LanguageManager:
             return (prev_lang or "es")
 
         # Evita cambiar de idioma por acuses/saludos cortos
-        normalized = text.lower().strip("¡!.,;:-¿?\"'[](){} ")
-        ack_tokens = {
-            "ok",
-            "okay",
-            "okey",
-            "oki",
-            "ciao",
-            "chao",
-        }
-        if normalized in ack_tokens:
+        normalized = _normalize_ack(text)
+        if normalized in _ack_tokens():
             return (prev_lang or "es")
 
         prompt = [
