@@ -16,10 +16,23 @@ class LanguageManager:
         self.llm = ChatOpenAI(model=model or OPENAI_MODEL, temperature=temperature)
 
     @lru_cache(maxsize=4096)
-    def detect_language(self, text: str) -> str:
+    def detect_language(self, text: str, prev_lang: Optional[str] = None) -> str:
         text = (text or "").strip()
         if not text:
-            return "es"
+            return (prev_lang or "es")
+
+        # Evita cambiar de idioma por acuses/saludos cortos
+        normalized = text.lower().strip("¡!.,;:-¿?\"'[](){} ")
+        ack_tokens = {
+            "ok",
+            "okay",
+            "okey",
+            "oki",
+            "ciao",
+            "chao",
+        }
+        if normalized in ack_tokens:
+            return (prev_lang or "es")
 
         prompt = [
             {

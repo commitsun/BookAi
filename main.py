@@ -215,10 +215,11 @@ async def process_user_message(
         # ---------------------------------------------------------
         # 1️⃣ Detección de idioma
         # ---------------------------------------------------------
+        prev_lang = CHAT_LANG.get(chat_id)
         try:
-            guest_lang = language_manager.detect_language(user_message)
+            guest_lang = language_manager.detect_language(user_message, prev_lang=prev_lang)
         except Exception:
-            guest_lang = CHAT_LANG.get(chat_id, "es")
+            guest_lang = prev_lang or "es"
         CHAT_LANG[chat_id] = guest_lang
         log.info(f"🌐 Idioma detectado: {guest_lang}")
 
