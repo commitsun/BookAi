@@ -42,6 +42,20 @@ class SubAgentTool(BaseTool):
         try:
             log.info("SubAgentTool._arun: %s - query: %s", self.name, query[:50])
 
+            chat_history = None
+            if self.memory_manager and self.chat_id:
+                try:
+                    chat_history = self.memory_manager.get_memory_as_messages(
+                        conversation_id=self.chat_id,
+                        limit=20,
+                    )
+                except Exception as mm_err:
+                    log.warning(
+                        "No se pudo recuperar chat_history para %s: %s",
+                        self.chat_id,
+                        mm_err,
+                    )
+
             # Caso 1: sub-agente es InternoAgent
             if hasattr(self.sub_agent, "handle_guest_escalation"):
                 result = await self.sub_agent.handle_guest_escalation(
@@ -61,7 +75,7 @@ class SubAgentTool(BaseTool):
                 result = await self.sub_agent.handle(
                     pregunta=query,
                     chat_id=self.chat_id,
-                    chat_history=None,
+                    chat_history=chat_history,
                 )
 
             # Caso 3: agente compatible con ainvoke → llama con kwargs dinámicos
@@ -76,6 +90,9 @@ class SubAgentTool(BaseTool):
                     params = signature(self.sub_agent.ainvoke).parameters
                 except (TypeError, ValueError):
                     params = {}
+
+                if "chat_history" in params:
+                    invoke_kwargs["chat_history"] = chat_history
 
                 if "escalation_payload" in params or "auto_notify" in params:
                     payload = {
@@ -105,14 +122,14 @@ class SubAgentTool(BaseTool):
                 if iscoroutinefunction(invoke_callable):
                     result = await invoke_callable(
                         query,
-                        chat_history=None,
+                        chat_history=chat_history,
                         chat_id=self.chat_id,
                     )
                 else:
                     result = await asyncio.to_thread(
                         invoke_callable,
                         query,
-                        chat_history=None,
+                        chat_history=chat_history,
                         chat_id=self.chat_id,
                     )
             else:

@@ -292,8 +292,12 @@ class InfoAgent:
 
         return output
 
-    async def handle(self, pregunta: str, chat_id: str, **_) -> str:
-        return await self.ainvoke(user_input=pregunta, chat_id=chat_id)
+    async def handle(self, pregunta: str, chat_id: str, chat_history=None, **_) -> str:
+        return await self.ainvoke(
+            user_input=pregunta,
+            chat_id=chat_id,
+            chat_history=chat_history,
+        )
 
     @staticmethod
     def _needs_escalation(text: str) -> bool:

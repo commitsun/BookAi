@@ -39,6 +39,10 @@ class DispoPreciosAgent:
         memory_manager: instancia opcional de MemoryManager
         model_name / temperature: opcionales. Si no se pasan, se leen de ModelConfig (SUBAGENT).
         """
+        self._last_chat_history = []
+        self._last_rooms = []
+        self._last_dates = None
+        self._last_occupancy = None
         # ✅ Modelo centralizado + posibilidad de override
         if model_name is not None or temperature is not None:
             default_name, default_temp = ModelConfig.get_model(ModelTier.SUBAGENT)
@@ -106,27 +110,55 @@ class DispoPreciosAgent:
                     log.error("❌ No se pudo obtener el token de acceso.")
                     return "No se pudo obtener el token de acceso."
 
-                # Fechas por defecto: dentro de 7 días, estancia de 2 noches
                 today = datetime.date.today()
-                checkin = today + datetime.timedelta(days=7)
-                checkout = checkin + datetime.timedelta(days=2)
+                parsed_dates = self._parse_dates(query)
+                # Complementa con historial si no hay fechas claras en la pregunta
+                if not parsed_dates:
+                    parsed_dates = self._dates_from_history(self._last_chat_history)
+
+                if parsed_dates:
+                    checkin, checkout = parsed_dates
+                else:
+                    # Fechas por defecto: dentro de 7 días, estancia de 2 noches
+                    checkin = today + datetime.timedelta(days=7)
+                    checkout = checkin + datetime.timedelta(days=2)
 
                 params = {
                     "checkin": f"{checkin}T00:00:00",
                     "checkout": f"{checkout}T00:00:00",
-                    "occupancy": self._parse_occupancy(query) or 2,
+                    "occupancy": None,
                     "key": token,
                 }
 
-                raw_reply = await dispo_tool.ainvoke(params)
-                rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+                occupancy = self._parse_occupancy(query)
+                if not occupancy or occupancy == 1:
+                    occupancy = self._occupancy_from_history(self._last_chat_history) or occupancy
+                params["occupancy"] = occupancy or 2
+
+                # Reutiliza la última respuesta si coincide fechas/occupancy.
+                if self._last_rooms and self._last_dates and self._last_occupancy:
+                    if self._is_same_request(query, self._last_rooms, self._last_dates, self._last_occupancy):
+                        rooms = self._last_rooms
+                        log.info("♻️ Reutilizando última respuesta de disponibilidad (sin nueva llamada).")
+                    else:
+                        raw_reply = await dispo_tool.ainvoke(params)
+                        rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+                else:
+                    raw_reply = await dispo_tool.ainvoke(params)
+                    rooms = json.loads(raw_reply) if isinstance(raw_reply, str) else raw_reply
+
+                # Guarda contexto de la última consulta satisfactoria
+                if rooms and isinstance(rooms, list):
+                    self._last_rooms = rooms
+                    self._last_dates = (checkin, checkout)
+                    self._last_occupancy = params["occupancy"]
 
                 if not rooms or not isinstance(rooms, list):
                     return "No hay disponibilidad en las fechas indicadas."
 
                 prompt = (
                     f"{get_time_context()}\n\n"
-                    f"Información de habitaciones y precios (€/noche):\n\n"
+                    f"Información de habitaciones y precios (los importes vienen YA calculados; no los multipliques ni los recalcules):\n\n"
                     f"{json.dumps(rooms, ensure_ascii=False, indent=2)}\n\n"
                     f"El huésped pregunta: \"{query}\""
                 )
@@ -183,6 +215,145 @@ class DispoPreciosAgent:
         return loop.run_until_complete(coro(*args, **kwargs))
 
     # ----------------------------------------------------------
+    def _replace_word_numbers(self, raw_text: str) -> str:
+        """Convierte números escritos (es/en) en dígitos para mejorar el parseo."""
+        num_words = {
+            "un": "1", "uno": "1", "una": "1",
+            "dos": "2", "tres": "3", "cuatro": "4", "cinco": "5",
+            "seis": "6", "siete": "7", "ocho": "8", "nueve": "9", "diez": "10",
+            "one": "1", "two": "2", "three": "3", "four": "4", "five": "5",
+            "six": "6", "seven": "7", "eight": "8", "nine": "9", "ten": "10",
+        }
+        pattern = r"\b(" + "|".join(num_words.keys()) + r")\b"
+        return re.sub(
+            pattern,
+            lambda m: num_words[m.group(1).lower()],
+            raw_text,
+            flags=re.IGNORECASE,
+        )
+
+    def _is_same_request(self, new_query: str, rooms: list, dates, occupancy: int) -> bool:
+        """
+        Comprueba si ya respondimos a la misma petición (mismas fechas y occupancy)
+        y aún hay datos en historial para reutilizar sin nueva llamada.
+        """
+        if not dates or not occupancy:
+            return False
+        if not rooms:
+            return False
+        # Si la query actual menciona explícitamente las mismas fechas y número de personas
+        # no necesitamos volver a llamar si ya tenemos rooms calculado.
+        parsed_dates = self._parse_dates(new_query)
+        parsed_occupancy = self._parse_occupancy(new_query)
+        if parsed_dates and parsed_occupancy and parsed_occupancy == occupancy and parsed_dates == dates:
+            return True
+        return False
+
+    # ----------------------------------------------------------
+    def _parse_dates(self, text: str):
+        """
+        Extrae fechas de check-in y check-out a partir de la consulta.
+        - Soporta rangos con dos fechas (dd/mm[/yyyy], dd-mm, yyyy-mm-dd, etc.).
+        - Reconoce expresiones tipo “este fin de semana” / “próximo fin de semana”
+          y las mapea a viernes-domingo.
+        - Si solo hay una fecha, asume estancia de 2 noches.
+        """
+        if not text:
+            return None
+
+        raw = text if isinstance(text, str) else str(text)
+        raw = self._replace_word_numbers(raw)
+        raw_lower = raw.lower()
+        today = datetime.date.today()
+
+        def _safe_int(val):
+            try:
+                return int(val)
+            except Exception:
+                return None
+
+        def _normalize_year(y):
+            """Convierte año de 2 a 4 dígitos y evita fechas pasadas al saltar al siguiente año."""
+            if y is None:
+                return today.year
+            y = _safe_int(y)
+            if y is None:
+                return today.year
+            if y < 100:
+                y += 2000
+            return y
+
+        def _parse_token(token):
+            token = token.strip()
+
+            # Formato ISO o yyyy-mm-dd / yyyy/mm/dd
+            m = re.match(r"(?P<y>\d{4})[/-](?P<m>\d{1,2})[/-](?P<d>\d{1,2})", token)
+            if m:
+                y = _safe_int(m.group("y"))
+                mth = _safe_int(m.group("m"))
+                d = _safe_int(m.group("d"))
+                return datetime.date(y, mth, d)
+
+            # Formato dd-mm[-yyyy] o dd/mm[/yyyy]
+            m = re.match(r"(?P<d>\d{1,2})[/-](?P<m>\d{1,2})(?:[/-](?P<y>\d{2,4}))?", token)
+            if m:
+                d = _safe_int(m.group("d"))
+                mth = _safe_int(m.group("m"))
+                y = _normalize_year(m.group("y"))
+                try:
+                    candidate = datetime.date(y, mth, d)
+                except ValueError:
+                    return None
+
+                # Si la fecha ya pasó este año y no había año explícito, salta al siguiente.
+                if m.group("y") is None and candidate < today:
+                    candidate = datetime.date(y + 1, mth, d)
+                return candidate
+
+            return None
+
+        def _next_weekend(weeks_out=0):
+            base = today + datetime.timedelta(days=weeks_out * 7)
+            days_to_friday = (4 - base.weekday()) % 7
+            checkin_dt = base + datetime.timedelta(days=days_to_friday)
+            checkout_dt = checkin_dt + datetime.timedelta(days=2)
+            return checkin_dt, checkout_dt
+
+        # 1) Expresiones de fin de semana
+        if "fin de semana" in raw_lower or "finde" in raw_lower:
+            # “próximo” / “que viene” desplazamos una semana
+            weeks_out = 1 if any(k in raw_lower for k in ["próximo", "proximo", "que viene", "siguiente"]) else 0
+            return _next_weekend(weeks_out)
+
+        # 2) Buscar fechas explícitas
+        date_tokens = re.findall(
+            r"\d{4}[/-]\d{1,2}[/-]\d{1,2}|\d{1,2}[/-]\d{1,2}(?:[/-]\d{2,4})?",
+            raw,
+            flags=re.IGNORECASE,
+        )
+
+        parsed = []
+        for token in date_tokens:
+            dt = _parse_token(token)
+            if dt:
+                parsed.append(dt)
+
+        if len(parsed) >= 2:
+            parsed = sorted(parsed)
+            checkin_dt, checkout_dt = parsed[0], parsed[1]
+            # Evita checkout anterior a checkin
+            if checkout_dt <= checkin_dt:
+                checkout_dt = checkin_dt + datetime.timedelta(days=2)
+            return checkin_dt, checkout_dt
+
+        if len(parsed) == 1:
+            checkin_dt = parsed[0]
+            checkout_dt = checkin_dt + datetime.timedelta(days=2)
+            return checkin_dt, checkout_dt
+
+        return None
+
+    # ----------------------------------------------------------
     def _parse_occupancy(self, text: str):
         """
         Intenta extraer el número total de huéspedes a partir de la consulta.
@@ -199,6 +370,7 @@ class DispoPreciosAgent:
                 return None
 
         raw = text if isinstance(text, str) else str(text)
+        raw = self._replace_word_numbers(raw)
 
         # 1) Si viene en JSON, intenta leer occupancy/adultos/niños
         try:
@@ -248,6 +420,47 @@ class DispoPreciosAgent:
             if val and val > 0:
                 return val
 
+        # 5) Payload CSV tipo "2025-11-28,2025-11-30,4" → último número pequeño como occupancy
+        csv_parts = [p.strip() for p in raw.split(",") if p.strip()]
+        if csv_parts:
+            occ_val = _to_int(csv_parts[-1])
+            if occ_val and 1 <= occ_val <= 12:
+                return occ_val
+
+        # 6) Último número aislado al final (cuando no hay etiquetas).
+        # Evita confundir edades ("5 años") con ocupación.
+        trailing_num = re.search(r"(\d{1,2})\s*$", raw)
+        if trailing_num:
+            suffix = raw[trailing_num.start():].lower()
+            if "año" not in suffix and "year" not in suffix:
+                occ_val = _to_int(trailing_num.group(1))
+                if occ_val and 1 <= occ_val <= 12:
+                    return occ_val
+
+        return None
+
+    def _occupancy_from_history(self, chat_history):
+        """Busca en el historial la última mención de ocupación >1."""
+        if not chat_history:
+            return None
+
+        for msg in reversed(chat_history):
+            content = getattr(msg, "content", "") or ""
+            occ = self._parse_occupancy(content)
+            if occ and occ > 1:
+                return occ
+        return None
+
+    def _dates_from_history(self, chat_history):
+        """Recupera el último par de fechas mencionado en el historial."""
+        if not chat_history:
+            return None
+
+        for msg in reversed(chat_history):
+            content = getattr(msg, "content", "") or ""
+            dates = self._parse_dates(content)
+            if dates:
+                return dates
         return None
 
     # ----------------------------------------------------------
@@ -257,6 +470,19 @@ class DispoPreciosAgent:
         lang = language_manager.detect_language(pregunta)
 
         try:
+            if not chat_history and self.memory_manager and chat_id:
+                try:
+                    chat_history = self.memory_manager.get_memory_as_messages(
+                        conversation_id=chat_id,
+                        limit=20,
+                    )
+                except Exception as mm_err:
+                    log.warning("No se pudo recuperar historial en DispoPreciosAgent: %s", mm_err)
+                    chat_history = []
+
+            # Guarda el historial para que la tool pueda reutilizarlo (fechas/ocupación).
+            self._last_chat_history = chat_history or []
+
             # 🔁 Refrescar contexto temporal antes de cada ejecución
             base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
             self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
