@@ -17,6 +17,7 @@ from typing import Dict, Optional
 from dataclasses import dataclass
 from pydantic import BaseModel
 from langchain_core.tools import tool
+import html
 
 # 🧩 Core imports
 from core.language_manager import language_manager
@@ -108,25 +109,20 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             "manual": "📎 Escalación Manual",
         }
 
-        msg = f"""
-🔔 *NUEVA CONSULTA ESCALADA*
-🆔 *ID:* `{escalation_id}`
-📱 *Chat ID:* `{guest_chat_id}`
-🏷️ *Tipo:* {tipo_map.get(escalation_type, escalation_type)}
-
-❓ *Mensaje del huésped:*
-{guest_message}
-
-📝 *Razón:*
-{reason}
-
-💭 *Contexto:*
-{context}
-
-⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC
-
-➡️ Responde a este mensaje (Reply). El sistema generará un borrador automáticamente.
-"""
+        msg = (
+            "🔔 <b>NUEVA CONSULTA ESCALADA</b>\n"
+            f"🆔 <b>ID:</b> <code>{html.escape(escalation_id)}</code>\n"
+            f"📱 <b>Chat ID:</b> <code>{html.escape(guest_chat_id)}</code>\n"
+            f"🏷️ <b>Tipo:</b> {html.escape(tipo_map.get(escalation_type, escalation_type))}\n\n"
+            "❓ <b>Mensaje del huésped:</b>\n"
+            f"{html.escape(guest_message)}\n\n"
+            "📝 <b>Razón:</b>\n"
+            f"{html.escape(reason)}\n\n"
+            "💭 <b>Contexto:</b>\n"
+            f"{html.escape(context)}\n\n"
+            f"⏰ {datetime.utcnow().strftime('%Y-%m-%d %H:%M:%S')} UTC\n\n"
+            "➡️ Responde a este mensaje (Reply). El sistema generará un borrador automáticamente."
+        )
 
         if not C.TELEGRAM_CHAT_ID or not C.TELEGRAM_BOT_TOKEN:
             NOTIFIED_ESCALATIONS.pop(escalation_id, None)
@@ -134,7 +130,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
         r = requests.post(
             f"https://api.telegram.org/bot{C.TELEGRAM_BOT_TOKEN}/sendMessage",
-            json={"chat_id": str(C.TELEGRAM_CHAT_ID), "text": msg, "parse_mode": "Markdown"},
+            json={"chat_id": str(C.TELEGRAM_CHAT_ID), "text": msg, "parse_mode": "HTML"},
             timeout=10,
         )
 
