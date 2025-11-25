@@ -13,6 +13,7 @@ import os
 import json
 import warnings
 import logging
+from collections import deque
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 import asyncio
@@ -32,10 +33,12 @@ from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent
 from agents.superintendente_agent import SuperintendenteAgent
 from core.escalation_manager import register_escalation, get_escalation
+from core import escalation_db as escalation_db_store
 from core.db import supabase
 
 from core.message_buffer import MessageBufferManager
 from channels_wrapper.utils.text_utils import send_fragmented_async
+from tools.interno_tool import ESCALATIONS_STORE
 
 # =============================================================
 # CONFIG GLOBAL / LOGGING
@@ -91,6 +94,8 @@ TELEGRAM_PENDING_CONFIRMATIONS = {}  # chat_id → escalación pendiente de conf
 TELEGRAM_PENDING_KB_ADDITION = {}  # {chat_id: {escalation_id, topic, content, hotel_name}}
 SUPERINTENDENTE_CHATS = {}  # {encargado_id: {hotel_name, last_message, ...}}
 SUPERINTENDENTE_PENDING_WA = {}  # {chat_id: {guest_id, message}}
+PROCESSED_WHATSAPP_IDS = set()
+PROCESSED_WHATSAPP_QUEUE = deque(maxlen=5000)
 
 log.info("✅ Sistema inicializado con Agente Interno (ReAct)")
 
@@ -120,6 +125,36 @@ def load_tracking():
 
 
 load_tracking()
+
+
+def _get_escalation_metadata(escalation_id: str) -> dict:
+    """
+    Recupera metadatos de una escalación desde memoria o DB.
+    Sirve para evitar flujos no deseados (ej. KB en insultos).
+    """
+    try:
+        esc = ESCALATIONS_STORE.get(escalation_id)
+        if esc:
+            return {
+                "type": esc.escalation_type,
+                "reason": esc.escalation_reason,
+                "context": esc.context,
+            }
+    except Exception:
+        pass
+
+    try:
+        record = escalation_db_store.get_escalation(escalation_id)
+        if record:
+            return {
+                "type": record.get("escalation_type"),
+                "reason": record.get("escalation_reason") or record.get("reason", ""),
+                "context": record.get("context", ""),
+            }
+    except Exception as e:
+        log.warning(f"⚠️ No se pudo obtener metadatos de escalación {escalation_id}: {e}")
+
+    return {}
 
 
 def _extract_clean_draft(text: str) -> str:
@@ -189,6 +224,51 @@ def _sanitize_wa_message(msg: str) -> str:
     lines = [ln.strip() for ln in msg.splitlines() if ln.strip()]
     core = lines[0] if lines else msg
     return core.strip().strip('\"“”')
+
+
+def _format_superintendente_message(text: str) -> str:
+    """
+    Aplica un formato ligero y consistente a las respuestas del Superintendente
+    sin alterar su contenido ni funcionalidad.
+    """
+    if not text:
+        return text
+
+    # Evitar doble formateo
+    if text.strip().startswith("╭─ Superintendente"):
+        return text
+
+    # Limpieza básica y normalización de listas
+    lines = [ln.rstrip() for ln in text.strip().splitlines()]
+    compact = []
+    blank_seen = False
+    for ln in lines:
+        if not ln.strip():
+            if blank_seen:
+                continue
+            blank_seen = True
+            compact.append("")
+            continue
+        blank_seen = False
+        stripped = ln.strip()
+        if stripped.lower().startswith("[superintendente]"):
+            stripped = stripped.split("]", 1)[-1].strip()
+        if stripped.startswith("- "):
+            stripped = f"• {stripped[2:].strip()}"
+        compact.append(stripped)
+
+    body_lines = []
+    for ln in compact:
+        if not ln:
+            body_lines.append("┆")
+        else:
+            body_lines.append(f"┆ {ln}")
+
+    body = "\n".join(body_lines).strip()
+
+    header = "✨ Panel del Superintendente"
+    footer = "━━━━━━━━━━━━━━━━━━━━"
+    return f"╭ {header}\n{body}\n╰ {footer}"
 
 # =============================================================
 # PIPELINE PRINCIPAL
@@ -370,8 +450,23 @@ async def whatsapp_webhook(request: Request):
         msg = value.get("messages", [{}])[0]
         sender = msg.get("from")
         msg_type = msg.get("type")
+        msg_id = msg.get("id")
 
         text = ""
+
+        # ==========================================================
+        # 🔁 Filtro de duplicados (reintentos del webhook de Meta)
+        # ==========================================================
+        if msg_id:
+            if msg_id in PROCESSED_WHATSAPP_IDS:
+                log.info(f"↩️ WhatsApp duplicado ignorado (msg_id={msg_id})")
+                return JSONResponse({"status": "duplicate"})
+            # Mantener un buffer acotado de IDs ya procesados
+            if len(PROCESSED_WHATSAPP_QUEUE) >= PROCESSED_WHATSAPP_QUEUE.maxlen:
+                old = PROCESSED_WHATSAPP_QUEUE.popleft()
+                PROCESSED_WHATSAPP_IDS.discard(old)
+            PROCESSED_WHATSAPP_QUEUE.append(msg_id)
+            PROCESSED_WHATSAPP_IDS.add(msg_id)
 
         # ==========================================================
         # 🗣️ Si es texto normal
@@ -463,6 +558,9 @@ async def telegram_webhook_handler(request: Request):
         # 1️⃣ Confirmación o ajustes de un borrador pendiente
         # =========================================================
         if chat_id in TELEGRAM_PENDING_CONFIRMATIONS:
+            # ⚖️ Prioriza flujos del InternoAgent (evita colisión con modo Superintendente)
+            SUPERINTENDENTE_CHATS.pop(chat_id, None)
+
             pending_conf = TELEGRAM_PENDING_CONFIRMATIONS[chat_id]
             if isinstance(pending_conf, dict):
                 escalation_id = pending_conf.get("escalation_id")
@@ -502,30 +600,46 @@ async def telegram_webhook_handler(request: Request):
 
             await channel_manager.send_message(chat_id, f"{resp}", channel="telegram")
             if confirmed and manager_reply:
-                topic = manager_reply.split("\n")[0][:50]
-                kb_question = await interno_agent.ask_add_to_knowledge_base(
-                    chat_id=chat_id,
-                    escalation_id=escalation_id or "",
-                    topic=topic,
-                    response_content=manager_reply,
-                    hotel_name="Hotel Default",
-                    superintendente_agent=superintendente_agent,
-                )
+                meta = _get_escalation_metadata(escalation_id or "")
+                esc_type = (meta.get("type") or "").lower()
+                reason = (meta.get("reason") or "").lower()
 
-                TELEGRAM_PENDING_KB_ADDITION[chat_id] = {
-                    "escalation_id": escalation_id,
-                    "topic": topic,
-                    "content": manager_reply,
-                    "hotel_name": "Hotel Default",
-                }
+                kb_allowed = esc_type in {"info_not_found", "manual"}
+                kb_allowed = kb_allowed and not TELEGRAM_PENDING_KB_ADDITION.get(chat_id)
+                kb_allowed = kb_allowed and all(term not in reason for term in ["inapropiad", "ofens", "rechaz", "error"])
 
-                await channel_manager.send_message(
-                    chat_id,
-                    kb_question,
-                    channel="telegram",
-                )
+                if kb_allowed:
+                    topic = manager_reply.split("\n")[0][:50]
+                    kb_question = await interno_agent.ask_add_to_knowledge_base(
+                        chat_id=chat_id,
+                        escalation_id=escalation_id or "",
+                        topic=topic,
+                        response_content=manager_reply,
+                        hotel_name="Hotel Default",
+                        superintendente_agent=superintendente_agent,
+                    )
 
-                log.info("Pregunta KB enviada: %s", escalation_id)
+                    TELEGRAM_PENDING_KB_ADDITION[chat_id] = {
+                        "escalation_id": escalation_id,
+                        "topic": topic,
+                        "content": manager_reply,
+                        "hotel_name": "Hotel Default",
+                    }
+
+                    await channel_manager.send_message(
+                        chat_id,
+                        kb_question,
+                        channel="telegram",
+                    )
+
+                    log.info("Pregunta KB enviada: %s", escalation_id)
+                else:
+                    log.info(
+                        "⏭️ Se omite sugerencia de KB para escalación %s (tipo: %s, motivo: %s)",
+                        escalation_id,
+                        esc_type or "desconocido",
+                        reason or "n/a",
+                    )
 
             log.info(f"✅ Procesado mensaje de confirmación/ajuste para escalación {escalation_id}")
             return JSONResponse({"status": "processed"})
@@ -674,7 +788,7 @@ async def telegram_webhook_handler(request: Request):
 
                 await channel_manager.send_message(
                     chat_id,
-                    response,
+                    _format_superintendente_message(response),
                     channel="telegram",
                 )
 
@@ -693,6 +807,9 @@ async def telegram_webhook_handler(request: Request):
         # 2️⃣ Respuesta nueva (reply al mensaje de escalación)
         # =========================================================
         if original_msg_id is not None:
+            # ✅ Evita que el modo Superintendente capture respuestas a escalaciones
+            SUPERINTENDENTE_CHATS.pop(chat_id, None)
+
             escalation_id = get_escalation(str(original_msg_id))
             if not escalation_id:
                 log.warning(

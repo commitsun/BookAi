@@ -218,7 +218,7 @@ class MainAgent:
                     f"Chat ID: {chat_id}"
                 )
 
-                await self.interno_agent.ainvoke(query=query, chat_id=chat_id)
+                await self.interno_agent.ainvoke(user_input=query, chat_id=chat_id)
 
             except Exception as exc:
                 log.error(f"❌ Error delegando escalación a InternoAgent: {exc}", exc_info=True)
@@ -230,6 +230,9 @@ class MainAgent:
         hotel_name: str = "Hotel",
         chat_history: Optional[List] = None,
     ) -> str:
+
+        if not self.memory_manager:
+            raise RuntimeError("MemoryManager no configurado en MainAgent")
 
         if chat_id not in self.locks:
             self.locks[chat_id] = asyncio.Lock()

@@ -17,7 +17,7 @@ class MemoryManager:
     - 🆕 Añade soporte para flags de estado (ej. escalación activa)
     """
 
-    def __init__(self, max_runtime_messages: int = 12, db_history_days: int = 7):
+    def __init__(self, max_runtime_messages: int = 40, db_history_days: int = 7):
         self.runtime_memory: Dict[str, List[Dict[str, Any]]] = {}
         self.state_flags: Dict[str, Dict[str, Any]] = {}  # 🆕 flags de sesión por chat_id
         self.max_runtime_messages = max_runtime_messages
@@ -29,7 +29,7 @@ class MemoryManager:
         return str(conversation_id).replace("+", "").strip()
 
     # ----------------------------------------------------------------------
-    def get_memory(self, conversation_id: str, limit: int = 15) -> List[Dict[str, Any]]:
+    def get_memory(self, conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:
         """
         Recupera el contexto (mensajes recientes) combinando Supabase + memoria local.
         Devuelve una lista de dicts con `role`, `content`, `created_at`.
@@ -122,7 +122,7 @@ class MemoryManager:
             log.warning(f"⚠️ Error en update_memory (alias de save): {e}")
 
     # ----------------------------------------------------------------------
-    def get_memory_as_messages(self, conversation_id: str, limit: int = 10):
+    def get_memory_as_messages(self, conversation_id: str, limit: int = 30):
         """
         🔄 Devuelve la memoria en formato LangChain (HumanMessage / AIMessage / SystemMessage).
         """

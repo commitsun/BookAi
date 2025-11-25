@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from typing import ClassVar, List, Optional
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
@@ -121,6 +122,15 @@ class KBSearchTool(BaseTool):
         if not question:
             return "Por favor, formula una pregunta concreta."
 
+        def _extract_focus_term(text: str) -> Optional[str]:
+            words = re.findall(r"[a-záéíóúüñ]+", text.lower())
+            if not words:
+                return None
+            # Evitar palabras muy genéricas
+            stop = {"el", "la", "los", "las", "un", "una", "de", "del", "que", "es", "hay", "tiene"}
+            focus = [w for w in words if w not in stop]
+            return focus[-1] if focus else words[-1]
+
         try:
             tools = await mcp_client.get_tools(server_name="InfoAgent")
             if not tools:
@@ -133,26 +143,39 @@ class KBSearchTool(BaseTool):
                 return None
 
             raw_reply = await kb_tool.ainvoke({"input": question})
+            def _is_invalid(text: str) -> bool:
+                if not text or len(text) < 10:
+                    return True
+                lowered = text.lower()
+                error_tokens = ["traceback", "error", "exception", "select", "schema"]
+                if any(tok in lowered for tok in error_tokens):
+                    return True
+                no_info_tokens = [
+                    "no dispongo",
+                    "no tengo información",
+                    "no hay resultados",
+                    "no encontrado",
+                    "no se encontró",
+                ]
+                if any(tok in lowered for tok in no_info_tokens):
+                    return True
+                return False
+
             cleaned = normalize_reply(raw_reply, question, "InfoAgent").strip()
-            if not cleaned or len(cleaned) < 10:
-                log.warning("KBSearchTool: respuesta demasiado corta.")
-                return None
+            fallback_needed = _is_invalid(cleaned) or "no dispone" in cleaned.lower() or "no cuenta con" in cleaned.lower()
 
-            error_tokens = ["traceback", "error", "exception", "select", "schema"]
-            if any(token in cleaned.lower() for token in error_tokens):
-                log.warning("KBSearchTool: respuesta con indicios de error interno.")
-                return None
-
-            no_info_tokens = [
-                "no dispongo",
-                "no tengo información",
-                "no hay resultados",
-                "no encontrado",
-                "no se encontró",
-            ]
-            if any(token in cleaned.lower() for token in no_info_tokens):
-                log.info("KBSearchTool: KB no tiene información útil.")
-                return None
+            if fallback_needed:
+                focus = _extract_focus_term(question)
+                if focus and focus != question.strip().lower():
+                    log.info("KBSearchTool: reintentando KB con término focal '%s'", focus)
+                    raw_retry = await kb_tool.ainvoke({"input": focus})
+                    cleaned_retry = normalize_reply(raw_retry, focus, "InfoAgent").strip()
+                    if not _is_invalid(cleaned_retry):
+                        log.info("KBSearchTool: información obtenida correctamente (reintento).")
+                        return cleaned_retry
+                if _is_invalid(cleaned):
+                    log.info("KBSearchTool: KB no tiene información útil tras reintento.")
+                    return None
 
             log.info("KBSearchTool: información obtenida correctamente.")
             return cleaned

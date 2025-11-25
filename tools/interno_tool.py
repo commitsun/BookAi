@@ -47,6 +47,9 @@ class Escalation:
 
 ESCALATIONS_STORE: Dict[str, Escalation] = {}
 
+# Se usa para evitar enviar múltiples plantillas al encargado por la misma escalación.
+NOTIFIED_ESCALATIONS: Dict[str, str] = {}
+
 # =============================================================
 # 📥 INPUT SCHEMAS
 # =============================================================
@@ -78,6 +81,14 @@ class ConfirmarYEnviarInput(BaseModel):
 def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_type, reason, context) -> str:
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
+        # Evita notificaciones duplicadas cuando la misma escalación se dispara más de una vez.
+        if escalation_id in NOTIFIED_ESCALATIONS:
+            log.info("🔁 Escalación %s ya notificada; se omite reenvío.", escalation_id)
+            return f"ℹ️ Escalación {escalation_id} ya fue notificada al encargado."
+
+        # Marcamos como pendiente para prevenir carreras; se limpia en caso de fallo.
+        NOTIFIED_ESCALATIONS[escalation_id] = "pending"
+
         esc = Escalation(
             escalation_id=escalation_id,
             guest_chat_id=guest_chat_id,
@@ -118,6 +129,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 """
 
         if not C.TELEGRAM_CHAT_ID or not C.TELEGRAM_BOT_TOKEN:
+            NOTIFIED_ESCALATIONS.pop(escalation_id, None)
             return "⚠️ No se pudo enviar la notificación: faltan credenciales de Telegram."
 
         r = requests.post(
@@ -138,12 +150,15 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 except Exception as e:
                     log.warning(f"⚠️ No se pudo registrar message_id → {e}")
 
+            NOTIFIED_ESCALATIONS[escalation_id] = sent_message_id or "sent"
             log.info(f"✅ Escalación {escalation_id} enviada correctamente al encargado.")
             return f"Escalación {escalation_id} notificada al encargado con éxito."
 
+        NOTIFIED_ESCALATIONS.pop(escalation_id, None)
         return f"❌ Error al notificar al encargado: {r.text}"
 
     except Exception as e:
+        NOTIFIED_ESCALATIONS.pop(escalation_id, None)
         log.exception("Error notificando al encargado")
         return f"Error notificando al encargado: {e}"
 

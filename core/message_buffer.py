@@ -1,7 +1,7 @@
 import asyncio
 import logging
 from dataclasses import dataclass, field
-from typing import Callable, Awaitable, Dict, List, Optional
+from typing import Callable, Awaitable, Dict, List, Optional, Tuple
 
 log = logging.getLogger("MessageBufferManager")
 
@@ -11,6 +11,7 @@ class ConversationState:
     messages: List[str] = field(default_factory=list)
     timer_task: Optional[asyncio.Task] = None
     processing_task: Optional[asyncio.Task] = None
+    pending_blocks: List[Tuple[str, int]] = field(default_factory=list)
     lock: asyncio.Lock = field(default_factory=asyncio.Lock)
     version: int = 0  # aumenta con cada mensaje para invalidar procesos antiguos
 
@@ -54,10 +55,6 @@ class MessageBufferManager:
             if state.timer_task and not state.timer_task.done():
                 state.timer_task.cancel()
 
-            # Cancelar procesamiento si aún no terminó
-            if state.processing_task and not state.processing_task.done():
-                state.processing_task.cancel()
-
             # Nuevo temporizador
             state.timer_task = asyncio.create_task(
                 self._start_timer(conversation_id, current_version, process_callback)
@@ -83,20 +80,59 @@ class MessageBufferManager:
                 messages = list(state.messages)
                 state.messages.clear()
                 state.timer_task = None
-
                 if not messages:
                     return
 
                 # 🔹 Combinar mensajes con saltos de línea y limpieza
                 combined = self._combine_messages(messages)
 
-                # Lanzar procesamiento
-                state.processing_task = asyncio.create_task(
-                    process_callback(conversation_id, combined, version)
-                )
+                # Encolar bloque para procesarlo en orden de llegada
+                state.pending_blocks.append((combined, version))
+                self._launch_next(conversation_id, process_callback, state)
 
         except asyncio.CancelledError:
             return  # Timer cancelado, llega mensaje nuevo
+
+    def _launch_next(
+        self,
+        conversation_id: str,
+        process_callback: Callable[[str, str, int], Awaitable[None]],
+        state: ConversationState,
+    ):
+        """
+        Inicia el procesamiento del siguiente bloque pendiente si no hay uno en curso.
+        """
+        if state.processing_task and not state.processing_task.done():
+            return
+        if not state.pending_blocks:
+            return
+
+        combined, version = state.pending_blocks.pop(0)
+        state.processing_task = asyncio.create_task(
+            self._run_block(conversation_id, combined, version, process_callback)
+        )
+
+    async def _run_block(
+        self,
+        conversation_id: str,
+        combined: str,
+        version: int,
+        process_callback: Callable[[str, str, int], Awaitable[None]],
+    ):
+        """
+        Ejecuta el callback y, al terminar, lanza el siguiente bloque si existe.
+        """
+        try:
+            await process_callback(conversation_id, combined, version)
+        except asyncio.CancelledError:
+            return
+        except Exception as e:
+            log.error(f"⚠️ Error procesando bloque buffered {conversation_id}: {e}", exc_info=True)
+        finally:
+            state = self._get_state(conversation_id)
+            async with state.lock:
+                state.processing_task = None
+                self._launch_next(conversation_id, process_callback, state)
 
     def _combine_messages(self, messages: List[str]) -> str:
         """

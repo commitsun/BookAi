@@ -4,10 +4,13 @@ Herramientas para el Superintendente (implementación simple con StructuredTool)
 
 import asyncio
 import logging
+from datetime import datetime
 from typing import Any, Optional, Callable
 
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
+
+from core.db import get_conversation_history
 
 log = logging.getLogger("SuperintendenteTools")
 
@@ -34,6 +37,10 @@ class ReviewConversationsInput(BaseModel):
     limit: int = Field(
         default=10,
         description="Cantidad de conversaciones recientes a revisar",
+    )
+    guest_id: Optional[str] = Field(
+        default=None,
+        description="ID del huésped/WhatsApp (incluye prefijo de país, ej: +34123456789)",
     )
 
 
@@ -112,19 +119,72 @@ def create_send_broadcast_tool(hotel_name: str, channel_manager: Any, supabase_c
 
 
 def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
-    async def _review_conversations(limit: int = 10) -> str:
+    async def _review_conversations(limit: int = 10, guest_id: Optional[str] = None) -> str:
         try:
             if not memory_manager:
                 return "⚠️ No hay gestor de memoria configurado."
 
-            convos = await asyncio.to_thread(
-                memory_manager.get_memory, hotel_name, limit
+            if not guest_id:
+                return (
+                    "⚠️ Para revisar una conversación necesito el ID del huésped "
+                    "(guest_id). Ejemplo: +34683527049"
+                )
+
+            clean_id = str(guest_id).replace("+", "").strip()
+
+            # Recupera de Supabase (limit extendido) y combina con memoria en RAM
+            db_msgs = await asyncio.to_thread(
+                get_conversation_history,
+                clean_id,
+                limit * 3,  # pedir más por si hay ruido o system messages
+                None,
             )
-            count = len(convos) if convos else 0
-            return (
-                f"🧠 Resumen de conversaciones recientes ({count})\n"
-                "Funcionalidad detallada pendiente de implementar."
-            )
+            runtime_msgs = []
+            try:
+                runtime_msgs = memory_manager.runtime_memory.get(clean_id, [])
+            except Exception:
+                runtime_msgs = []
+
+            combined = (db_msgs or []) + (runtime_msgs or [])
+
+            def _parse_ts(ts: Any) -> float:
+                try:
+                    if isinstance(ts, datetime):
+                        return ts.timestamp()
+                    ts_str = str(ts).replace("Z", "")
+                    return datetime.fromisoformat(ts_str).timestamp()
+                except Exception:
+                    return 0.0
+
+            combined_sorted = sorted(combined, key=lambda m: _parse_ts(m.get("created_at")))
+            convos = combined_sorted[-limit:] if combined_sorted else []
+            count = len(convos)
+
+            if not convos:
+                return f"🧠 Resumen de conversaciones recientes (0)\nNo hay mensajes recientes para {guest_id}."
+
+            def _fmt_ts(ts: Any) -> str:
+                try:
+                    if isinstance(ts, datetime):
+                        return ts.strftime("%d/%m %H:%M")
+                    ts_str = str(ts).replace("Z", "")
+                    return datetime.fromisoformat(ts_str).strftime("%d/%m %H:%M")
+                except Exception:
+                    return ""
+
+            lines = []
+            for msg in convos:
+                role = msg.get("role", "assistant")
+                prefix = {"user": "Huésped", "assistant": "Asistente", "system": "Sistema", "tool": "Tool"}.get(
+                    role, "Asistente"
+                )
+                ts = _fmt_ts(msg.get("created_at"))
+                ts_suffix = f" · {ts}" if ts else ""
+                content = msg.get("content", "").strip()
+                lines.append(f"- {prefix}{ts_suffix}: {content}")
+
+            formatted = "\n".join(lines)
+            return f"🧠 Resumen de conversaciones recientes ({count})\n{formatted}"
         except Exception as exc:
             log.error("Error revisando conversaciones: %s", exc)
             return f"❌ Error: {exc}"
@@ -132,8 +192,9 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
     return StructuredTool.from_function(
         name="revisar_conversaciones",
         description=(
-            "Resume conversaciones recientes de huéspedes para identificar patrones, "
-            "preguntas frecuentes y oportunidades de mejorar la base de conocimientos."
+            "Resume conversaciones recientes de un huésped específico para identificar patrones, "
+            "preguntas frecuentes y oportunidades de mejorar la base de conocimientos. "
+            "Debes indicar el guest_id (por ejemplo +34683527049)."
         ),
         coroutine=_review_conversations,
         args_schema=ReviewConversationsInput,

@@ -4,7 +4,6 @@ import re
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier
 from core.observability import ls_context
-from core.utils.utils_prompt import load_prompt
 
 log = logging.getLogger("SupervisorOutputAgent")
 
@@ -15,9 +14,8 @@ log = logging.getLogger("SupervisorOutputAgent")
 mcp = FastMCP("SupervisorOutputAgent")
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
-def _get_prompt() -> str:
-    return load_prompt("supervisor_output_prompt.txt")
-    log.info("📜 Prompt SupervisorOutput cargado (%d chars)", len(SUPERVISOR_OUTPUT_PROMPT))
+with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
+    SUPERVISOR_OUTPUT_PROMPT = f.read()
 
 # =============================================================
 # 🧠 FUNCIÓN PRINCIPAL DE AUDITORÍA
@@ -25,7 +23,6 @@ def _get_prompt() -> str:
 
 async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> str:
     """Evalúa si la respuesta del agente es adecuada, segura y coherente."""
-    prompt = _get_prompt()
     with ls_context(
         name="SupervisorOutputAgent.auditar_respuesta",
         metadata={"input_usuario": input_usuario, "respuesta_agente": respuesta_agente},
@@ -38,7 +35,7 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
             )
 
             response = await llm.ainvoke([
-                {"role": "system", "content": prompt},
+                {"role": "system", "content": SUPERVISOR_OUTPUT_PROMPT},
                 {"role": "user", "content": content},
             ])
 
@@ -164,11 +161,10 @@ class SupervisorOutputAgent:
                 historial = ""
                 if self.memory_manager and chat_id:
                     try:
-                        conv = self.memory_manager.get_history(chat_id)
+                        conv = self.memory_manager.get_memory(chat_id, limit=6)
                         if conv:
-                            ultimos = conv[-6:]
                             formatted = []
-                            for m in ultimos:
+                            for m in conv:
                                 role = "Huésped" if m.get("role") == "user" else "Asistente"
                                 content = m.get("content", "").strip()
                                 formatted.append(f"{role}: {content}")
