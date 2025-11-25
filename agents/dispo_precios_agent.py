@@ -10,6 +10,7 @@ import logging
 import json
 import datetime
 import asyncio
+import re
 from langchain_openai import ChatOpenAI
 from langchain.agents import create_openai_tools_agent, AgentExecutor
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -113,7 +114,7 @@ class DispoPreciosAgent:
                 params = {
                     "checkin": f"{checkin}T00:00:00",
                     "checkout": f"{checkout}T00:00:00",
-                    "occupancy": 2,
+                    "occupancy": self._parse_occupancy(query) or 2,
                     "key": token,
                 }
 
@@ -180,6 +181,74 @@ class DispoPreciosAgent:
             nest_asyncio.apply()
 
         return loop.run_until_complete(coro(*args, **kwargs))
+
+    # ----------------------------------------------------------
+    def _parse_occupancy(self, text: str):
+        """
+        Intenta extraer el número total de huéspedes a partir de la consulta.
+        Soporta formatos como "A2C1", "2 adultos y 1 niño", "para 3 personas"
+        o JSON con claves occupancy/adultos/niños.
+        """
+        if not text:
+            return None
+
+        def _to_int(val):
+            try:
+                return int(str(val).strip())
+            except Exception:
+                return None
+
+        raw = text if isinstance(text, str) else str(text)
+
+        # 1) Si viene en JSON, intenta leer occupancy/adultos/niños
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                for key in ["occupancy", "huespedes", "huéspedes", "personas"]:
+                    if key in data:
+                        val = _to_int(data.get(key))
+                        if val and val > 0:
+                            return val
+
+                adults = _to_int(data.get("adultos") or data.get("adults"))
+                children = _to_int(data.get("ninos") or data.get("niños") or data.get("children"))
+                if adults:
+                    total = adults + (children or 0)
+                    if total > 0:
+                        return total
+        except Exception:
+            pass
+
+        # 2) Código tipo A2C1
+        code_match = re.search(r"a\s*(\d+)\s*c\s*(\d+)", raw, re.IGNORECASE)
+        if code_match:
+            adults, children = map(int, code_match.groups())
+            total = adults + children
+            if total > 0:
+                return total
+
+        # 3) Expresiones "X adultos" y "Y niños"
+        adult_matches = re.findall(r"(\d+)\s*(?:adulto?s?|adults?)", raw, re.IGNORECASE)
+        child_matches = re.findall(r"(\d+)\s*(?:niñ|child|menor|peque|hijo|infante|beb)", raw, re.IGNORECASE)
+
+        adults = sum(int(x) for x in adult_matches) if adult_matches else 0
+        children = sum(int(x) for x in child_matches) if child_matches else 0
+
+        if adults:
+            total = adults + children
+            if total > 0:
+                return total
+        elif children:
+            return children
+
+        # 4) Total genérico "para X personas/huéspedes"
+        total_match = re.search(r"(\d+)\s*(?:personas?|hu[eé]sped(?:es)?)", raw, re.IGNORECASE)
+        if total_match:
+            val = _to_int(total_match.group(1))
+            if val and val > 0:
+                return val
+
+        return None
 
     # ----------------------------------------------------------
     async def handle(self, pregunta: str, chat_history=None, chat_id: str = None) -> str:
