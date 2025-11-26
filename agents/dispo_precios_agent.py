@@ -90,7 +90,15 @@ class DispoPreciosAgent:
         """Crea la tool que consulta disponibilidad y precios en el PMS vía MCP."""
         async def _availability_tool(query: str):
             try:
-                tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+                try:
+                    tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+                except Exception as mcp_err:
+                    log.error("❌ MCP no accesible para DispoPreciosAgent: %s", mcp_err, exc_info=True)
+                    return (
+                        "No puedo consultar disponibilidad ahora mismo porque el servidor MCP de precios "
+                        "no es accesible (revisa ENDPOINT_MCP o la red)."
+                    )
+
                 token_tool = next((t for t in tools if t.name == "buscar_token"), None)
                 dispo_tool = next((t for t in tools if t.name == "Disponibilidad_y_precios"), None)
 
