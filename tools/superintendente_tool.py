@@ -56,27 +56,32 @@ class SendWhatsAppInput(BaseModel):
     message: str = Field(..., description="Mensaje de texto a enviar (sin plantilla)")
 
 
-def create_add_to_kb_tool(hotel_name: str, append_func: Callable[[str, str, str, str], Any]):
+def create_add_to_kb_tool(
+    hotel_name: str,
+    append_func: Callable[[str, str, str, str], Any],
+):
     async def _add_to_kb(topic: str, content: str, category: str = "general") -> str:
-        log.info("Agregando a KB (S3): %s (categoría: %s)", topic, category)
-        try:
-            await append_func(
-                topic=topic,
-                content=content,
-                hotel_name=hotel_name,
-                source_type=category,
-            )
-            return f"✅ Información '{topic}' agregada correctamente al documento de conocimientos"
-        except Exception as exc:
-            log.error("Error agregando a KB: %s", exc)
-            return f"❌ Error: {exc}"
+        """
+        Genera un borrador pendiente de confirmación para agregar a la KB.
+        La confirmación la gestionará el webhook de Telegram antes de llamar a append_func.
+        """
+        log.info("Preparando borrador de KB (S3): %s (categoría: %s)", topic, category)
+        safe_content = (content or "").replace("|", "/").strip()
+        safe_topic = (topic or "").replace("|", "/").strip()[:200]
+        safe_category = (category or "general").replace("|", "/").strip() or "general"
+
+        preview = (
+            "📝 Borrador para base de conocimientos listo.\n"
+            "Confirma con 'OK' para guardar o envía ajustes.\n"
+            f"[KB_DRAFT]|{hotel_name}|{safe_topic}|{safe_category}|{safe_content}"
+        )
+        return preview
 
     return StructuredTool.from_function(
         name="agregar_a_base_conocimientos",
         description=(
-            "Agrega información a la base de conocimientos (documento en S3). "
-            "Usada cuando el encargado proporciona información que debe estar "
-            "disponible para futuras preguntas de huéspedes."
+            "Genera un borrador para agregar información a la base de conocimientos (documento en S3). "
+            "El encargado debe confirmar antes de que se guarde."
         ),
         coroutine=_add_to_kb,
         args_schema=AddToKBInput,
@@ -158,6 +163,22 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
 
             combined_sorted = sorted(combined, key=lambda m: _parse_ts(m.get("created_at")))
             convos = combined_sorted[-limit:] if combined_sorted else []
+
+            # 🚫 Evita duplicados exactos (rol + contenido + timestamp)
+            seen = set()
+            deduped = []
+            for msg in convos:
+                key = (
+                    msg.get("role", "assistant"),
+                    (msg.get("content") or "").strip(),
+                    str(msg.get("created_at")),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                deduped.append(msg)
+
+            convos = deduped
             count = len(convos)
 
             if not convos:

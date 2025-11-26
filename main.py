@@ -645,6 +645,47 @@ async def telegram_webhook_handler(request: Request):
             return JSONResponse({"status": "processed"})
 
         # =========================================================
+        # 3️⃣ Respuesta a preguntas de KB pendientes
+        # (se procesa antes de modo Superintendente para que "ok" confirme)
+        # =========================================================
+        if chat_id in TELEGRAM_PENDING_KB_ADDITION:
+            pending_kb = TELEGRAM_PENDING_KB_ADDITION[chat_id]
+
+            kb_response = await interno_agent.process_kb_response(
+                chat_id=chat_id,
+                escalation_id=pending_kb.get("escalation_id", ""),
+                manager_response=text,
+                topic=pending_kb.get("topic", ""),
+                draft_content=pending_kb.get("content", ""),
+                hotel_name=pending_kb.get("hotel_name", "Hotel Default"),
+                superintendente_agent=superintendente_agent,
+                pending_state=pending_kb,
+                source=pending_kb.get("source", "escalation"),
+            )
+
+            if isinstance(kb_response, (tuple, list)):
+                kb_response = " ".join(str(x) for x in kb_response)
+            elif not isinstance(kb_response, str):
+                kb_response = str(kb_response)
+
+            sent = False
+            if "agregad" in kb_response.lower() or "✅" in kb_response:
+                TELEGRAM_PENDING_KB_ADDITION.pop(chat_id, None)
+                sent = True
+
+            await channel_manager.send_message(
+                chat_id,
+                kb_response,
+                channel="telegram",
+            )
+
+            if sent:
+                return JSONResponse({"status": "processed"})
+
+            save_tracking()
+            return JSONResponse({"status": "processed"})
+
+        # =========================================================
         # 1️⃣ bis - Ruta explícita para Superintendente con mismo bot
         # Trigger: /super ...  o modo persistido sin reply ni flujos activos
         # =========================================================
@@ -786,6 +827,88 @@ async def telegram_webhook_handler(request: Request):
                         )
                         return JSONResponse({"status": "wa_draft"})
 
+                # 🗂️ Detectar borrador de KB pendiente de confirmación
+                kb_marker = "[KB_DRAFT]|"
+                if kb_marker in response:
+                    # Usa solo la línea que contiene el marcador para evitar arrastrar el panel completo
+                    marker_line = next((ln for ln in response.splitlines() if kb_marker in ln), "")
+                    draft_payload = marker_line if marker_line else response[response.index(kb_marker):]
+
+                    parts = draft_payload.split("|", 4)
+                    if len(parts) >= 5:
+                        _, kb_hotel, topic, category, kb_content = parts[:5]
+                    else:
+                        kb_hotel = hotel_name
+                        topic = "Información"
+                        category = "general"
+                        kb_content = draft_payload.replace(kb_marker, "").strip()
+
+                    TELEGRAM_PENDING_KB_ADDITION[chat_id] = {
+                        "escalation_id": "",
+                        "topic": topic.strip(),
+                        "content": kb_content.strip(),
+                        "hotel_name": kb_hotel or hotel_name or "Hotel Default",
+                        "source": "superintendente",
+                        "category": category.strip() or "general",
+                    }
+
+                    preview = (
+                        "📝 Propuesta para base de conocimientos:\n"
+                        f"TEMA: {topic}\n"
+                        f"CATEGORÍA: {category}\n"
+                        f"CONTENIDO:\n{kb_content}\n\n"
+                        "✅ Responde 'ok' para agregarla.\n"
+                        "📝 Envía ajustes si quieres editarla.\n"
+                        "❌ Responde 'no' para descartarla."
+                    )
+                    await channel_manager.send_message(
+                        chat_id,
+                        preview,
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_draft"})
+
+                # 🛟 Fallback: si el asistente mencionó Tema/Categoría/Contenido pero sin marker, igual crear previsualización
+                if "tema:" in response.lower() and "contenido:" in response.lower() and kb_marker not in response:
+                    import re
+
+                    def _extract(label: str, text: str) -> str:
+                        pattern = rf"{label}\s*:\s*(.+)"
+                        match = re.search(pattern, text, flags=re.IGNORECASE)
+                        return (match.group(1) if match else "").strip()
+
+                    topic = _extract("tema", response) or "Información"
+                    category = _extract("categoría", response) or _extract("categoria", response) or "general"
+                    content_block = ""
+                    content_match = re.search(r"contenido\s*:\s*(.+)", response, flags=re.IGNORECASE | re.DOTALL)
+                    if content_match:
+                        content_block = content_match.group(1).strip()
+
+                    TELEGRAM_PENDING_KB_ADDITION[chat_id] = {
+                        "escalation_id": "",
+                        "topic": topic,
+                        "content": content_block,
+                        "hotel_name": hotel_name,
+                        "source": "superintendente_fallback",
+                        "category": category,
+                    }
+
+                    preview = (
+                        "📝 Propuesta para base de conocimientos:\n"
+                        f"TEMA: {topic}\n"
+                        f"CATEGORÍA: {category}\n"
+                        f"CONTENIDO:\n{content_block}\n\n"
+                        "✅ Responde 'ok' para agregarla.\n"
+                        "📝 Envía ajustes si quieres editarla.\n"
+                        "❌ Responde 'no' para descartarla."
+                    )
+                    await channel_manager.send_message(
+                        chat_id,
+                        preview,
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_draft_fallback"})
+
                 await channel_manager.send_message(
                     chat_id,
                     _format_superintendente_message(response),
@@ -832,34 +955,6 @@ async def telegram_webhook_handler(request: Request):
                 await channel_manager.send_message(chat_id, confirmation_msg, channel="telegram")
                 log.info(f"📝 Borrador generado y enviado a {chat_id}")
                 return JSONResponse({"status": "draft_sent"})
-
-        # =========================================================
-        # 3️⃣ Respuesta a preguntas de KB pendientes
-        # =========================================================
-        if chat_id in TELEGRAM_PENDING_KB_ADDITION:
-            pending_kb = TELEGRAM_PENDING_KB_ADDITION[chat_id]
-
-            kb_response = await interno_agent.process_kb_response(
-                chat_id=chat_id,
-                escalation_id=pending_kb.get("escalation_id", ""),
-                manager_response=text,
-                topic=pending_kb.get("topic", ""),
-                draft_content=pending_kb.get("content", ""),
-                hotel_name=pending_kb.get("hotel_name", "Hotel Default"),
-                superintendente_agent=superintendente_agent,
-            )
-
-            if "agregad" in kb_response.lower() or "✅" in kb_response:
-                TELEGRAM_PENDING_KB_ADDITION.pop(chat_id, None)
-
-            await channel_manager.send_message(
-                chat_id,
-                kb_response,
-                channel="telegram",
-            )
-
-            save_tracking()
-            return JSONResponse({"status": "processed"})
 
         log.info("ℹ️ Mensaje de Telegram ignorado (sin contexto de escalación activo).")
         return JSONResponse({"status": "ignored"})

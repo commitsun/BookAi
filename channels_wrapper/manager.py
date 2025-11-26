@@ -4,6 +4,7 @@ import os
 import traceback
 import logging
 import asyncio
+import time
 from channels_wrapper.base_channel import BaseChannel  # 👈 Verificación de herencia
 
 log = logging.getLogger("ChannelManager")
@@ -19,6 +20,8 @@ class ChannelManager:
     def __init__(self):
         self.channels = {}
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
+        self._recent_sends = {}  # {(channel, chat_id): (message, timestamp)}
+        self._dedup_window = 8.0
         self._load_channels()
 
     # ------------------------------------------------------------------
@@ -100,6 +103,18 @@ class ChannelManager:
                 from core.config import Settings as C
                 # Solo usa el chat de entorno si no se proporcionó ninguno
                 chat_id = chat_id or C.TELEGRAM_CHAT_ID
+
+            # 🛑 Filtro anti-duplicados de salida (mensajes idénticos en pocos segundos)
+            msg_norm = (message or "").strip()
+            key = (channel, chat_id)
+            last = self._recent_sends.get(key)
+            now = time.monotonic()
+            if last:
+                last_msg, ts = last
+                if msg_norm and msg_norm == last_msg and (now - ts) < self._dedup_window:
+                    log.info("↩️ Envío duplicado evitado (%s → %s)", channel, chat_id)
+                    return
+            self._recent_sends[key] = (msg_norm, now)
 
             send_fn = getattr(channel_obj, "send_message", None)
             if not send_fn:

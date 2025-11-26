@@ -123,17 +123,25 @@ class SuperintendenteAgent:
 
             output = (result.get("output") or "").strip()
 
-            # 🚦 Propagar marcador de borrador WA si vino en los pasos intermedios
+            # 🚦 Propagar marcadores especiales si vinieron en pasos intermedios
             intermediates = result.get("intermediate_steps") or []
             wa_marker = None
+            kb_marker = None
             for _action, observation in intermediates:
                 if isinstance(observation, str) and "[WA_DRAFT]|" in observation:
                     wa_marker = observation[
                         observation.index("[WA_DRAFT]|") :
                     ].strip()
+                if isinstance(observation, str) and "[KB_DRAFT]|" in observation:
+                    kb_marker = observation[
+                        observation.index("[KB_DRAFT]|") :
+                    ].strip()
+                if wa_marker and kb_marker:
                     break
             if wa_marker and "[WA_DRAFT]|" not in output:
                 output = f"{wa_marker}\n{output}"
+            if kb_marker and "[KB_DRAFT]|" not in output:
+                output = f"{kb_marker}\n{output}"
 
             await self._safe_call(
                 getattr(self.memory_manager, "save", None),
@@ -210,7 +218,10 @@ class SuperintendenteAgent:
             "2. revisar_conversaciones - Resume conversaciones recientes de huéspedes\n"
             "3. enviar_broadcast - Envía plantillas masivas a múltiples huéspedes\n"
             "4. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n\n"
-            "TONO: Profesional, eficiente, orientado a mejora continua."
+            "TONO: Profesional, eficiente, orientado a mejora continua.\n\n"
+            "REGLA CRÍTICA PARA KB: Cuando el encargado pida agregar/actualizar información en la base de conocimientos, "
+            "usa SIEMPRE la herramienta 'agregar_a_base_conocimientos'. Devuelve el marcador [KB_DRAFT]|hotel|tema|categoria|contenido "
+            "para que el sistema pueda mostrar el borrador completo (TEMA/CATEGORÍA/CONTENIDO) antes de guardar. No omitas el marcador."
         )
 
         context = get_time_context()
@@ -233,17 +244,19 @@ class SuperintendenteAgent:
         try:
             log.info("Agregando a KB: %s desde %s", topic, source)
 
+            clean_content = self._clean_kb_content(content)
+
             result = await self._append_to_knowledge_document(
                 topic=topic,
-                content=content,
+                content=clean_content,
                 hotel_name=hotel_name,
                 source_type=source,
             )
 
             confirmation = (
                 "✅ Información agregada a la base de conocimientos:\n\n"
-                f"{topic}\n{content[:100]}..."
-            ),
+                f"{topic}\n{clean_content[:100]}..."
+            )
             await self._safe_call(
                 getattr(self.channel_manager, "send_message", None),
                 encargado_id,
@@ -325,6 +338,33 @@ class SuperintendenteAgent:
         doc_name = f"{clean_name.replace(' ', '_')}.docx" if clean_name else "knowledge_base.docx"
 
         return f"{prefix}/{doc_name}" if prefix else doc_name
+
+    def _clean_kb_content(self, content: str) -> str:
+        """Elimina instrucciones o metadatos que no deben ir al documento KB."""
+        if not content:
+            return ""
+
+        lines = []
+        for raw in content.splitlines():
+            ln = raw.strip()
+            low = ln.lower()
+            if not ln:
+                continue
+            if "confirma con \"ok\"" in low or "confirma con" in low:
+                continue
+            if "responde 'ok" in low or "responde \"ok" in low:
+                continue
+            if "envía ajustes" in low or "envia ajustes" in low:
+                continue
+            if low.startswith("(source:"):
+                continue
+            if "[superintendente]" in low:
+                continue
+            if low.startswith("📝 propuesta para base de conocimientos"):
+                continue
+            lines.append(ln)
+
+        return "\n".join(lines).strip()
 
     async def review_recent_conversations(
         self,

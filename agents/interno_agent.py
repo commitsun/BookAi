@@ -368,6 +368,8 @@ Responde:
         draft_content: str,
         hotel_name: str,
         superintendente_agent=None,
+        pending_state: Optional[dict[str, Any]] = None,
+        source: str = "escalation",
     ) -> str:
         """Procesar respuesta del encargado sobre agregar a KB"""
 
@@ -384,7 +386,7 @@ Responde:
                 content=draft_content,
                 encargado_id=chat_id,
                 hotel_name=hotel_name,
-                source="escalation",
+                source=source,
             )
 
             return result.get("message", "Error procesando KB addition")
@@ -392,7 +394,12 @@ Responde:
         if any(word in response_lower for word in ["no", "no gracias", "descartar"]):
             return "✓ Información descartada. No se agregó a la base de conocimientos."
 
-        adjusted_draft = f"{draft_content}\n\n[Feedback del encargado: {manager_response}]"
+        # 🧩 Aplicar feedback al borrador existente y devolver nueva propuesta
+        new_topic, new_content = self._apply_kb_feedback(topic, draft_content, manager_response)
+
+        if pending_state is not None:
+            pending_state["content"] = new_content
+            pending_state["topic"] = new_topic or pending_state.get("topic", topic)
 
         await self._safe_call(
             getattr(self.memory_manager, "save", None),
@@ -401,7 +408,16 @@ Responde:
             content=f"[KB_DRAFT_ADJUSTED] {escalation_id}",
         )
 
-        return f"✓ He anotado tu feedback. Aquí está el borrador ajustado:\n\n{adjusted_draft}\n\n¿Ahora sí lo agregamos?"
+        preview = (
+            "📝 Propuesta para base de conocimientos (ajustada):\n"
+            f"TEMA: {new_topic or topic}\n"
+            f"CATEGORÍA: {pending_state.get('category') if pending_state else 'general'}\n"
+            f"CONTENIDO:\n{new_content}\n\n"
+            "✅ Responde 'ok' para agregarla.\n"
+            "📝 Envía ajustes si quieres editarla.\n"
+            "❌ Responde 'no' para descartarla."
+        )
+        return preview
 
     def _create_kb_draft(self, topic: str, content: str) -> str:
         """Crear borrador limpio y estructurado para KB"""
@@ -416,6 +432,68 @@ Responde:
         ]
 
         return "\n".join(lines)
+
+    def _apply_kb_feedback(self, topic: str, content: str, feedback: str) -> tuple[str, str]:
+        """
+        Aplica heurísticas simples para incorporar correcciones del encargado
+        al borrador de KB (ej. 'queria decir pavo').
+        """
+        topic = topic or ""
+        content = content or ""
+        fb = feedback or ""
+        fb_lower = fb.lower()
+
+        # Intentar detectar patrón "quería/quise decir ..."
+        replacement = None
+        match = re.search(r"(quer[ií]a|quise)\s+decir\s+(.+)", fb_lower, flags=re.IGNORECASE)
+        if match:
+            replacement = feedback[match.start(2) :].strip(" .")
+            # Usa solo la primera palabra si el feedback trae varias (evita frases largas como "pavo cambialo")
+            replacement = replacement.split()[0] if replacement else replacement
+
+        # Si hay replacement, reemplazar primer término relevante en topic y content
+        def _swap(text: str, target: str) -> str:
+            if not target or not text or not replacement:
+                return text
+            # Reemplazo simple y case-insensitive
+            return re.sub(re.escape(target), replacement, text, flags=re.IGNORECASE)
+
+        if replacement:
+            # Buscar candidato en topic (palabra no genérica)
+            stop = {
+                "disponibilidad",
+                "hotel",
+                "restaurante",
+                "servicios",
+                "servicio",
+                "informar",
+                "ofrece",
+                "categoria",
+                "categoría",
+                "ubicacion",
+                "ubicación",
+                "noche",
+                "pueblo",
+                "cercano",
+                "cerca",
+                "hoy",
+                "esta",
+                "este",
+                "nuestra",
+                "menu",
+                "menú",
+            }
+            tokens = [t.strip(" ,.;:") for t in topic.split() if len(t.strip(" ,.;:")) > 3]
+            target_token = None
+            for tok in tokens:
+                if tok.lower() not in stop:
+                    target_token = tok
+                    break
+            if target_token:
+                topic = _swap(topic, target_token)
+                content = _swap(content, target_token)
+
+        return topic, content
 
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
         if not self.memory_manager:
