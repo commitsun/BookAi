@@ -397,9 +397,23 @@ Responde:
         # 🧩 Aplicar feedback al borrador existente y devolver nueva propuesta
         new_topic, new_content = self._apply_kb_feedback(topic, draft_content, manager_response)
 
+        category = (pending_state or {}).get("category") or "general"
+
+        ai_topic, ai_category, ai_content = await self._refine_kb_with_ai(
+            topic=new_topic or topic,
+            category=category,
+            draft_content=new_content,
+            feedback=manager_response,
+        )
+
+        final_topic = ai_topic or new_topic or topic
+        final_category = ai_category or category
+        final_content = ai_content or new_content
+
         if pending_state is not None:
-            pending_state["content"] = new_content
-            pending_state["topic"] = new_topic or pending_state.get("topic", topic)
+            pending_state["content"] = final_content
+            pending_state["topic"] = final_topic or pending_state.get("topic", topic)
+            pending_state["category"] = final_category
 
         await self._safe_call(
             getattr(self.memory_manager, "save", None),
@@ -410,9 +424,9 @@ Responde:
 
         preview = (
             "📝 Propuesta para base de conocimientos (ajustada):\n"
-            f"TEMA: {new_topic or topic}\n"
-            f"CATEGORÍA: {pending_state.get('category') if pending_state else 'general'}\n"
-            f"CONTENIDO:\n{new_content}\n\n"
+            f"TEMA: {final_topic}\n"
+            f"CATEGORÍA: {final_category}\n"
+            f"CONTENIDO:\n{final_content}\n\n"
             "✅ Responde 'ok' para agregarla.\n"
             "📝 Envía ajustes si quieres editarla.\n"
             "❌ Responde 'no' para descartarla."
@@ -494,6 +508,66 @@ Responde:
                 content = _swap(content, target_token)
 
         return topic, content
+
+    async def _refine_kb_with_ai(
+        self,
+        *,
+        topic: str,
+        category: str,
+        draft_content: str,
+        feedback: str,
+    ) -> tuple[str, str, str]:
+        """
+        Usa el LLM interno para reescribir el borrador de KB según el feedback del encargado.
+        Mantiene tono apto para huéspedes y devuelve campos estructurados.
+        """
+
+        try:
+            prompt = (
+                "Eres un asistente de conocimiento hotelero. Ajusta el borrador para la base de conocimientos "
+                "siguiendo exactamente las correcciones del encargado. Mantén un tono neutro y claro para huéspedes, "
+                "sin instrucciones internas ni emojis. Devuelve solo:\n"
+                "TEMA: <título breve>\n"
+                "CATEGORÍA: <categoría>\n"
+                "CONTENIDO:\n"
+                "<texto final en 3-6 frases cortas>\n"
+                "Evita listas largas y no inventes datos."
+            )
+
+            user_msg = (
+                f"Borrador actual:\nTEMA: {topic}\nCATEGORÍA: {category}\nCONTENIDO:\n{draft_content}\n\n"
+                f"Indicaciones del encargado:\n{feedback}"
+            )
+
+            response = await self.llm.ainvoke(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_msg},
+                ]
+            )
+
+            text = (response.content or "").strip()
+            if not text:
+                return topic, category, draft_content
+
+            topic_match = re.search(r"tema\s*:\s*(.+)", text, flags=re.IGNORECASE)
+            category_match = re.search(r"categor[ií]a\s*:\s*(.+)", text, flags=re.IGNORECASE)
+            content_match = re.search(r"contenido\s*:\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+
+            new_topic = topic_match.group(1).strip() if topic_match else topic
+            new_category = category_match.group(1).strip() if category_match else category
+            new_content = content_match.group(1).strip() if content_match else draft_content
+
+            # Evita pipes que rompen el marcador [KB_DRAFT]
+            new_topic = new_topic.replace("|", "/")
+            new_category = new_category.replace("|", "/")
+            new_content = new_content.replace("|", "/")
+
+            return new_topic or topic, new_category or category, new_content or draft_content
+
+        except Exception as exc:
+            log.warning("No se pudo refinar KB con IA: %s", exc, exc_info=True)
+            return topic, category, draft_content
 
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
         if not self.memory_manager:

@@ -176,6 +176,48 @@ def register_telegram_routes(app, state):
                 return JSONResponse({"status": "processed"})
 
             # --------------------------------------------------------
+            # 3️⃣ bis - Recuperación de confirmación de KB perdida
+            # --------------------------------------------------------
+            if any(x in text_lower for x in {"ok", "sí", "si", "confirmo", "confirmar"}):
+                try:
+                    recent = state.memory_manager.get_memory(chat_id, limit=15) if state.memory_manager else []
+                    kb_marker = "[KB_DRAFT]|"
+                    last_draft = None
+                    for msg in reversed(recent):
+                        content = msg.get("content", "") or ""
+                        if kb_marker in content:
+                            last_draft = content[content.index(kb_marker) :]
+                            break
+
+                    if last_draft:
+                        parts = last_draft.split("|", 4)
+                        if len(parts) >= 5:
+                            _, kb_hotel, topic, category, kb_content = parts[:5]
+                        else:
+                            kb_hotel = DEFAULT_HOTEL_NAME
+                            topic = "Información"
+                            category = "general"
+                            kb_content = last_draft.replace(kb_marker, "").strip()
+
+                        result = await state.superintendente_agent.handle_kb_addition(
+                            topic=topic.strip(),
+                            content=kb_content.strip(),
+                            encargado_id=chat_id,
+                            hotel_name=kb_hotel or DEFAULT_HOTEL_NAME,
+                            source="superintendente_recovery",
+                        )
+
+                        state.telegram_pending_kb_addition.pop(chat_id, None)
+                        await state.channel_manager.send_message(
+                            chat_id,
+                            result.get("message") if isinstance(result, dict) else str(result),
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "kb_recovered"})
+                except Exception as exc:
+                    log.warning("[KB_RECOVERY] No se pudo recuperar draft: %s", exc, exc_info=True)
+
+            # --------------------------------------------------------
             # 1️⃣ bis - Ruta explícita para Superintendente con mismo bot
             # --------------------------------------------------------
             if text_lower.startswith("/super_exit"):

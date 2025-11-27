@@ -179,6 +179,7 @@ class SuperintendenteAgent:
             create_add_to_kb_tool(
                 hotel_name=hotel_name,
                 append_func=self._append_to_knowledge_document,
+                llm=self.llm,
             ),
             create_review_conversations_tool(
                 hotel_name=hotel_name,

@@ -4,6 +4,7 @@ Herramientas para el Superintendente (implementación simple con StructuredTool)
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from typing import Any, Optional, Callable
 
@@ -63,7 +64,62 @@ class SendWhatsAppInput(BaseModel):
 def create_add_to_kb_tool(
     hotel_name: str,
     append_func: Callable[[str, str, str, str], Any],
+    llm: Any = None,
 ):
+    async def _rewrite_with_ai(topic: str, category: str, content: str) -> tuple[str, str, str]:
+        """
+        Reformula el borrador con IA para que sea apto para huéspedes y devuelva
+        campos estructurados. Se usa un prompt ligero para no inventar datos.
+        """
+        if not llm:
+            return topic, category, content
+
+        try:
+            prompt = (
+                "Eres el redactor de la base de conocimientos del hotel. "
+                "Reescribe el contenido en tono neutro y claro para huéspedes, sin emojis. "
+                "Devuelve siempre este formato exacto:\n"
+                "TEMA: <título breve>\n"
+                "CATEGORÍA: <categoría>\n"
+                "CONTENIDO:\n"
+                "<texto en 3-6 frases cortas, solo hechos confirmados>"
+            )
+            user_msg = (
+                f"Hotel: {hotel_name}\n"
+                f"Tema propuesto: {topic}\n"
+                f"Categoría: {category}\n"
+                f"Notas del encargado:\n{content}"
+            )
+
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": prompt},
+                    {"role": "user", "content": user_msg},
+                ]
+            )
+
+            text = (getattr(response, "content", None) or "").strip()
+            if not text:
+                return topic, category, content
+
+            topic_match = re.search(r"tema\s*:\s*(.+)", text, flags=re.IGNORECASE)
+            category_match = re.search(r"categor[ií]a\s*:\s*(.+)", text, flags=re.IGNORECASE)
+            content_match = re.search(r"contenido\s*:\s*(.+)", text, flags=re.IGNORECASE | re.DOTALL)
+
+            new_topic = topic_match.group(1).strip() if topic_match else topic
+            new_category = category_match.group(1).strip() if category_match else category
+            new_content = content_match.group(1).strip() if content_match else content
+
+            # Evita pipes que rompen el marcador [KB_DRAFT]
+            new_topic = new_topic.replace("|", "/")
+            new_category = new_category.replace("|", "/")
+            new_content = new_content.replace("|", "/")
+
+            return new_topic or topic, new_category or category, new_content or content
+        except Exception as exc:
+            log.warning("No se pudo reformular KB con IA: %s", exc)
+            return topic, category, content
+
     async def _add_to_kb(topic: str, content: str, category: str = "general") -> str:
         """
         Genera un borrador pendiente de confirmación para agregar a la KB.
@@ -74,10 +130,16 @@ def create_add_to_kb_tool(
         safe_topic = (topic or "").replace("|", "/").strip()[:200]
         safe_category = (category or "general").replace("|", "/").strip() or "general"
 
+        ai_topic, ai_category, ai_content = await _rewrite_with_ai(safe_topic, safe_category, safe_content)
+
+        final_topic = (ai_topic or safe_topic).strip()[:200]
+        final_category = (ai_category or safe_category).strip() or "general"
+        final_content = (ai_content or safe_content).strip()
+
         preview = (
-            "📝 Borrador para base de conocimientos listo.\n"
-            "Confirma con 'OK' para guardar o envía ajustes.\n"
-            f"[KB_DRAFT]|{hotel_name}|{safe_topic}|{safe_category}|{safe_content}"
+            "📝 Borrador para base de conocimientos (revisado con IA).\n"
+            "Confirma con 'OK' para guardar o envía ajustes para que los aplique.\n"
+            f"[KB_DRAFT]|{hotel_name}|{final_topic}|{final_category}|{final_content}"
         )
         return preview
 
