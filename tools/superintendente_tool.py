@@ -42,6 +42,10 @@ class ReviewConversationsInput(BaseModel):
         default=None,
         description="ID del huésped/WhatsApp (incluye prefijo de país, ej: +34123456789)",
     )
+    mode: Optional[str] = Field(
+        default=None,
+        description="Modo de entrega: 'resumen' (síntesis IA) u 'original' (mensajes tal cual)",
+    )
 
 
 class SendMessageMainInput(BaseModel):
@@ -124,7 +128,11 @@ def create_send_broadcast_tool(hotel_name: str, channel_manager: Any, supabase_c
 
 
 def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
-    async def _review_conversations(limit: int = 10, guest_id: Optional[str] = None) -> str:
+    async def _review_conversations(
+        limit: int = 10,
+        guest_id: Optional[str] = None,
+        mode: Optional[str] = None,
+    ) -> str:
         try:
             if not memory_manager:
                 return "⚠️ No hay gestor de memoria configurado."
@@ -133,6 +141,20 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
                 return (
                     "⚠️ Para revisar una conversación necesito el ID del huésped "
                     "(guest_id). Ejemplo: +34683527049"
+                )
+
+            normalized_mode = (mode or "").strip().lower()
+            if not normalized_mode:
+                return (
+                    "🤖 ¿Quieres un resumen IA o la conversación tal cual?\n"
+                    "Responde 'resumen' para que sintetice los puntos clave o 'original' si quieres ver los mensajes completos."
+                )
+
+            valid_summary = {"resumen", "summary", "sintesis", "síntesis"}
+            valid_raw = {"original", "historial", "completo", "raw", "crudo", "mensajes"}
+            if normalized_mode not in valid_summary | valid_raw:
+                return (
+                    "⚠️ Modo no reconocido. Usa 'resumen' para síntesis o 'original' para ver los mensajes completos."
                 )
 
             clean_id = str(guest_id).replace("+", "").strip()
@@ -205,7 +227,14 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
                 lines.append(f"- {prefix}{ts_suffix}: {content}")
 
             formatted = "\n".join(lines)
-            return f"🧠 Resumen de conversaciones recientes ({count})\n{formatted}"
+            if normalized_mode in valid_raw:
+                return f"🗂️ Conversación recuperada ({count})\n{formatted}"
+
+            return (
+                "🧠 Historial recuperado para resumir\n"
+                f"Mensajes ({count}):\n{formatted}\n"
+                "➡️ Genera un resumen claro para el encargado con los puntos clave, dudas y acciones pendientes."
+            )
         except Exception as exc:
             log.error("Error revisando conversaciones: %s", exc)
             return f"❌ Error: {exc}"
@@ -213,8 +242,8 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any):
     return StructuredTool.from_function(
         name="revisar_conversaciones",
         description=(
-            "Resume conversaciones recientes de un huésped específico para identificar patrones, "
-            "preguntas frecuentes y oportunidades de mejorar la base de conocimientos. "
+            "Revisa conversaciones recientes de un huésped específico. "
+            "Pregunta primero si el encargado quiere 'resumen' (síntesis IA) u 'original' (mensajes tal cual). "
             "Debes indicar el guest_id (por ejemplo +34683527049)."
         ),
         coroutine=_review_conversations,
