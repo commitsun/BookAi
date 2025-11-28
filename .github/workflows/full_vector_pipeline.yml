@@ -5,6 +5,8 @@ on:
   push:
     branches:
       - vectorizer-pipeline      # O cuando haya cambios en esta rama
+  schedule:
+    - cron: "0 3 * * *"          # Ejecutar cada día a las 03:00 UTC
 
 permissions:
   id-token: write                # Para autenticación OIDC con AWS

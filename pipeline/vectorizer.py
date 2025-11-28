@@ -1,16 +1,15 @@
 import os
+from io import BytesIO
+from typing import Dict, List, Optional, Set
 from uuid import uuid4
-from typing import List
+
+import boto3
 from dotenv import load_dotenv
-from supabase import create_client
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
-import boto3
-
-# 📦 Librerías adicionales para lectura de archivos
-from docx import Document
 from PyPDF2 import PdfReader
-from io import BytesIO
+from docx import Document
+from supabase import create_client
 
 # =====================================
 # 🔧 Cargar configuración
@@ -43,20 +42,17 @@ def load_text_from_s3(key: str) -> str:
 
     if ext == ".txt":
         return raw_data.decode("utf-8", errors="ignore")
-
-    elif ext == ".docx":
+    if ext == ".docx":
         doc = Document(BytesIO(raw_data))
         return "\n".join([p.text for p in doc.paragraphs])
-
-    elif ext == ".pdf":
+    if ext == ".pdf":
         pdf = PdfReader(BytesIO(raw_data))
         return "\n".join([page.extract_text() or "" for page in pdf.pages])
 
-    else:
-        raise ValueError(f"❌ Tipo de archivo no soportado: {ext}")
+    raise ValueError(f"❌ Tipo de archivo no soportado: {ext}")
 
 
-def chunk_text(text: str, chunk_size=1000, overlap=200) -> List[str]:
+def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
     """Divide el texto en fragmentos (chunks) usando LangChain."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
@@ -66,11 +62,97 @@ def chunk_text(text: str, chunk_size=1000, overlap=200) -> List[str]:
     return splitter.split_text(text)
 
 
+def list_s3_files(prefix: str) -> List[Dict[str, str]]:
+    """Lista archivos dentro de un prefijo y devuelve metadatos básicos para detectar cambios."""
+    files: List[Dict[str, str]] = []
+    paginator = s3.get_paginator("list_objects_v2")
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+        for obj in page.get("Contents", []):
+            key = obj["Key"]
+            if key.endswith("/"):
+                continue
+            files.append(
+                {
+                    "key": key,
+                    "file_name": os.path.basename(key),
+                    "etag": obj.get("ETag", "").strip('"'),
+                    "last_modified": obj.get("LastModified").isoformat()
+                    if obj.get("LastModified")
+                    else "",
+                }
+            )
+
+    return files
+
+
+# =====================================
+# 🧠 Gestión de Supabase (estado de archivos)
+# =====================================
+def fetch_existing_file_etag(table_name: str, file_name: str) -> Optional[str]:
+    """Devuelve el etag almacenado para un archivo ya vectorizado (None si no existe)."""
+    try:
+        response = (
+            supabase.table(table_name)
+            .select("metadata")
+            .eq("metadata->>source", file_name)
+            .limit(1)
+            .execute()
+        )
+    except Exception as exc:
+        print(f"⚠️ No se pudo leer estado previo de {file_name}: {exc}")
+        return None
+
+    if not response.data:
+        return None
+
+    metadata = response.data[0].get("metadata") or {}
+    return metadata.get("etag")
+
+
+def list_vectorized_sources(table_name: str) -> Set[str]:
+    """Obtiene el listado de archivos ya vectorizados (solo nombre)."""
+    try:
+        response = supabase.table(table_name).select("metadata").execute()
+    except Exception as exc:
+        print(f"⚠️ No se pudieron listar embeddings previos: {exc}")
+        return set()
+
+    sources: Set[str] = set()
+    for row in response.data or []:
+        meta = row.get("metadata") or {}
+        if meta.get("source"):
+            sources.add(meta["source"])
+    return sources
+
+
+def delete_file_from_supabase(table_name: str, file_name: str) -> None:
+    """Elimina los embeddings de un archivo concreto sin tocar el resto de la tabla."""
+    try:
+        response = (
+            supabase.table(table_name)
+            .delete()
+            .eq("metadata->>source", file_name)
+            .execute()
+        )
+        deleted = len(response.data or []) if hasattr(response, "data") else 0
+        print(f"🗑️  Eliminados {deleted} registros de {file_name} en {table_name}.")
+    except Exception as exc:
+        print(f"⚠️ No se pudo eliminar {file_name} de {table_name}: {exc}")
+
+
 # =====================================
 # 🧠 Vectorización e inserción en Supabase
 # =====================================
-def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
-    """Vectoriza e inserta los chunks en la tabla del hotel correspondiente, conservando el orden original."""
+def save_chunks_to_supabase(
+    table_name: str,
+    doc_name: str,
+    chunks: List[str],
+    *,
+    etag: Optional[str],
+    last_modified: Optional[str],
+) -> None:
+    """Vectoriza e inserta los chunks en la tabla del hotel, conservando el orden y guardando etag."""
     print(f"🧩 Generando embeddings para {doc_name}...")
 
     vectors = embeddings_model.embed_documents(chunks)
@@ -78,12 +160,17 @@ def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
     rows = [
         {
             "id": str(uuid4()),
-            "position": i,  # 👈 índice del chunk (orden real)
+            "position": idx,
             "content": chunk,
             "embedding": vector,
-            "metadata": {"source": doc_name, "chunk": i},
+            "metadata": {
+                "source": doc_name,
+                "chunk": idx,
+                "etag": etag,
+                "last_modified": last_modified,
+            },
         }
-        for i, (chunk, vector) in enumerate(zip(chunks, vectors))
+        for idx, (chunk, vector) in enumerate(zip(chunks, vectors))
     ]
 
     supabase.table(table_name).insert(rows).execute()
@@ -91,37 +178,62 @@ def save_chunks_to_supabase(table_name: str, doc_name: str, chunks: List[str]):
 
 
 # =====================================
-# 🚀 Vectorización por hotel
+# 🚀 Vectorización por hotel (incremental)
 # =====================================
-def vectorize_hotel_docs(hotel_folder: str):
+def vectorize_hotel_docs(hotel_folder: str) -> None:
     """
-    Descarga los documentos de un hotel desde S3,
-    los divide en chunks, genera embeddings y los guarda en Supabase.
+    Vectoriza de forma incremental:
+    - Añade archivos nuevos
+    - Revectoriza archivos modificados (cambiando etag)
+    - Elimina de Supabase los archivos que ya no están en S3
     """
     table_name = f"kb_{os.path.basename(hotel_folder).lower()}"
-
     print(f"\n🚀 Iniciando vectorización para: {table_name}")
-    prefix = f"{hotel_folder}/"
 
-    response = s3.list_objects_v2(Bucket=S3_BUCKET, Prefix=prefix)
-    if "Contents" not in response:
+    prefix = f"{hotel_folder}/"
+    s3_files = list_s3_files(prefix)
+    if not s3_files:
         print(f"⚠️ No se encontraron archivos en {prefix}")
         return
 
-    for obj in response["Contents"]:
-        key = obj["Key"]
-        if key.endswith("/"):
+    current_sources = {f["file_name"] for f in s3_files}
+    vectorized_sources = list_vectorized_sources(table_name)
+
+    # 1) Limpiar embeddings de archivos que ya no existen en S3
+    missing_sources = vectorized_sources - current_sources
+    for source in sorted(missing_sources):
+        print(f"➖ {source} ya no existe en S3, se elimina de Supabase.")
+        delete_file_from_supabase(table_name, source)
+
+    # 2) Procesar nuevos o modificados
+    for file_info in s3_files:
+        file_name = file_info["file_name"]
+        etag = file_info["etag"]
+        last_modified = file_info["last_modified"]
+
+        previous_etag = fetch_existing_file_etag(table_name, file_name)
+        if previous_etag and previous_etag == etag:
+            print(f"⏩ {file_name} sin cambios (etag igual), se mantiene.")
             continue
 
-        file_name = os.path.basename(key)
-        print(f"📄 Procesando {file_name}...")
+        if previous_etag:
+            print(f"♻️ {file_name} modificado, regenerando embeddings.")
+            delete_file_from_supabase(table_name, file_name)
+        else:
+            print(f"➕ {file_name} nuevo, vectorizando.")
 
         try:
-            text = load_text_from_s3(key)
+            text = load_text_from_s3(file_info["key"])
             chunks = chunk_text(text)
-            save_chunks_to_supabase(table_name, file_name, chunks)
-        except Exception as e:
-            print(f"⚠️ Error procesando {file_name}: {e}")
+            save_chunks_to_supabase(
+                table_name,
+                file_name,
+                chunks,
+                etag=etag,
+                last_modified=last_modified,
+            )
+        except Exception as exc:
+            print(f"⚠️ Error procesando {file_name}: {exc}")
 
     print(f"🎉 Vectorización completada para {table_name} ✅")
 
@@ -131,6 +243,7 @@ def vectorize_hotel_docs(hotel_folder: str):
 # =====================================
 if __name__ == "__main__":
     import sys
+
     if len(sys.argv) < 2:
         print("❌ Uso: python -m pipeline.vectorizer <nombre_carpeta_hotel>")
     else:
