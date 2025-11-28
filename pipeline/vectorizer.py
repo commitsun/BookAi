@@ -67,7 +67,9 @@ def list_s3_files(prefix: str) -> List[Dict[str, str]]:
     files: List[Dict[str, str]] = []
     paginator = s3.get_paginator("list_objects_v2")
 
-    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=prefix):
+    normalized_prefix = prefix if prefix.endswith("/") else f"{prefix}/"
+
+    for page in paginator.paginate(Bucket=S3_BUCKET, Prefix=normalized_prefix):
         for obj in page.get("Contents", []):
             key = obj["Key"]
             if key.endswith("/"):
@@ -191,9 +193,8 @@ def save_chunks_to_supabase(
 # =====================================
 def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> None:
     """
-    Vectoriza de forma incremental:
-    - Añade archivos nuevos
-    - Revectoriza archivos modificados (cambiando etag)
+    Vectoriza todo lo que haya en la carpeta del hotel:
+    - Revectoriza cada archivo (borra lo previo de ese archivo antes de insertar)
     - Elimina de Supabase los archivos que ya no están en S3
     """
     table_name = f"kb_{os.path.basename(hotel_folder).lower()}"
@@ -207,6 +208,8 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
     if not s3_files:
         print(f"⚠️ No se encontraron archivos en {prefix}")
         return
+
+    print(f"📂 Archivos detectados en S3 ({len(s3_files)}): {[f['file_name'] for f in s3_files]}")
 
     current_sources = {f["file_name"] for f in s3_files}
     vectorized_sources = list_vectorized_sources(table_name)
@@ -223,20 +226,16 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
         etag = file_info["etag"]
         last_modified = file_info["last_modified"]
 
-        previous_etag = fetch_existing_file_etag(table_name, file_name)
-        if previous_etag and previous_etag == etag:
-            print(f"⏩ {file_name} sin cambios (etag igual), se mantiene.")
-            continue
-
-        if previous_etag:
-            print(f"♻️ {file_name} modificado, regenerando embeddings.")
-            delete_file_from_supabase(table_name, file_name)
-        else:
-            print(f"➕ {file_name} nuevo, vectorizando.")
+        # Siempre revectorizamos cada archivo para asegurar sincronía 1:1 con S3.
+        delete_file_from_supabase(table_name, file_name)
+        print(f"🔄 Revectorizando {file_name} ...")
 
         try:
             text = load_text_from_s3(file_info["key"])
             chunks = chunk_text(text)
+            if not chunks:
+                print(f"⚠️ {file_name} no tiene contenido legible, se omite.")
+                continue
             save_chunks_to_supabase(
                 table_name,
                 file_name,
