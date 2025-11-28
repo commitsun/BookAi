@@ -1,7 +1,12 @@
 name: "🔄 Full S3 → Supabase Vectorization"
 
 on:
-  workflow_dispatch: {}          # Lanzar manualmente desde GitHub
+  workflow_dispatch:             # Lanzar manualmente desde GitHub
+    inputs:
+      full_refresh:
+        description: "Limpiar tablas y revectorizar todo (true/false)"
+        required: false
+        default: "false"
   push:
     branches:
       - vectorizer-pipeline      # O cuando haya cambios en esta rama
@@ -45,6 +50,7 @@ jobs:
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
           echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+          echo "FULL_REFRESH=${{ github.event.inputs.full_refresh }}" >> $GITHUB_ENV
 
       - name: "🚀 Step 1: Sync with S3"
         run: python -m pipeline.s3_client
@@ -82,6 +88,7 @@ jobs:
           echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
           echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
           echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+          echo "FULL_REFRESH=${{ github.event.inputs.full_refresh }}" >> $GITHUB_ENV
 
       - name: "🚀 Step 2: Run full vectorization pipeline"
         run: python -m pipeline.run_pipeline

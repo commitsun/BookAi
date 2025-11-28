@@ -1,8 +1,14 @@
+import os
+
 from pipeline.s3_client import init_hotels_in_supabase, list_hotel_folders
 from pipeline.vectorizer import vectorize_hotel_docs
 
 def main():
     print("🚀 Iniciando pipeline de vectorización...\n")
+
+    full_refresh = os.getenv("FULL_REFRESH", "").lower() in {"1", "true", "yes"}
+    if full_refresh:
+        print("🧹 FULL_REFRESH activo: se limpiarán tablas antes de vectorizar.")
 
     # 1️⃣ Crear tablas en Supabase según las carpetas de S3
     init_hotels_in_supabase()
@@ -16,7 +22,7 @@ def main():
     # 3️⃣ Vectorizar los documentos de cada hotel
     for hotel_folder in hotels:
         try:
-            vectorize_hotel_docs(hotel_folder)
+            vectorize_hotel_docs(hotel_folder, full_refresh=full_refresh)
         except Exception as e:
             print(f"⚠️ Error vectorizando {hotel_folder}: {e}")
 

@@ -141,6 +141,15 @@ def delete_file_from_supabase(table_name: str, file_name: str) -> None:
         print(f"⚠️ No se pudo eliminar {file_name} de {table_name}: {exc}")
 
 
+def purge_table(table_name: str) -> None:
+    """Borra todos los embeddings de la tabla sin eliminar la tabla."""
+    try:
+        supabase.table(table_name).delete().neq("id", None).execute()
+        print(f"🧹 Tabla {table_name} limpiada por completo.")
+    except Exception as exc:
+        print(f"⚠️ No se pudo limpiar {table_name}: {exc}")
+
+
 # =====================================
 # 🧠 Vectorización e inserción en Supabase
 # =====================================
@@ -180,7 +189,7 @@ def save_chunks_to_supabase(
 # =====================================
 # 🚀 Vectorización por hotel (incremental)
 # =====================================
-def vectorize_hotel_docs(hotel_folder: str) -> None:
+def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> None:
     """
     Vectoriza de forma incremental:
     - Añade archivos nuevos
@@ -191,6 +200,9 @@ def vectorize_hotel_docs(hotel_folder: str) -> None:
     print(f"\n🚀 Iniciando vectorización para: {table_name}")
 
     prefix = f"{hotel_folder}/"
+    if full_refresh:
+        purge_table(table_name)
+
     s3_files = list_s3_files(prefix)
     if not s3_files:
         print(f"⚠️ No se encontraron archivos en {prefix}")
@@ -245,6 +257,8 @@ if __name__ == "__main__":
     import sys
 
     if len(sys.argv) < 2:
-        print("❌ Uso: python -m pipeline.vectorizer <nombre_carpeta_hotel>")
+        print("❌ Uso: python -m pipeline.vectorizer <nombre_carpeta_hotel> [--full-refresh]")
     else:
-        vectorize_hotel_docs(sys.argv[1])
+        folder = sys.argv[1]
+        full_refresh_flag = "--full-refresh" in sys.argv[2:]
+        vectorize_hotel_docs(folder, full_refresh=full_refresh_flag)
