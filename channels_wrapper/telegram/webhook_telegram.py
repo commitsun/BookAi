@@ -24,6 +24,50 @@ log = logging.getLogger("TelegramWebhook")
 def register_telegram_routes(app, state):
     """Registra el endpoint de Telegram y comparte estado con el pipeline."""
 
+    async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
+        """
+        Reescribe un borrador de WhatsApp con instrucciones adicionales.
+        Mantiene tono cordial y conciso, sin emojis ni firmas.
+        """
+        clean_base = sanitize_wa_message(base_message or "")
+        clean_adj = (adjustments or "").strip()
+
+        if not clean_adj:
+            return clean_base
+
+        if not llm:
+            return sanitize_wa_message(clean_adj)
+
+        try:
+            system = (
+                "Eres el asistente del encargado de un hotel. "
+                "Reformula mensajes cortos de WhatsApp para huéspedes en español neutro, con tono cordial y directo. "
+                "No uses emojis ni adornos, entrega la respuesta en una sola línea lista para enviar."
+            )
+            user_msg = (
+                "Mensaje actual del borrador:\n"
+                f"{clean_base or 'N/A'}\n\n"
+                "Nuevas indicaciones del encargado:\n"
+                f"{clean_adj}\n\n"
+                "Genera el mensaje final listo para enviar."
+            )
+
+            response = await llm.ainvoke(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ]
+            )
+
+            text = (getattr(response, "content", None) or "").strip()
+            if not text:
+                return sanitize_wa_message(clean_adj)
+
+            return sanitize_wa_message(text)
+        except Exception as exc:
+            log.warning("No se pudo reformular borrador WA: %s", exc)
+            return sanitize_wa_message(clean_adj or clean_base)
+
     @app.post("/webhook/telegram")
     async def telegram_webhook_handler(request: Request):
         """
@@ -271,10 +315,18 @@ def register_telegram_routes(app, state):
                     return JSONResponse({"status": "wa_cancelled"})
 
                 log.info("[WA_CONFIRM] Ajuste de borrador por %s", chat_id)
-                state.superintendente_pending_wa[chat_id]["message"] = sanitize_wa_message(text)
+                llm = getattr(state.superintendente_agent, "llm", None)
+                rewritten = await _rewrite_wa_draft(llm, draft_msg, text)
+                state.superintendente_pending_wa[chat_id]["message"] = rewritten
                 await state.channel_manager.send_message(
                     chat_id,
-                    f"📝 Borrador actualizado:\n{text}\n\nResponde 'sí' para enviar o 'no' para descartar.",
+                    (
+                        f"📝 Borrador WhatsApp para {guest_id}:\n"
+                        f"{rewritten}\n\n"
+                        "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
+                        "✅ Responde 'sí' para enviar.\n"
+                        "❌ Responde 'no' para descartar."
+                    ),
                     channel="telegram",
                 )
                 return JSONResponse({"status": "wa_updated"})
@@ -345,8 +397,11 @@ def register_telegram_routes(app, state):
                             except Exception:
                                 pass
                             preview = (
-                                f"📝 Borrador WhatsApp para {guest_id}:\n{msg_to_send}\n\n"
-                                "Responde 'sí' para enviar, 'no' para descartar o escribe ajustes."
+                                f"📝 Borrador WhatsApp para {guest_id}:\n"
+                                f"{msg_to_send}\n\n"
+                                "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
+                                "✅ Responde 'sí' para enviar.\n"
+                                "❌ Responde 'no' para descartar."
                             )
                             await state.channel_manager.send_message(
                                 chat_id,
