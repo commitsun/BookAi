@@ -415,6 +415,15 @@ Responde:
             pending_state["topic"] = final_topic or pending_state.get("topic", topic)
             pending_state["category"] = final_category
 
+        # Guarda marcador actualizado en memoria para que la recuperación use la versión ajustada
+        kb_marker = f"[KB_DRAFT]|{hotel_name}|{final_topic}|{final_category}|{final_content}"
+        await self._safe_call(
+            getattr(self.memory_manager, "save", None),
+            conversation_id=chat_id,
+            role="system",
+            content=kb_marker,
+        )
+
         await self._safe_call(
             getattr(self.memory_manager, "save", None),
             conversation_id=chat_id,

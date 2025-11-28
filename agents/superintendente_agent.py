@@ -296,28 +296,51 @@ class SuperintendenteAgent:
         if not bucket:
             raise ValueError("S3_BUCKET no configurado en .env")
 
-        key = self._resolve_doc_key(hotel_name)
-
         boto = boto3.client(
             "s3",
             region_name=Settings.AWS_DEFAULT_REGION,
             config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
         )
 
+        candidates = self._resolve_doc_candidates(
+            hotel_name=hotel_name,
+            boto_client=boto,
+            bucket=bucket,
+        )
+
         tmp_dir = Path(tempfile.mkdtemp())
         local_path = tmp_dir / "kb.docx"
 
-        try:
-            await asyncio.to_thread(boto.download_file, bucket, key, str(local_path))
-        except Exception as exc:
-            raise RuntimeError(f"No se pudo descargar el documento KB de S3 ({bucket}/{key}): {exc}")
+        key_used = None
+        last_exc: Exception | None = None
+        create_new = False
+        for key in candidates:
+            try:
+                await asyncio.to_thread(boto.download_file, bucket, key, str(local_path))
+                key_used = key
+                break
+            except Exception as exc:  # intentamos siguiente candidato
+                last_exc = exc
+                log.warning("No se pudo descargar %s/%s, probando siguiente: %s", bucket, key, exc)
+
+        if not key_used:
+            key_used = candidates[0]
+            create_new = True
+            log.warning(
+                "No se pudo descargar ningún documento de KB tras probar %s candidatos; se creará uno nuevo en %s",
+                len(candidates),
+                key_used,
+            )
 
         try:
             from docx import Document
         except ImportError as exc:
             raise RuntimeError("Falta dependencia python-docx para editar el documento") from exc
 
-        doc = Document(str(local_path))
+        if create_new:
+            doc = Document()
+        else:
+            doc = Document(str(local_path))
         timestamp = datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC")
         doc.add_paragraph(f"[{timestamp}] {topic}")
         doc.add_paragraph(content)
@@ -325,23 +348,103 @@ class SuperintendenteAgent:
         doc.save(str(local_path))
 
         try:
-            await asyncio.to_thread(boto.upload_file, str(local_path), bucket, key)
+            await asyncio.to_thread(boto.upload_file, str(local_path), bucket, key_used)
         except Exception as exc:
-            raise RuntimeError(f"No se pudo subir el documento actualizado a S3 ({bucket}/{key}): {exc}")
+            raise RuntimeError(f"No se pudo subir el documento actualizado a S3 ({bucket}/{key_used}): {exc}")
 
-        return {"status": "success", "key": key}
+        return {"status": "success", "key": key_used}
 
-    def _resolve_doc_key(self, hotel_name: str) -> str:
-        """Determina la key en S3 para el documento de KB del hotel."""
+    def _resolve_doc_candidates(self, hotel_name: str, boto_client: Any = None, bucket: str | None = None) -> list[str]:
+        """
+        Devuelve una lista ordenada de posibles keys en S3 para el documento de KB del hotel.
+        Prioriza archivos que contengan '-Variable' antes de la extensión y agrega fallback final.
+        """
 
         if Settings.SUPERINTENDENTE_S3_DOC:
-            return Settings.SUPERINTENDENTE_S3_DOC.strip('\"\\\' ')
+            env_key = Settings.SUPERINTENDENTE_S3_DOC.strip('\"\\\' ')
+            candidates = [env_key]
+            # También probar variante "-Variable" si no está incluida
+            if env_key.lower().endswith(".docx"):
+                base_no_ext = env_key[:-5]
+                var_key = f"{base_no_ext}-Variable.docx"
+                if var_key not in candidates:
+                    candidates.insert(0, var_key)
+            elif env_key.lower().endswith(".doc"):
+                base_no_ext = env_key[:-4]
+                var_key = f"{base_no_ext}-Variable.doc"
+                if var_key not in candidates:
+                    candidates.insert(0, var_key)
+            log.info("Candidatos para documento KB (env): %s", candidates)
+            return candidates
 
-        prefix = Settings.SUPERINTENDENTE_S3_PREFIX.rstrip("/")
+        prefix_env = Settings.SUPERINTENDENTE_S3_PREFIX.rstrip("/")
         clean_name = re.sub(r"[^A-Za-z0-9\\-_ ]+", "", hotel_name).strip()
         doc_name = f"{clean_name.replace(' ', '_')}.docx" if clean_name else "knowledge_base.docx"
+        slug_prefix = clean_name.replace(" ", "_") if clean_name else ""
+        prefix_tail = prefix_env.rsplit("/", 1)[-1] if prefix_env else ""
 
-        return f"{prefix}/{doc_name}" if prefix else doc_name
+        # base_key por defecto
+        base_key = f"{prefix_env}/{doc_name}" if prefix_env else doc_name
+
+        # 🎯 Generar combinaciones de prefijos candidatos
+        prefix_candidates = []
+        if prefix_env:
+            prefix_candidates.append(prefix_env)
+        if slug_prefix and slug_prefix not in prefix_candidates:
+            prefix_candidates.append(slug_prefix)
+        if "" not in prefix_candidates:
+            prefix_candidates.append("")
+
+        # 🎯 Generar nombres posibles de archivo Variable
+        var_names = []
+        if clean_name:
+            raw_name = " ".join(hotel_name.split())  # normaliza espacios múltiples
+            var_names.extend(
+                [
+                    f"{raw_name}-Variable.docx",
+                    f"{clean_name.replace(' ', '_')}-Variable.docx",
+                    f"{doc_name[:-5]}-Variable.docx" if doc_name.endswith(".docx") else f"{doc_name}-Variable.docx",
+                ]
+            )
+        if prefix_tail:
+            var_names.extend(
+                [
+                    f"{prefix_tail.replace('_', ' ')}-Variable.docx",
+                    f"{prefix_tail}-Variable.docx",
+                ]
+            )
+
+        candidates: list[str] = []
+        # Añadir combinaciones prefijo + nombres variable
+        for pref in prefix_candidates:
+            for nm in var_names:
+                if not nm:
+                    continue
+                cand = f"{pref}/{nm}" if pref else nm
+                if cand not in candidates:
+                    candidates.append(cand)
+
+        # 🎯 Si hay prefijo y cliente S3, listar documentos bajo ese prefijo y priorizar
+        # cualquiera que contenga '-variable' en el nombre (independiente del hotel).
+        if boto_client and bucket and prefix_env:
+            try:
+                paginator = boto_client.get_paginator("list_objects_v2")
+                for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix_env}/"):
+                    for obj in page.get("Contents", []):
+                        key = obj.get("Key") or ""
+                        key_lower = key.lower()
+                        if "-variable" in key_lower and key_lower.endswith((".docx", ".doc")):
+                            if key not in candidates:
+                                candidates.insert(0, key)  # dar prioridad a los encontrados reales
+            except Exception as exc:
+                log.warning("No se pudo listar documentos Variable en %s: %s", prefix_env, exc)
+
+        # Añadir base como último recurso
+        if base_key not in candidates:
+            candidates.append(base_key)
+
+        log.info("Candidatos para documento KB: %s", candidates)
+        return candidates
 
     def _clean_kb_content(self, content: str) -> str:
         """Elimina instrucciones o metadatos que no deben ir al documento KB."""
