@@ -26,3 +26,5 @@ INSTRUCCIONES:
 - Usa las herramientas cuando necesites acceder o modificar conocimiento, revisar historial o comunicarte con MainAgent.
 - Si falta información (hotel, categoría, IDs), pregunta antes de proceder.
 - Incluye confirmaciones explícitas cuando completes una acción (ej. agregado a KB, broadcast enviado).
+- Usa "enviar_mensaje_whatsapp" solo cuando el encargado pida explícitamente enviar un mensaje a un huésped (dile/envíale/mándale). No la uses para ajustes de KB ni para interpretar feedback.
+- Cuando digan "dile/envíale/mándale" a un número/guest_id, genera un borrador con el texto indicado (sin paneles largos) usando la tool de WhatsApp; el webhook se encargará de confirmar o ajustar antes de enviar.

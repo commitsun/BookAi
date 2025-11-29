@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
+import asyncio
 import logging
+import re
+from datetime import datetime
+from typing import Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
@@ -17,6 +21,7 @@ from core.message_utils import (
     get_escalation_metadata,
     sanitize_wa_message,
 )
+from core.db import get_conversation_history
 
 log = logging.getLogger("TelegramWebhook")
 
@@ -24,34 +29,211 @@ log = logging.getLogger("TelegramWebhook")
 def register_telegram_routes(app, state):
     """Registra el endpoint de Telegram y comparte estado con el pipeline."""
 
+    def _extract_phone(text: str) -> str | None:
+        """Extrae el primer número estilo teléfono con 6-15 dígitos."""
+        if not text:
+            return None
+        match = re.search(r"\+?\d{6,15}", text.replace(" ", ""))
+        return match.group(0) if match else None
+
+    def _is_short_confirmation(text: str) -> bool:
+        """
+        Confirma solo respuestas cortas (ej. 'ok', 'sí') y evita frases largas
+        que contengan 'si' por accidente (ej. 'que si necesita pañuelos').
+        """
+        clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        yes_words = {"ok", "okay", "okey", "si", "sí", "vale", "va", "dale", "listo", "confirmo", "confirmar"}
+        if clean in yes_words:
+            return True
+
+        return 0 < len(tokens) <= 2 and all(tok in yes_words for tok in tokens)
+
+    def _is_short_wa_confirmation(text: str) -> bool:
+        """
+        Confirma envío WA solo con respuestas breves (ej. 'si', 'ok', 'enviar')
+        y evita disparar con frases largas que incluyan la palabra 'si'.
+        """
+        clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        confirm_words = set(WA_CONFIRM_WORDS) | {"vale", "listo"}
+        if clean in confirm_words:
+            return True
+
+        return 0 < len(tokens) <= 2 and all(tok in confirm_words for tok in tokens)
+
+    def _is_short_wa_cancel(text: str) -> bool:
+        """
+        Cancela envío WA solo con respuestas breves (ej. 'no', 'cancelar')
+        para evitar falsos positivos por subcadenas (ej. 'buenos').
+        """
+        clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        cancel_words = set(WA_CANCEL_WORDS) | {"cancelado", "cancelo", "cancela"}
+        if clean in cancel_words:
+            return True
+
+        return 0 < len(tokens) <= 2 and all(tok in cancel_words for tok in tokens)
+
+    def _looks_like_new_instruction(text: str) -> bool:
+        """
+        Detecta si el encargado está cambiando de tema (ej. mandar mensaje, pedir historial)
+        para no atrapar la solicitud dentro de un flujo previo.
+        """
+        if not text:
+            return False
+
+        action_terms = {
+            "mandale",
+            "mándale",
+            "enviale",
+            "envíale",
+            "manda",
+            "mensaje",
+            "whatsapp",
+            "historial",
+            "convers",
+            "broadcast",
+            "plantilla",
+            "resumen",
+        }
+        return any(term in text for term in action_terms) or bool(_extract_phone(text))
+
+    async def _collect_conversations(guest_id: str, limit: int = 10):
+        """Recupera y deduplica mensajes del huésped desde DB + runtime."""
+        if not state.memory_manager:
+            return []
+
+        clean_id = str(guest_id).replace("+", "").strip()
+
+        db_msgs = await asyncio.to_thread(
+            get_conversation_history,
+            clean_id,
+            limit * 3,  # pedir más por ruido/system
+            None,
+        )
+        try:
+            runtime_msgs = state.memory_manager.runtime_memory.get(clean_id, [])
+        except Exception:
+            runtime_msgs = []
+
+        def _parse_ts(ts: Any) -> float:
+            try:
+                if isinstance(ts, datetime):
+                    return ts.timestamp()
+                ts_str = str(ts).replace("Z", "")
+                return datetime.fromisoformat(ts_str).timestamp()
+            except Exception:
+                return 0.0
+
+        combined_sorted = sorted((db_msgs or []) + (runtime_msgs or []), key=lambda m: _parse_ts(m.get("created_at")))
+        convos = combined_sorted[-limit:] if combined_sorted else []
+
+        seen = set()
+        deduped = []
+        for msg in convos:
+            key = (
+                msg.get("role", "assistant"),
+                (msg.get("content") or "").strip(),
+                str(msg.get("created_at")),
+            )
+            if key in seen:
+                continue
+            seen.add(key)
+            deduped.append(msg)
+
+        return deduped
+
+    async def _render_history(guest_id: str, mode: str, limit: int = 10) -> str:
+        """Devuelve texto listo para enviar (raw o resumen IA)."""
+        convos = await _collect_conversations(guest_id, limit=limit)
+        if not convos:
+            return f"🧠 Historial ({guest_id})\nNo hay mensajes recientes."
+
+        def _fmt_ts(ts: Any) -> str:
+            try:
+                if isinstance(ts, datetime):
+                    return ts.strftime("%d/%m %H:%M")
+                ts_str = str(ts).replace("Z", "")
+                return datetime.fromisoformat(ts_str).strftime("%d/%m %H:%M")
+            except Exception:
+                return ""
+
+        lines = []
+        for msg in convos:
+            role = msg.get("role", "assistant")
+            prefix = {"user": "Huésped", "assistant": "Asistente", "system": "Sistema", "tool": "Tool"}.get(
+                role, "Asistente"
+            )
+            ts = _fmt_ts(msg.get("created_at"))
+            ts_suffix = f" · {ts}" if ts else ""
+            content = msg.get("content", "").strip()
+            lines.append(f"- {prefix}{ts_suffix}: {content}")
+
+        formatted = "\n".join(lines)
+        if mode == "original":
+            return f"🗂️ Conversación recuperada ({len(convos)})\n{formatted}"
+
+        llm = getattr(state.superintendente_agent, "llm", None)
+        if not llm:
+            return f"🧠 Historial ({len(convos)})\n{formatted}\n\n(Sin modelo disponible para resumir)"
+
+        try:
+            system = (
+                "Eres el Superintendente. Resume el historial para el encargado: puntos clave, dudas y acciones pendientes. "
+                "No inventes nada y sé conciso."
+            )
+            user_msg = "\n".join(lines)
+            resp = await llm.ainvoke(
+                [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": user_msg},
+                ]
+            )
+            summary = (getattr(resp, "content", None) or "").strip()
+            if not summary:
+                return f"🧠 Historial ({len(convos)})\n{formatted}\n\n(No se pudo generar resumen)"
+            return f"🧠 Resumen de {guest_id} ({len(convos)} msg)\n{summary}"
+        except Exception as exc:
+            log.warning("No se pudo resumir historial: %s", exc)
+            return f"🧠 Historial ({len(convos)})\n{formatted}\n\n(No se pudo generar resumen: {exc})"
+
     async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
         """
         Reescribe un borrador de WhatsApp con instrucciones adicionales.
         Mantiene tono cordial y conciso, sin emojis ni firmas.
         """
         clean_base = sanitize_wa_message(base_message or "")
-        clean_adj = (adjustments or "").strip()
+        clean_adj = sanitize_wa_message(adjustments or "")
 
         if not clean_adj:
             return clean_base
 
+        # Sin modelo: combina de forma determinista
         if not llm:
-            return sanitize_wa_message(clean_adj)
+            if clean_base and clean_adj:
+                return _clean_wa_payload(f"{clean_base}. {clean_adj}")
+            return _clean_wa_payload(clean_base or clean_adj)
+
+        # Con modelo: pedir una sola frase lista para enviar
+        system = (
+            "Eres el asistente del encargado de un hotel. "
+            "Genera un único mensaje corto de WhatsApp en español neutro, tono cordial y directo. "
+            "Incluye las ideas del mensaje base y los ajustes. "
+            "No añadas instrucciones, confirmaciones ni comillas; entrega solo el texto listo para enviar."
+        )
+        user_msg = (
+            "Mensaje base:\n"
+            f"{clean_base or 'N/A'}\n\n"
+            "Ajustes solicitados:\n"
+            f"{clean_adj}\n\n"
+            "Devuelve solo el mensaje final en una línea."
+        )
 
         try:
-            system = (
-                "Eres el asistente del encargado de un hotel. "
-                "Reformula mensajes cortos de WhatsApp para huéspedes en español neutro, con tono cordial y directo. "
-                "No uses emojis ni adornos, entrega la respuesta en una sola línea lista para enviar."
-            )
-            user_msg = (
-                "Mensaje actual del borrador:\n"
-                f"{clean_base or 'N/A'}\n\n"
-                "Nuevas indicaciones del encargado:\n"
-                f"{clean_adj}\n\n"
-                "Genera el mensaje final listo para enviar."
-            )
-
             response = await llm.ainvoke(
                 [
                     {"role": "system", "content": system},
@@ -61,12 +243,41 @@ def register_telegram_routes(app, state):
 
             text = (getattr(response, "content", None) or "").strip()
             if not text:
-                return sanitize_wa_message(clean_adj)
+                return _clean_wa_payload(clean_adj)
 
-            return sanitize_wa_message(text)
+            return _clean_wa_payload(text)
         except Exception as exc:
             log.warning("No se pudo reformular borrador WA: %s", exc)
-            return sanitize_wa_message(clean_adj or clean_base)
+            return _clean_wa_payload(clean_adj or clean_base)
+
+    def _clean_wa_payload(msg: str) -> str:
+        """
+        Limpia un borrador de WA para dejar solo el mensaje al huésped,
+        removiendo instrucciones accidentales generadas por el modelo.
+        """
+        base = sanitize_wa_message(msg or "")
+        if not base:
+            return base
+
+        # Limpia etiquetas internas
+        base = re.sub(r"\[\s*superintendente\s*\]", "", base, flags=re.IGNORECASE).strip()
+
+        cut_markers = [
+            "borrador",
+            "confirma",
+            "confirmar",
+            "por favor",
+            "ok para",
+            "ok para",
+            "ok p",
+            "plantilla",
+        ]
+        lower = base.lower()
+        cuts = [lower.find(m) for m in cut_markers if lower.find(m) > 0]
+        if cuts:
+            base = base[: min(cuts)].strip()
+
+        return base.strip()
 
     @app.post("/webhook/telegram")
     async def telegram_webhook_handler(request: Request):
@@ -91,6 +302,7 @@ def register_telegram_routes(app, state):
 
             log.info("💬 Telegram (%s): %s", chat_id, text)
             text_lower = text.lower()
+            phone_hint = _extract_phone(text)
 
             # --------------------------------------------------------
             # 1️⃣ Confirmación o ajustes de un borrador pendiente
@@ -184,45 +396,56 @@ def register_telegram_routes(app, state):
             if chat_id in state.telegram_pending_kb_addition:
                 pending_kb = state.telegram_pending_kb_addition[chat_id]
 
-                kb_response = await state.interno_agent.process_kb_response(
-                    chat_id=chat_id,
-                    escalation_id=pending_kb.get("escalation_id", ""),
-                    manager_response=text,
-                    topic=pending_kb.get("topic", ""),
-                    draft_content=pending_kb.get("content", ""),
-                    hotel_name=pending_kb.get("hotel_name", DEFAULT_HOTEL_NAME),
-                    superintendente_agent=state.superintendente_agent,
-                    pending_state=pending_kb,
-                    source=pending_kb.get("source", "escalation"),
-                )
-
-                if isinstance(kb_response, (tuple, list)):
-                    kb_response = " ".join(str(x) for x in kb_response)
-                elif not isinstance(kb_response, str):
-                    kb_response = str(kb_response)
-
-                sent = False
-                if "agregad" in kb_response.lower() or "✅" in kb_response:
+                if _looks_like_new_instruction(text_lower):
+                    log.info("[KB_PENDING] Se detecta nueva instrucción, se libera flujo KB (%s)", chat_id)
                     state.telegram_pending_kb_addition.pop(chat_id, None)
-                    sent = True
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "📌 Dejo guardado el borrador de KB. Sigo con tu nueva solicitud; "
+                        "si quieres retomarlo más tarde, dime 'ok'.",
+                        channel="telegram",
+                    )
+                else:
 
-                await state.channel_manager.send_message(
-                    chat_id,
-                    kb_response,
-                    channel="telegram",
-                )
+                    kb_response = await state.interno_agent.process_kb_response(
+                        chat_id=chat_id,
+                        escalation_id=pending_kb.get("escalation_id", ""),
+                        manager_response=text,
+                        topic=pending_kb.get("topic", ""),
+                        draft_content=pending_kb.get("content", ""),
+                        hotel_name=pending_kb.get("hotel_name", DEFAULT_HOTEL_NAME),
+                        superintendente_agent=state.superintendente_agent,
+                        pending_state=pending_kb,
+                        source=pending_kb.get("source", "escalation"),
+                    )
 
-                if sent:
+                    if isinstance(kb_response, (tuple, list)):
+                        kb_response = " ".join(str(x) for x in kb_response)
+                    elif not isinstance(kb_response, str):
+                        kb_response = str(kb_response)
+
+                    sent = False
+                    if "agregad" in kb_response.lower() or "✅" in kb_response:
+                        state.telegram_pending_kb_addition.pop(chat_id, None)
+                        sent = True
+
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        kb_response,
+                        channel="telegram",
+                    )
+
+                    if sent:
+                        return JSONResponse({"status": "processed"})
+
+                    state.tracking = state.telegram_pending_confirmations
+                    state.save_tracking()
                     return JSONResponse({"status": "processed"})
-
-                state.tracking = state.telegram_pending_confirmations
-                state.save_tracking()
-                return JSONResponse({"status": "processed"})
 
             # --------------------------------------------------------
             # 3️⃣ bis - Recuperación de confirmación de KB perdida
             # --------------------------------------------------------
-            if any(x in text_lower for x in {"ok", "sí", "si", "confirmo", "confirmar"}):
+            if _is_short_confirmation(text_lower) and chat_id not in state.superintendente_pending_wa:
                 try:
                     recent = state.memory_manager.get_memory(chat_id, limit=15) if state.memory_manager else []
                     kb_marker = "[KB_DRAFT]|"
@@ -282,14 +505,28 @@ def register_telegram_routes(app, state):
             )
 
             # --------------------------------------------------------
+            # 🔄 Evitar que solicitudes nuevas (KB/historial) queden atrapadas
+            # en el flujo de confirmación de WhatsApp pendiente
+            # --------------------------------------------------------
+            bypass_wa_flow = False
+            has_kb_pending = chat_id in state.telegram_pending_kb_addition
+            if chat_id in state.superintendente_pending_wa:
+                if text_lower.startswith("/super") or has_kb_pending or any(
+                    kw in text_lower for kw in {"base de conoc", "kb", "historial", "convers", "broadcast"}
+                ):
+                    log.info("[WA_CONFIRM] Se descarta borrador WA por nueva instrucción (%s)", chat_id)
+                    state.superintendente_pending_wa.pop(chat_id, None)
+                    bypass_wa_flow = True
+
+            # --------------------------------------------------------
             # 1️⃣ ter - Confirmación/ajuste de envío WhatsApp directo
             # --------------------------------------------------------
-            if chat_id in state.superintendente_pending_wa:
+            if chat_id in state.superintendente_pending_wa and not bypass_wa_flow:
                 pending = state.superintendente_pending_wa[chat_id]
                 guest_id = pending.get("guest_id")
                 draft_msg = pending.get("message", "")
 
-                if any(x in text_lower for x in WA_CONFIRM_WORDS):
+                if _is_short_wa_confirmation(text_lower):
                     log.info("[WA_CONFIRM] Enviando mensaje a %s desde %s", guest_id, chat_id)
                     await state.channel_manager.send_message(
                         guest_id,
@@ -304,7 +541,7 @@ def register_telegram_routes(app, state):
                     )
                     return JSONResponse({"status": "wa_sent"})
 
-                if any(x in text_lower for x in WA_CANCEL_WORDS):
+                if _is_short_wa_cancel(text_lower):
                     log.info("[WA_CONFIRM] Cancelado por %s", chat_id)
                     state.superintendente_pending_wa.pop(chat_id, None)
                     await state.channel_manager.send_message(
@@ -317,6 +554,7 @@ def register_telegram_routes(app, state):
                 log.info("[WA_CONFIRM] Ajuste de borrador por %s", chat_id)
                 llm = getattr(state.superintendente_agent, "llm", None)
                 rewritten = await _rewrite_wa_draft(llm, draft_msg, text)
+                rewritten = _clean_wa_payload(rewritten)
                 state.superintendente_pending_wa[chat_id]["message"] = rewritten
                 await state.channel_manager.send_message(
                     chat_id,
@@ -334,7 +572,7 @@ def register_telegram_routes(app, state):
             # --------------------------------------------------------
             # 1️⃣ ter-bis - Confirmación WA recuperando de memoria
             # --------------------------------------------------------
-            if any(x in text_lower for x in WA_CONFIRM_WORDS):
+            if _is_short_wa_confirmation(text_lower):
                 try:
                     recent = state.memory_manager.get_memory(chat_id, limit=10)
                     marker = "[WA_DRAFT]|"
@@ -348,7 +586,7 @@ def register_telegram_routes(app, state):
                         parts = last_draft.split("|", 2)
                         if len(parts) == 3:
                             guest_id, msg_raw = parts[1], parts[2]
-                            msg_to_send = sanitize_wa_message(msg_raw)
+                            msg_to_send = _clean_wa_payload(msg_raw)
                             await state.channel_manager.send_message(
                                 guest_id,
                                 msg_to_send,
@@ -363,6 +601,45 @@ def register_telegram_routes(app, state):
                             return JSONResponse({"status": "wa_sent_recovered"})
                 except Exception as exc:
                     log.error("[WA_CONFIRM_RECOVERY] Error: %s", exc, exc_info=True)
+
+            # 🧠 Flujo dedicado: historial de conversaciones
+            summary_words = {"resumen", "summary", "sintesis", "síntesis"}
+            # Solo considera 'original' explícito como modo directo; 'historial' es solo intención
+            raw_words = {"original", "completo", "raw", "crudo", "mensajes"}
+
+            def _detect_mode(text_l: str) -> str | None:
+                if any(w in text_l for w in summary_words):
+                    return "resumen"
+                if any(w in text_l for w in raw_words):
+                    return "original"
+                return None
+
+            def _is_review_intent(text_l: str) -> bool:
+                return any(term in text_l for term in {"historial", "convers", "mensajes", "chat"})
+
+            if _is_review_intent(text_lower) and phone_hint:
+                state.superintendente_pending_review[chat_id] = phone_hint
+                mode_hint = _detect_mode(text_lower)
+                if mode_hint:
+                    history_text = await _render_history(phone_hint, mode_hint)
+                    await state.channel_manager.send_message(chat_id, history_text, channel="telegram")
+                    state.superintendente_pending_review.pop(chat_id, None)
+                    return JSONResponse({"status": "history_served"})
+                await state.channel_manager.send_message(
+                    chat_id,
+                    f"¿Prefieres 'resumen' o 'original' para el historial de {phone_hint}?",
+                    channel="telegram",
+                )
+                return JSONResponse({"status": "history_mode_requested"})
+
+            if chat_id in state.superintendente_pending_review:
+                pending_guest = state.superintendente_pending_review[chat_id]
+                mode = _detect_mode(text_lower)
+                if mode:
+                    history_text = await _render_history(pending_guest, mode)
+                    await state.channel_manager.send_message(chat_id, history_text, channel="telegram")
+                    state.superintendente_pending_review.pop(chat_id, None)
+                    return JSONResponse({"status": "history_served"})
 
             if super_mode or in_super_session:
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
@@ -382,33 +659,41 @@ def register_telegram_routes(app, state):
                         parts = draft_payload.split("|", 2)
                         if len(parts) == 3:
                             guest_id, msg_raw = parts[1], parts[2]
-                            msg_to_send = sanitize_wa_message(msg_raw)
-                            state.superintendente_pending_wa[chat_id] = {
-                                "guest_id": guest_id,
-                                "message": msg_to_send,
-                            }
-                            log.info("[WA_DRAFT] Registrado draft para %s desde %s", guest_id, chat_id)
-                            try:
-                                await state.memory_manager.save(
-                                    conversation_id=chat_id,
-                                    role="system",
-                                    content=f"[WA_DRAFT]|{guest_id}|{msg_to_send}",
+                            wa_intent = phone_hint or any(
+                                term in text_lower
+                                for term in {"dile", "enviale", "envíale", "mandale", "mándale", "manda", "enviar"}
+                            )
+                            if not wa_intent:
+                                log.info("[WA_DRAFT] Ignorado por falta de intención explícita (%s)", chat_id)
+                                response = response.replace(draft_payload, "").strip()
+                            else:
+                                msg_to_send = _clean_wa_payload(msg_raw)
+                                state.superintendente_pending_wa[chat_id] = {
+                                    "guest_id": guest_id,
+                                    "message": msg_to_send,
+                                }
+                                log.info("[WA_DRAFT] Registrado draft para %s desde %s", guest_id, chat_id)
+                                try:
+                                    await state.memory_manager.save(
+                                        conversation_id=chat_id,
+                                        role="system",
+                                        content=f"[WA_DRAFT]|{guest_id}|{msg_to_send}",
+                                    )
+                                except Exception:
+                                    pass
+                                preview = (
+                                    f"📝 Borrador WhatsApp para {guest_id}:\n"
+                                    f"{msg_to_send}\n\n"
+                                    "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
+                                    "✅ Responde 'sí' para enviar.\n"
+                                    "❌ Responde 'no' para descartar."
                                 )
-                            except Exception:
-                                pass
-                            preview = (
-                                f"📝 Borrador WhatsApp para {guest_id}:\n"
-                                f"{msg_to_send}\n\n"
-                                "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
-                                "✅ Responde 'sí' para enviar.\n"
-                                "❌ Responde 'no' para descartar."
-                            )
-                            await state.channel_manager.send_message(
-                                chat_id,
-                                preview,
-                                channel="telegram",
-                            )
-                            return JSONResponse({"status": "wa_draft"})
+                                await state.channel_manager.send_message(
+                                    chat_id,
+                                    preview,
+                                    channel="telegram",
+                                )
+                                return JSONResponse({"status": "wa_draft"})
 
                     kb_marker = "[KB_DRAFT]|"
                     if kb_marker in response:
@@ -461,9 +746,18 @@ def register_telegram_routes(app, state):
                         )
                         return JSONResponse({"status": "kb_draft_fallback"})
 
+                    formatted = format_superintendente_message(response)
+                    if not formatted.strip():
+                        if "[WA_DRAFT]|" in (response or ""):
+                            formatted = (
+                                "📝 Borrador de WhatsApp listo. "
+                                "Di 'sí' para enviarlo o escribe ajustes para modificar el mensaje."
+                            )
+                        else:
+                            formatted = "No hay contenido para mostrar. ¿Quieres que reformule o muestre el borrador?"
                     await state.channel_manager.send_message(
                         chat_id,
-                        format_superintendente_message(response),
+                        formatted,
                         channel="telegram",
                     )
 

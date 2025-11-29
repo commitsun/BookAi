@@ -102,12 +102,17 @@ def extract_clean_draft(text: str) -> str:
 
 
 def sanitize_wa_message(msg: str) -> str:
-    """Devuelve un mensaje corto y limpio para WhatsApp (solo la primera línea útil)."""
+    """
+    Devuelve un mensaje corto y limpio para WhatsApp.
+    Junta todas las líneas útiles en una sola, eliminando comillas y espacios extra.
+    """
     if not msg:
         return msg
+
     lines = [ln.strip() for ln in msg.splitlines() if ln.strip()]
-    core = lines[0] if lines else msg
-    return core.strip().strip('\"“”')
+    joined = " ".join(lines) if lines else str(msg).strip()
+    compact = " ".join(joined.split())
+    return compact.strip().strip('\"“”')
 
 
 def format_superintendente_message(text: str) -> str:

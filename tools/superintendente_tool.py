@@ -353,7 +353,8 @@ def create_send_whatsapp_tool(channel_manager: Any):
         description=(
             "Genera un borrador de mensaje de texto directo por WhatsApp a un huésped, "
             "sin plantilla (proceso de confirmación requerido). "
-            "Requiere el ID/phone del huésped (con prefijo de país)."
+            "Requiere el ID/phone del huésped (con prefijo de país). "
+            "Úsala solo cuando el encargado pida explícitamente enviar un mensaje; no la uses para ajustes de KB ni para reinterpretar feedback."
         ),
         coroutine=_send_whatsapp,
         args_schema=SendWhatsAppInput,

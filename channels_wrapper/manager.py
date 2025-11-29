@@ -132,6 +132,52 @@ class ChannelManager:
 
 
     # ------------------------------------------------------------------
+    # 💬 Envío de plantillas (WhatsApp)
+    # ------------------------------------------------------------------
+    async def send_template_message(
+        self,
+        chat_id: str,
+        template_id: str,
+        parameters: dict | list | None = None,
+        *,
+        language: str = "es",
+        channel: str = "whatsapp",
+    ):
+        """
+        Envía una plantilla preaprobada (ej: WhatsApp).
+        Aplica deduplicación ligera para evitar reenvíos repetidos en pocos segundos.
+        """
+        try:
+            channel_obj = self.channels.get(channel)
+            if not channel_obj:
+                raise ValueError(f"Canal no encontrado o no cargado: {channel}")
+
+            send_fn = getattr(channel_obj, "send_template_message", None)
+            if not send_fn:
+                raise AttributeError(f"El canal '{channel}' no implementa send_template_message().")
+
+            payload_hash = f"{template_id}|{parameters}"
+            key = (channel, chat_id, "template")
+            last = self._recent_sends.get(key)
+            now = time.monotonic()
+            if last:
+                last_hash, ts = last
+                if payload_hash == last_hash and (now - ts) < self._dedup_window:
+                    log.info("↩️ Envío de plantilla duplicado evitado (%s → %s)", channel, chat_id)
+                    return
+            self._recent_sends[key] = (payload_hash, now)
+
+            if asyncio.iscoroutinefunction(send_fn):
+                await send_fn(chat_id, template_id, parameters=parameters, language=language)
+            else:
+                send_fn(chat_id, template_id, parameters=parameters, language=language)
+
+            log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
+        except Exception as e:
+            log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
+
+
+    # ------------------------------------------------------------------
     # 🧩 Utilidad: listar canales activos
     # ------------------------------------------------------------------
     def list_channels(self):

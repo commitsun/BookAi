@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import requests
-from typing import Tuple, Optional
+from typing import Tuple, Optional, Iterable
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -169,6 +169,71 @@ class WhatsAppChannel(BaseChannel):
                 log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
         except Exception as e:
             log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
+
+    # ---------------------------------------------------------------------
+    # Envío de plantillas (WhatsApp)
+    # ---------------------------------------------------------------------
+    def send_template_message(
+        self,
+        user_id: str,
+        template_id: str,
+        parameters: dict | list | tuple | None = None,
+        *,
+        language: str = "es",
+    ):
+        """
+        Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
+        Soporta parámetros opcionales en orden de aparición.
+        """
+        if not C.WHATSAPP_TOKEN or not C.WHATSAPP_PHONE_ID:
+            log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
+            return
+
+        def _iter_params(params: dict | list | tuple | None) -> Iterable[str]:
+            if params is None:
+                return []
+            if isinstance(params, dict):
+                return params.values()
+            if isinstance(params, (list, tuple)):
+                return params
+            return [params]
+
+        body_params = [
+            {"type": "text", "text": str(val)}
+            for val in _iter_params(parameters)
+            if val is not None
+        ]
+        components = [{"type": "body", "parameters": body_params}] if body_params else []
+
+        payload = {
+            "messaging_product": "whatsapp",
+            "to": user_id,
+            "type": "template",
+            "template": {
+                "name": template_id,
+                "language": {"code": language or "es"},
+                "components": components,
+            },
+        }
+
+        headers = {
+            "Authorization": f"Bearer {C.WHATSAPP_TOKEN}",
+            "Content-Type": "application/json",
+        }
+
+        try:
+            r = requests.post(
+                f"https://graph.facebook.com/v19.0/{C.WHATSAPP_PHONE_ID}/messages",
+                headers=headers,
+                json=payload,
+                timeout=10,
+            )
+            if r.status_code != 200:
+                log.error(f"⚠️ Error WhatsApp (template {template_id}): {r.text}")
+            else:
+                log.info(f"🚀 WhatsApp (plantilla) → {user_id}: {template_id} ({r.status_code})")
+        except Exception as e:
+            log.error(f"⚠️ Error enviando plantilla WhatsApp: {e}", exc_info=True)
 
     # ---------------------------------------------------------------------
     # Parser de payload (Meta Webhook)

@@ -276,6 +276,15 @@ class SuperintendenteAgent:
 
         except Exception as exc:
             log.error("Error agregando a KB: %s", exc, exc_info=True)
+            try:
+                await self._safe_call(
+                    getattr(self.channel_manager, "send_message", None),
+                    encargado_id,
+                    f"❌ No se pudo agregar a la base de conocimientos: {exc}",
+                    channel="telegram",
+                )
+            except Exception:
+                pass
             return {
                 "status": "error",
                 "message": f"Error: {exc}",

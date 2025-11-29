@@ -375,7 +375,7 @@ Responde:
 
         response_lower = manager_response.lower().strip()
 
-        if any(word in response_lower for word in ["sí", "si", "ok", "confirmar", "confirmo"]):
+        if self._is_affirmative_kb_response(response_lower):
             if not superintendente_agent:
                 return "⚠️ Superintendente no disponible para procesar"
 
@@ -391,7 +391,7 @@ Responde:
 
             return result.get("message", "Error procesando KB addition")
 
-        if any(word in response_lower for word in ["no", "no gracias", "descartar"]):
+        if self._is_rejection_kb_response(response_lower):
             return "✓ Información descartada. No se agregó a la base de conocimientos."
 
         # 🧩 Aplicar feedback al borrador existente y devolver nueva propuesta
@@ -474,6 +474,18 @@ Responde:
             # Usa solo la primera palabra si el feedback trae varias (evita frases largas como "pavo cambialo")
             replacement = replacement.split()[0] if replacement else replacement
 
+        # Detectar patrón "cambia X por Y" o "cámbialo por Y"
+        target_hint = ""
+        if not replacement:
+            swap_match = re.search(
+                r"cambi(?:a|ar|alo|é)\s+(?:el|la|lo|los|las)?\s*([\wáéíóúñ]+)?\s*por\s+([\wáéíóúñ]+)",
+                fb_lower,
+                flags=re.IGNORECASE,
+            )
+            if swap_match:
+                target_hint = (swap_match.group(1) or "").strip(" .")
+                replacement = (swap_match.group(2) or "").strip(" .")
+
         # Si hay replacement, reemplazar primer término relevante en topic y content
         def _swap(text: str, target: str) -> str:
             if not target or not text or not replacement:
@@ -508,6 +520,8 @@ Responde:
             }
             tokens = [t.strip(" ,.;:") for t in topic.split() if len(t.strip(" ,.;:")) > 3]
             target_token = None
+            if target_hint:
+                target_token = target_hint
             for tok in tokens:
                 if tok.lower() not in stop:
                     target_token = tok
@@ -517,6 +531,30 @@ Responde:
                 content = _swap(content, target_token)
 
         return topic, content
+
+    def _is_affirmative_kb_response(self, text: str) -> bool:
+        """
+        Detecta confirmaciones cortas para KB y evita dispararse con frases largas
+        (ej. 'que si necesita pañuelos' no debe contarse como 'sí').
+        """
+        clean = re.sub(r"[¡!¿?.]", "", text or "").strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        affirmative = {"si", "sí", "ok", "okay", "okey", "dale", "va", "vale", "listo", "confirmo", "confirmar"}
+        if clean in affirmative:
+            return True
+
+        return 0 < len(tokens) <= 2 and all(tok in affirmative for tok in tokens)
+
+    def _is_rejection_kb_response(self, text: str) -> bool:
+        clean = re.sub(r"[¡!¿?.]", "", text or "").strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        negative = {"no", "nop", "descartar", "descarto", "rechazar", "rechazo", "cancela", "cancelar"}
+        if clean in negative:
+            return True
+
+        return 0 < len(tokens) <= 3 and all(tok in negative or tok == "gracias" for tok in tokens)
 
     async def _refine_kb_with_ai(
         self,

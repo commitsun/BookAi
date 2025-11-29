@@ -11,6 +11,11 @@ WA_CONFIRM_WORDS = {
     "siii",
     "dale",
     "manda",
+    "envialo",
+    "enviarlo",
+    "envíalo",
+    "envíaselo",
+    "enviaselo",
 }
 
 WA_CANCEL_WORDS = {"cancel", "cancelar", "no"}
