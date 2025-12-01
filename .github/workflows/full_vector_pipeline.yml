@@ -57,10 +57,49 @@ jobs:
       - name: "🚀 Step 1: Sync with S3"
         run: python -m pipeline.s3_client
 
-  # 🧠 2️⃣ Vectoriza en Supabase (depende del anterior)
-  vectorize:
-    name: "🧠 2️⃣ Vectorize in Supabase"
+  # ⏳ 2️⃣ Validar filtro de fechas (IA)
+  deadline-filter:
+    name: "⏳ 2️⃣ Deadline Filter"
     needs: [sync-s3]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+        with:
+          ref: vectorizer-pipeline
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+
+      - name: "🚧 Step 2: Dry-run deadline filter check"
+        run: |
+          python - <<'PY'
+          from pipeline.deadline_filter import filter_expired_sections, is_variable_doc
+
+          sample = "Durante los días 23 y 24 de diciembre se ofrecerán turrones."
+          cleaned, removed = filter_expired_sections(sample)
+          print("is_variable_doc('Alda Hotels Centro Ponferrada-Variable.docx') ->", is_variable_doc("Alda Hotels Centro Ponferrada-Variable.docx"))
+          print("Removed blocks:", removed)
+          print("Filtered text:", cleaned)
+          PY
+
+  # 🧠 3️⃣ Vectoriza en Supabase (depende del anterior)
+  vectorize:
+    name: "🧠 3️⃣ Vectorize in Supabase"
+    needs: [deadline-filter]
     runs-on: ubuntu-latest
 
     steps:
@@ -94,5 +133,5 @@ jobs:
           echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
           echo "FULL_REFRESH=${{ github.event.inputs.full_refresh }}" >> $GITHUB_ENV
 
-      - name: "🚀 Step 2: Run full vectorization pipeline"
+      - name: "🚀 Step 3: Run full vectorization pipeline"
         run: python -m pipeline.run_pipeline

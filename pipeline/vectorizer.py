@@ -10,6 +10,7 @@ from langchain_text_splitters import RecursiveCharacterTextSplitter
 from PyPDF2 import PdfReader
 from docx import Document
 from supabase import create_client
+from pipeline.deadline_filter import filter_expired_sections, is_variable_doc
 
 # =====================================
 # 🔧 Cargar configuración
@@ -232,6 +233,18 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
 
         try:
             text = load_text_from_s3(file_info["key"])
+
+            if is_variable_doc(file_name):
+                filtered_text, removed = filter_expired_sections(text)
+                if removed:
+                    print(f"⏳ {file_name}: se eliminaron {len(removed)} bloques caducados:")
+                    for detail in removed:
+                        print(f"   - {detail}")
+                text = filtered_text
+                if not text.strip():
+                    print(f"⚠️ {file_name} quedó vacío tras limpiar fechas vencidas, se omite.")
+                    continue
+
             chunks = chunk_text(text)
             if not chunks:
                 print(f"⚠️ {file_name} no tiene contenido legible, se omite.")
