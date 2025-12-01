@@ -1,5 +1,6 @@
 import json
 import os
+import re
 from datetime import datetime, timezone
 from typing import List, Optional, Tuple
 
@@ -26,6 +27,35 @@ _client = _build_client()
 def is_variable_doc(file_name: str) -> bool:
     """Detecta si el archivo corresponde al documento Variable (no toca Fijo)."""
     return "variable" in file_name.lower()
+
+
+def _split_sections(text: str) -> List[str]:
+    """
+    Divide el documento en bloques independientes.
+    - Preferimos encabezados tipo "[2025-12-01 11:41 UTC]" para evitar que un bloque con fecha vencida arrastre a los demás.
+    - Si no hay encabezados, se usan párrafos separados por doble salto de línea.
+    """
+    header = re.compile(r"^\s*\[\d{4}-\d{2}-\d{2}.*?\]")
+    lines = text.splitlines()
+
+    sections: List[List[str]] = []
+    current: List[str] = []
+
+    for line in lines:
+        if header.match(line) and current:
+            sections.append(current)
+            current = [line]
+        else:
+            current.append(line)
+
+    if current:
+        sections.append(current)
+
+    # Si no detectamos encabezados y solo hay un bloque, caemos al split por párrafos.
+    if len(sections) <= 1:
+        return [s.strip() for s in text.split("\n\n") if s.strip()]
+
+    return ["\n".join(block).strip() for block in sections if "\n".join(block).strip()]
 
 
 def _should_keep_section(section: str, now_utc: datetime) -> Tuple[bool, Optional[str], str]:
@@ -86,7 +116,7 @@ def filter_expired_sections(
         return text, []
 
     now = now_utc or datetime.now(timezone.utc)
-    sections = [s.strip() for s in text.split("\n\n") if s.strip()]
+    sections = _split_sections(text)
     kept_sections: List[str] = []
     removed_summaries: List[str] = []
 

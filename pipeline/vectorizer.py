@@ -30,6 +30,37 @@ embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
 
 
 # =====================================
+# 📝 Utilidades para limpiar y subir documentos
+# =====================================
+def _docx_bytes_from_text(text: str) -> bytes:
+    """Crea un DOCX simple a partir de texto plano separado por párrafos en blanco."""
+    doc = Document()
+    blocks = [b.strip() for b in text.split("\n\n")] if text else []
+    for block in blocks if blocks else [""]:
+        doc.add_paragraph(block)
+    bio = BytesIO()
+    doc.save(bio)
+    return bio.getvalue()
+
+
+def _upload_cleaned_doc(key: str, text: str) -> None:
+    """Reescribe en S3 el documento Variable ya depurado."""
+    ext = os.path.splitext(key)[-1].lower()
+    try:
+        if ext == ".docx":
+            data = _docx_bytes_from_text(text)
+            s3.put_object(Bucket=S3_BUCKET, Key=key, Body=data)
+        elif ext == ".txt":
+            s3.put_object(Bucket=S3_BUCKET, Key=key, Body=text.encode("utf-8"))
+        else:
+            print(f"⚠️ Tipo no soportado para reescritura: {ext}")
+            return
+        print(f"📤 Documento limpiado subido a S3: {key}")
+    except Exception as exc:
+        print(f"⚠️ No se pudo reescribir {key} en S3: {exc}")
+
+
+# =====================================
 # 📄 Lectura y chunking de documentos
 # =====================================
 def load_text_from_s3(key: str) -> str:
@@ -240,6 +271,7 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
                     print(f"⏳ {file_name}: se eliminaron {len(removed)} bloques caducados:")
                     for detail in removed:
                         print(f"   - {detail}")
+                    _upload_cleaned_doc(file_info["key"], filtered_text)
                 text = filtered_text
                 if not text.strip():
                     print(f"⚠️ {file_name} quedó vacío tras limpiar fechas vencidas, se omite.")
