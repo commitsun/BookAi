@@ -80,6 +80,21 @@ class ConsultaReservaPersonaInput(BaseModel):
     )
 
 
+class RemoveFromKBInput(BaseModel):
+    criterio: str = Field(
+        ...,
+        description="Tema/palabra clave o instrucción de qué eliminar de la base de conocimientos.",
+    )
+    fecha_inicio: Optional[str] = Field(
+        default=None,
+        description="Fecha inicial YYYY-MM-DD para filtrar los registros a eliminar.",
+    )
+    fecha_fin: Optional[str] = Field(
+        default=None,
+        description="Fecha final YYYY-MM-DD para filtrar los registros a eliminar.",
+    )
+
+
 def create_add_to_kb_tool(
     hotel_name: str,
     append_func: Callable[[str, str, str, str], Any],
@@ -377,6 +392,56 @@ def create_send_whatsapp_tool(channel_manager: Any):
         ),
         coroutine=_send_whatsapp,
         args_schema=SendWhatsAppInput,
+    )
+
+
+def create_remove_from_kb_tool(
+    hotel_name: str,
+    preview_func: Optional[Callable[[str, Optional[str], Optional[str]], Any]] = None,
+):
+    async def _remove_from_kb(
+        criterio: str,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
+    ) -> str:
+        """
+        Prepara borrador de eliminación en la KB (no borra sin confirmación).
+        Devuelve marcador especial para que el webhook muestre el detalle/contador.
+        """
+        if not preview_func:
+            return "⚠️ No tengo acceso para preparar la eliminación en la KB."
+
+        try:
+            payload = await preview_func(criterio, fecha_inicio, fecha_fin)
+        except Exception as exc:
+            log.error("Error preparando borrador de eliminación KB: %s", exc, exc_info=True)
+            return f"❌ No pude preparar el borrador de eliminación: {exc}"
+
+        total = int(payload.get("total_matches", 0) or 0) if isinstance(payload, dict) else 0
+        json_payload = ""
+        try:
+            json_payload = json.dumps(payload, ensure_ascii=False)
+        except Exception:
+            json_payload = "{}"
+
+        header = f"[KB_REMOVE_DRAFT]|{hotel_name}|{json_payload}"
+        summary = (
+            f"🧹 Borrador de eliminación listo. Encontré {total} registro(s) que coinciden.\n"
+            "✅ Responde 'ok' para confirmarlo.\n"
+            "📝 Indica qué conservar o ajusta el criterio para refinar la eliminación.\n"
+            "❌ Responde 'no' para cancelar."
+        )
+        return f"{header}\n{summary}"
+
+    return StructuredTool.from_function(
+        name="eliminar_de_base_conocimientos",
+        description=(
+            "Prepara la eliminación de información en la base de conocimientos Variable. "
+            "Úsala cuando el encargado pida eliminar/quitar/borrar/limpiar un tema o un rango de fechas completo. "
+            "Siempre devuelve el marcador [KB_REMOVE_DRAFT]|hotel|payload_json con conteo/preview para confirmar."
+        ),
+        coroutine=_remove_from_kb,
+        args_schema=RemoveFromKBInput,
     )
 
 

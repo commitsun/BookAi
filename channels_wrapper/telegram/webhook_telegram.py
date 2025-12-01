@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from datetime import datetime
@@ -49,6 +50,19 @@ def register_telegram_routes(app, state):
             return True
 
         return 0 < len(tokens) <= 2 and all(tok in yes_words for tok in tokens)
+
+    def _is_short_rejection(text: str) -> bool:
+        """
+        Detecta cancelaciones breves (ej. 'no', 'cancelar') para flujos con confirmación.
+        """
+        clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+        tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+        no_words = {"no", "nop", "nel", "cancelar", "cancelado", "descartar", "rechazar", "omitir"}
+        if clean in no_words:
+            return True
+
+        return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
 
     def _is_short_wa_confirmation(text: str) -> bool:
         """
@@ -99,6 +113,16 @@ def register_telegram_routes(app, state):
             "broadcast",
             "plantilla",
             "resumen",
+            "agrega",
+            "añade",
+            "anade",
+            "actualiza",
+            "actualizar",
+            "base de cono",
+            "kb",
+            "elimina",
+            "borra",
+            "quitar",
         }
         return any(term in text for term in action_terms) or bool(_extract_phone(text))
 
@@ -200,6 +224,105 @@ def register_telegram_routes(app, state):
         except Exception as exc:
             log.warning("No se pudo resumir historial: %s", exc)
             return f"🧠 Historial ({len(convos)})\n{formatted}\n\n(No se pudo generar resumen: {exc})"
+
+    def _format_removal_preview(pending: dict) -> str:
+        """Texto amigable para mostrar borrador de eliminación de KB."""
+        total = int(pending.get("total_matches", 0) or 0)
+        preview = pending.get("preview") or []
+        criteria = pending.get("criteria") or ""
+        date_from = pending.get("date_from") or ""
+        date_to = pending.get("date_to") or ""
+
+        def _sanitize_preview_snippet(text: str) -> str:
+            if not text:
+                return ""
+            lines = []
+            for ln in text.splitlines():
+                low = ln.lower()
+                if "borrador para agregar" in low or "[kb_" in low or "[kb-" in low:
+                    continue
+                lines.append(ln.strip())
+            cleaned = " ".join(l for l in lines if l).strip()
+            return cleaned[:320] + ("…" if len(cleaned) > 320 else "")
+
+        header = [f"🧹 Borrador para eliminar de la KB ({total} registro(s))."]
+        if criteria:
+            header.append(f"Criterio: {criteria}")
+        if date_from or date_to:
+            header.append(f"Rango: {date_from or 'n/a'} → {date_to or 'n/a'}")
+
+        body_lines = []
+        for item in preview:
+            topic = item.get("topic") or "Entrada"
+            fecha = item.get("fecha") or ""
+            snippet = _sanitize_preview_snippet(item.get("snippet") or "")
+            body_lines.append(f"- {fecha} {topic}: {snippet}")
+
+        footer = (
+            "\n✅ Responde 'ok' para eliminar estos registros.\n"
+            "📝 Di qué conservar o ajusta el criterio para refinar.\n"
+            "❌ Responde 'no' para cancelar."
+        )
+
+        if body_lines and total <= 12:
+            return "\n".join(header + body_lines) + footer
+
+        return "\n".join(header) + footer
+
+    def _apply_removal_adjustments(pending: dict, manager_text: str) -> dict:
+        """
+        Refina la selección:
+        - Si el texto sugiere conservar (conserva/deja/mantén), excluye coincidencias de la eliminación.
+        - En otro caso, limita la eliminación solo a los registros que contengan los términos.
+        """
+        if not pending:
+            return pending
+
+        matches = pending.get("matches") or []
+        if not matches:
+            return pending
+
+        text_lower = (manager_text or "").lower()
+        raw_terms = re.findall(r"[a-záéíóúñ0-9]{3,}", text_lower)
+        if not raw_terms:
+            return pending
+
+        is_keep_intent = any(key in text_lower for key in {"conserv", "deja", "mant", "mantén", "qued"})
+
+        target_ids = []
+        for entry in matches:
+            blob = f"{entry.get('topic','')} {entry.get('content','')}".lower()
+            eid = entry.get("id")
+            has_term = any(term in blob for term in raw_terms)
+            if is_keep_intent:
+                if not has_term:
+                    target_ids.append(eid)
+            else:
+                if has_term:
+                    target_ids.append(eid)
+
+        preview = []
+        for entry in matches:
+            if entry.get("id") not in target_ids:
+                continue
+            preview.append(
+                {
+                    "id": entry.get("id"),
+                    "topic": entry.get("topic"),
+                    "fecha": entry.get("timestamp_display"),
+                    "snippet": (entry.get("content") or "")[:260],
+                }
+            )
+            if len(preview) >= 5:
+                break
+
+        return {
+            **pending,
+            "target_ids": target_ids,
+            "kept_ids": [],
+            "preview": preview,
+            "total_matches": len(target_ids),
+        }
 
     async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
         """
@@ -391,7 +514,116 @@ def register_telegram_routes(app, state):
                 return JSONResponse({"status": "processed"})
 
             # --------------------------------------------------------
-            # 3️⃣ Respuesta a preguntas de KB pendientes
+            # 3️⃣ bis - Confirmación/ajustes de eliminación en KB
+            # --------------------------------------------------------
+            if chat_id in state.telegram_pending_kb_removal:
+                pending_rm = state.telegram_pending_kb_removal[chat_id]
+
+                if _looks_like_new_instruction(text_lower):
+                    log.info("[KB_REMOVE] Nueva instrucción detectada, se cancela borrador (%s)", chat_id)
+                    state.telegram_pending_kb_removal.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "📌 Guardé el borrador de eliminación y sigo con tu nueva solicitud.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_remove_released"})
+
+                if _is_short_confirmation(text_lower):
+                    target_ids = pending_rm.get("target_ids") or []
+                    result = await state.superintendente_agent.handle_kb_removal(
+                        hotel_name=pending_rm.get("hotel_name", DEFAULT_HOTEL_NAME),
+                        target_ids=target_ids,
+                        encargado_id=chat_id,
+                        note=text,
+                        criteria=pending_rm.get("criteria", ""),
+                    )
+                    state.telegram_pending_kb_removal.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        result.get("message") if isinstance(result, dict) else str(result),
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_remove_confirmed"})
+
+                if _is_short_rejection(text_lower):
+                    state.telegram_pending_kb_removal.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "Operación cancelada. No se eliminó nada de la base de conocimientos.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_remove_cancelled"})
+
+                refined = _apply_removal_adjustments(pending_rm, text)
+                state.telegram_pending_kb_removal[chat_id] = refined
+
+                targets = refined.get("target_ids") or []
+                if not targets:
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "No hay registros para eliminar con ese ajuste. Indica otro criterio o responde 'no' para cancelar.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "kb_remove_empty"})
+
+                preview_txt = _format_removal_preview(refined)
+                await state.channel_manager.send_message(
+                    chat_id,
+                    preview_txt,
+                    channel="telegram",
+                )
+                return JSONResponse({"status": "kb_remove_updated"})
+
+            # --------------------------------------------------------
+            # 3️⃣ ter - Confirmación de eliminación recuperando borrador perdido
+            # --------------------------------------------------------
+            if (
+                _is_short_confirmation(text_lower)
+                and chat_id not in state.telegram_pending_kb_removal
+                and chat_id not in state.telegram_pending_kb_addition
+                and chat_id not in state.superintendente_pending_wa
+            ):
+                try:
+                    recent = state.memory_manager.get_memory(chat_id, limit=15) if state.memory_manager else []
+                    rm_marker = "[KB_REMOVE_DRAFT]|"
+                    last_draft = None
+                    for msg in reversed(recent):
+                        content = msg.get("content", "") or ""
+                        if rm_marker in content:
+                            last_draft = content[content.index(rm_marker) :]
+                            break
+
+                    if last_draft:
+                        parts = last_draft.split("|", 2)
+                        kb_hotel = DEFAULT_HOTEL_NAME
+                        payload = {}
+                        if len(parts) >= 3:
+                            kb_hotel = parts[1] or DEFAULT_HOTEL_NAME
+                            try:
+                                payload = json.loads(parts[2])
+                            except Exception as exc:
+                                log.warning("[KB_REMOVE_RECOVERY] No se pudo parsear payload: %s", exc)
+                        target_ids = payload.get("target_ids") if isinstance(payload, dict) else []
+                        if target_ids:
+                            result = await state.superintendente_agent.handle_kb_removal(
+                                hotel_name=kb_hotel or DEFAULT_HOTEL_NAME,
+                                target_ids=target_ids,
+                                encargado_id=chat_id,
+                                note=text,
+                                criteria=payload.get("criteria") if isinstance(payload, dict) else "",
+                            )
+                            await state.channel_manager.send_message(
+                                chat_id,
+                                result.get("message") if isinstance(result, dict) else str(result),
+                                channel="telegram",
+                            )
+                            return JSONResponse({"status": "kb_remove_recovered"})
+                except Exception as exc:
+                    log.warning("[KB_REMOVE_RECOVERY] Error: %s", exc, exc_info=True)
+
+            # --------------------------------------------------------
+            # 3️⃣ Respuesta a preguntas de KB pendientes (agregar/ajustar)
             # --------------------------------------------------------
             if chat_id in state.telegram_pending_kb_addition:
                 pending_kb = state.telegram_pending_kb_addition[chat_id]
@@ -501,6 +733,7 @@ def register_telegram_routes(app, state):
                 chat_id in state.superintendente_chats
                 and chat_id not in state.telegram_pending_confirmations
                 and chat_id not in state.telegram_pending_kb_addition
+                and chat_id not in state.telegram_pending_kb_removal
                 and original_msg_id is None
             )
 
@@ -509,7 +742,7 @@ def register_telegram_routes(app, state):
             # en el flujo de confirmación de WhatsApp pendiente
             # --------------------------------------------------------
             bypass_wa_flow = False
-            has_kb_pending = chat_id in state.telegram_pending_kb_addition
+            has_kb_pending = chat_id in state.telegram_pending_kb_addition or chat_id in state.telegram_pending_kb_removal
             if chat_id in state.superintendente_pending_wa:
                 if text_lower.startswith("/super") or has_kb_pending or any(
                     kw in text_lower for kw in {"base de conoc", "kb", "historial", "convers", "broadcast"}
@@ -695,6 +928,64 @@ def register_telegram_routes(app, state):
                                 )
                                 return JSONResponse({"status": "wa_draft"})
 
+                    kb_remove_marker = "[KB_REMOVE_DRAFT]|"
+                    if kb_remove_marker in response:
+                        marker_line = next((ln for ln in response.splitlines() if kb_remove_marker in ln), "")
+                        draft_payload = marker_line if marker_line else response[response.index(kb_remove_marker):]
+
+                        parts = draft_payload.split("|", 2)
+                        kb_hotel = hotel_name
+                        payload = {}
+                        if len(parts) >= 3:
+                            kb_hotel = parts[1] or hotel_name
+                            try:
+                                payload = json.loads(parts[2])
+                            except Exception as exc:
+                                log.warning("[KB_REMOVE] No se pudo parsear payload: %s", exc)
+
+                        target_ids = payload.get("target_ids") if isinstance(payload, dict) else []
+                        total = int(payload.get("total_matches", 0) or len(target_ids or [])) if isinstance(payload, dict) else 0
+
+                        pending_payload = {
+                            "hotel_name": kb_hotel or hotel_name or DEFAULT_HOTEL_NAME,
+                            "criteria": (payload.get("criteria") if isinstance(payload, dict) else "") or "",
+                            "date_from": (payload.get("date_from") if isinstance(payload, dict) else "") or "",
+                            "date_to": (payload.get("date_to") if isinstance(payload, dict) else "") or "",
+                            "preview": (payload.get("preview") if isinstance(payload, dict) else []) or [],
+                            "matches": (payload.get("matches") if isinstance(payload, dict) else []) or [],
+                            "target_ids": target_ids or [],
+                            "total_matches": total or len(target_ids or []),
+                        }
+
+                        if not pending_payload["target_ids"]:
+                            await state.channel_manager.send_message(
+                                chat_id,
+                                "No encontré registros para eliminar con ese criterio.",
+                                channel="telegram",
+                            )
+                            return JSONResponse({"status": "kb_remove_empty"})
+
+                        # 🧹 Al iniciar un nuevo borrador de eliminación, limpia borradores de agregado pendientes
+                        state.telegram_pending_kb_addition.pop(chat_id, None)
+                        state.telegram_pending_kb_removal[chat_id] = pending_payload
+
+                        try:
+                            await state.memory_manager.save(
+                                conversation_id=chat_id,
+                                role="system",
+                                content=draft_payload,
+                            )
+                        except Exception:
+                            pass
+
+                        preview_txt = _format_removal_preview(pending_payload)
+                        await state.channel_manager.send_message(
+                            chat_id,
+                            preview_txt,
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "kb_remove_draft"})
+
                     kb_marker = "[KB_DRAFT]|"
                     if kb_marker in response:
                         marker_line = next((ln for ln in response.splitlines() if kb_marker in ln), "")
@@ -718,6 +1009,9 @@ def register_telegram_routes(app, state):
                             "category": category.strip() or "general",
                         }
 
+                        # 🧹 Al iniciar un nuevo borrador de agregado, limpia borradores de eliminación pendientes
+                        state.telegram_pending_kb_removal.pop(chat_id, None)
+
                         preview = build_kb_preview(topic, category, kb_content)
                         await state.channel_manager.send_message(
                             chat_id,
@@ -726,7 +1020,12 @@ def register_telegram_routes(app, state):
                         )
                         return JSONResponse({"status": "kb_draft"})
 
-                    if "tema:" in response.lower() and "contenido:" in response.lower() and kb_marker not in response:
+                    if (
+                        "tema:" in response.lower()
+                        and "contenido:" in response.lower()
+                        and kb_marker not in response
+                        and not any(word in response.lower() for word in {"elimina", "eliminar", "borra", "borrar", "quitar", "remueve"})
+                    ):
                         topic, category, content_block = extract_kb_fields(response, hotel_name)
 
                         state.telegram_pending_kb_addition[chat_id] = {
@@ -737,6 +1036,8 @@ def register_telegram_routes(app, state):
                             "source": "superintendente_fallback",
                             "category": category,
                         }
+
+                        state.telegram_pending_kb_removal.pop(chat_id, None)
 
                         preview = build_kb_preview(topic, category, content_block)
                         await state.channel_manager.send_message(

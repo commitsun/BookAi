@@ -42,6 +42,7 @@ class AppState:
         self.chat_lang: dict[str, str] = {}
         self.telegram_pending_confirmations: dict = {}
         self.telegram_pending_kb_addition: dict = {}
+        self.telegram_pending_kb_removal: dict = {}
         self.superintendente_chats: dict = {}
         self.superintendente_pending_wa: dict = {}
         self.superintendente_pending_review: dict = {}
