@@ -247,7 +247,7 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
 
             chunks = chunk_text(text)
             if not chunks:
-                print(f"⚠️ {file_name} no tiene contenido legible, se omite.")
+                print(f"⚠️ {file_name} no tiene contenido legible tras limpieza, se omite.")
                 continue
             save_chunks_to_supabase(
                 table_name,
