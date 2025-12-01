@@ -169,6 +169,8 @@ class SuperintendenteAgent:
 
         from tools.superintendente_tool import (
             create_add_to_kb_tool,
+            create_consulta_reserva_general_tool,
+            create_consulta_reserva_persona_tool,
             create_review_conversations_tool,
             create_send_broadcast_tool,
             create_send_message_main_tool,
@@ -185,6 +187,8 @@ class SuperintendenteAgent:
                 hotel_name=hotel_name,
                 memory_manager=self.memory_manager,
             ),
+            create_consulta_reserva_general_tool(),
+            create_consulta_reserva_persona_tool(),
             create_send_broadcast_tool(
                 hotel_name=hotel_name,
                 channel_manager=self.channel_manager,
@@ -218,11 +222,17 @@ class SuperintendenteAgent:
             "1. agregar_a_base_conocimientos - Agrega información vectorizada a Supabase\n"
             "2. revisar_conversaciones - Revisa conversaciones recientes de huéspedes (pide modo: resumen u original)\n"
             "3. enviar_broadcast - Envía plantillas masivas a múltiples huéspedes\n"
-            "4. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n\n"
+            "4. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n"
+            "5. consulta_reserva_general - Consulta folios/reservas entre fechas (usa token auto, devuelve folio_id y folio_code)\n"
+            "6. consulta_reserva_persona - Consulta detalle de folio (usa token auto, incluye portalUrl si existe)\n\n"
             "TONO: Profesional, eficiente, orientado a mejora continua.\n\n"
             "REGLAS CLAVE:\n"
             "- Antes de usar revisar_conversaciones pregunta si prefiere 'resumen' (síntesis IA) o ver los mensajes 'originales'; usa el modo solicitado.\n"
             "- Usa SIEMPRE la tool revisar_conversaciones para mostrar el historial de un huésped; si no tienes guest_id, pídelo y respeta el límite indicado (default 10).\n"
+            "- Para dudas sobre reservas/folios/clientes (estado, pagos, contacto, fechas), prioriza las tools de reservas. Si ya tienes folio_id, usa consulta_reserva_persona; si solo hay nombre/fechas, usa consulta_reserva_general para obtener folio_id antes de detallar.\n"
+            "- No uses revisar_conversaciones salvo que pidan explícitamente historial/mensajes/chat del huésped.\n"
+            "- Si consulta_reserva_persona devuelve portalUrl, inclúyelo en la respuesta como enlace para factura/portal.\n"
+            "- En paneles de reservas, muestra siempre el folio_id numérico (además del folio_code si quieres) para que el encargado pueda pedir detalle con ese ID.\n"
             "- REGLA CRÍTICA PARA KB: Cuando el encargado pida agregar/actualizar información en la base de conocimientos, "
             "usa SIEMPRE la herramienta 'agregar_a_base_conocimientos'. Devuelve el marcador [KB_DRAFT]|hotel|tema|categoria|contenido "
             "para que el sistema pueda mostrar el borrador completo (TEMA/CATEGORÍA/CONTENIDO) antes de guardar. No omitas el marcador."

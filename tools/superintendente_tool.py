@@ -3,15 +3,17 @@ Herramientas para el Superintendente (implementación simple con StructuredTool)
 """
 
 import asyncio
+import json
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Any, Optional, Callable
 
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from core.db import get_conversation_history
+from core.mcp_client import mcp_client
 
 log = logging.getLogger("SuperintendenteTools")
 
@@ -59,6 +61,23 @@ class SendMessageMainInput(BaseModel):
 class SendWhatsAppInput(BaseModel):
     guest_id: str = Field(..., description="ID del huésped en WhatsApp (con prefijo país)")
     message: str = Field(..., description="Mensaje de texto a enviar (sin plantilla)")
+
+
+class ConsultaReservaGeneralInput(BaseModel):
+    fecha_inicio: str = Field(..., description="Fecha de inicio en formato YYYY-MM-DD")
+    fecha_fin: str = Field(..., description="Fecha final en formato YYYY-MM-DD")
+    pms_property_id: int = Field(
+        default=38,
+        description="ID de la propiedad en el PMS (por defecto 38)",
+    )
+
+
+class ConsultaReservaPersonaInput(BaseModel):
+    folio_id: str = Field(..., description="ID del folio de la reserva")
+    pms_property_id: int = Field(
+        default=38,
+        description="ID de la propiedad en el PMS (por defecto 38)",
+    )
 
 
 def create_add_to_kb_tool(
@@ -358,4 +377,188 @@ def create_send_whatsapp_tool(channel_manager: Any):
         ),
         coroutine=_send_whatsapp,
         args_schema=SendWhatsAppInput,
+    )
+
+
+async def _obtener_token_mcp(tools: list[Any]) -> tuple[Optional[str], Optional[str]]:
+    """
+    Reutiliza la tool 'buscar_token' expuesta por MCP (igual que DispoPreciosAgent).
+    Devuelve (token, error). Si hay error, token es None.
+    """
+    try:
+        token_tool = next((t for t in tools if t.name == "buscar_token"), None)
+        if not token_tool:
+            return None, "No se encontró la tool 'buscar_token' en MCP."
+
+        token_raw = await token_tool.ainvoke({})
+        token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
+        token = (
+            token_data[0].get("key") if isinstance(token_data, list)
+            else token_data.get("key")
+        )
+
+        if not token:
+            return None, "No se pudo obtener el token de acceso."
+
+        return str(token).strip(), None
+    except Exception as exc:
+        log.error("Error obteniendo token desde MCP: %s", exc, exc_info=True)
+        return None, f"Error obteniendo token desde MCP: {exc}"
+
+
+def create_consulta_reserva_general_tool():
+    async def _consulta_reserva_general(
+        fecha_inicio: str,
+        fecha_fin: str,
+        pms_property_id: int = 38,
+    ) -> str:
+        """
+        Consulta folios/reservas en un rango de fechas vía MCP → n8n.
+        """
+        try:
+            tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+        except Exception as exc:
+            log.error("No se pudo acceder al MCP para consulta general: %s", exc, exc_info=True)
+            return "❌ No se pudo acceder al servidor MCP para consultar reservas."
+
+        token, token_err = await _obtener_token_mcp(tools)
+        if not token:
+            return token_err or "No se pudo obtener el token de acceso."
+
+        consulta_tool = next((t for t in tools if t.name == "consulta_reserva_general"), None)
+        if not consulta_tool:
+            return "No se encontró la tool 'consulta_reserva_general' en MCP."
+
+        payload = {
+            "parameters0_Value": fecha_inicio.strip(),
+            "parameters1_Value": fecha_fin.strip(),
+            "key": token,
+        }
+        if pms_property_id is not None:
+            payload["pmsPropertyId"] = pms_property_id
+
+        try:
+            raw_response = await consulta_tool.ainvoke(payload)
+            parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
+
+            # 🔎 Filtrar folios para reflejar solo el rango solicitado (tolerancia de 1 día al inicio)
+            def _parse_date(val: Any) -> Optional[datetime]:
+                try:
+                    return datetime.fromisoformat(str(val).split("T")[0])
+                except Exception:
+                    return None
+
+            date_from_dt = _parse_date(fecha_inicio)
+            date_to_dt = _parse_date(fecha_fin)
+            filtered = []
+            if isinstance(parsed, list) and date_from_dt and date_to_dt:
+                start_min = date_from_dt - timedelta(days=1)  # acepta llegadas 1 día antes (ej. 27/11 para finde 28-30)
+                end_max = date_to_dt + timedelta(days=1)
+                for folio in parsed:
+                    fc = _parse_date(folio.get("firstCheckin"))
+                    lc = _parse_date(folio.get("lastCheckout"))
+                    if not fc or not lc:
+                        continue
+                    if fc < start_min:
+                        continue  # descarta estancias largas que comienzan mucho antes
+                    if lc > end_max and (lc - fc).days > 7:
+                        continue  # descarta estancias demasiado largas fuera del rango
+                    filtered.append(folio)
+            else:
+                filtered = parsed
+
+            # 🔎 Simplificar salida para que el agente formatee panel consistente
+            def _fmt_date(val: Any) -> str:
+                try:
+                    return str(val).split("T")[0]
+                except Exception:
+                    return ""
+
+            simplified = []
+            if isinstance(filtered, list):
+                for folio in filtered:
+                    reservations = folio.get("reservations") or []
+                    first_res = reservations[0] if reservations else {}
+                    simplified.append(
+                        {
+                            # Usa el ID como folio principal para consultas posteriores (consulta_reserva_persona)
+                            "folio": folio.get("id"),
+                            "folio_id": folio.get("id"),  # alias explícito para presentación/consulta
+                            "folio_code": folio.get("name"),
+                            "partner_name": folio.get("partnerName"),
+                            "partner_phone": folio.get("partnerPhone"),
+                            "partner_email": folio.get("partnerEmail"),
+                            "state": folio.get("state"),
+                            "amount_total": folio.get("amountTotal"),
+                            "pending_amount": folio.get("pendingAmount"),
+                            "payment_state": folio.get("paymentStateDescription") or folio.get("paymentStateCode"),
+                            "checkin": _fmt_date(first_res.get("checkin") or folio.get("firstCheckin")),
+                            "checkout": _fmt_date(first_res.get("checkout") or folio.get("lastCheckout")),
+                        }
+                    )
+            else:
+                simplified = filtered
+
+            return json.dumps(simplified, ensure_ascii=False)
+        except Exception as exc:
+            log.error("Error consultando reservas generales: %s", exc, exc_info=True)
+            return f"❌ Error consultando reservas: {exc}"
+
+    return StructuredTool.from_function(
+        name="consulta_reserva_general",
+        description=(
+            "Revisa folios/reservas creadas entre dos fechas (formato YYYY-MM-DD). "
+            "Usa MCP/n8n: busca el token y consulta el PMS."
+        ),
+        coroutine=_consulta_reserva_general,
+        args_schema=ConsultaReservaGeneralInput,
+    )
+
+
+def create_consulta_reserva_persona_tool():
+    async def _consulta_reserva_persona(
+        folio_id: str,
+        pms_property_id: int = 38,
+    ) -> str:
+        """
+        Consulta los detalles de un folio específico vía MCP → n8n.
+        """
+        try:
+            tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+        except Exception as exc:
+            log.error("No se pudo acceder al MCP para consulta de folio: %s", exc, exc_info=True)
+            return "❌ No se pudo acceder al servidor MCP para consultar el folio."
+
+        token, token_err = await _obtener_token_mcp(tools)
+        if not token:
+            return token_err or "No se pudo obtener el token de acceso."
+
+        consulta_tool = next((t for t in tools if t.name == "consulta_reserva_persona"), None)
+        if not consulta_tool:
+            return "No se encontró la tool 'consulta_reserva_persona' en MCP."
+
+        payload = {
+            "folio_id": folio_id.strip(),
+            "key": token,
+        }
+        if pms_property_id is not None:
+            payload["pmsPropertyId"] = pms_property_id
+
+        try:
+            raw_response = await consulta_tool.ainvoke(payload)
+            parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
+            return json.dumps(parsed, ensure_ascii=False)
+        except Exception as exc:
+            log.error("Error consultando reserva por folio: %s", exc, exc_info=True)
+            return f"❌ Error consultando el folio: {exc}"
+
+    return StructuredTool.from_function(
+        name="consulta_reserva_persona",
+        description=(
+            "Obtiene los datos detallados de un folio de reserva específico usando MCP/n8n. "
+            "Necesita el folio_id y busca el token automáticamente. "
+            "Incluye portalUrl si está disponible (enlace a portal/factura)."
+        ),
+        coroutine=_consulta_reserva_persona,
+        args_schema=ConsultaReservaPersonaInput,
     )
