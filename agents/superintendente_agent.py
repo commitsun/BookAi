@@ -62,7 +62,7 @@ class SuperintendenteAgent:
         - Si AWS_PROFILE está seteado y existe, lo usa.
         - Si no existe (ej. en EC2 con role), cae a credenciales por defecto.
         """
-        profile = os.getenv("AWS_PROFILE") or None
+        profile = (os.getenv("AWS_PROFILE") or "").strip() or None
         region = Settings.AWS_DEFAULT_REGION
         session = None
 
@@ -73,6 +73,9 @@ class SuperintendenteAgent:
                 log.warning("Perfil AWS '%s' no disponible, uso cadena por defecto: %s", profile, exc)
 
         if session is None:
+            # Evita que un AWS_PROFILE vacío provoque ProfileNotFound; borra la variable si está vacía.
+            if "AWS_PROFILE" in os.environ and not os.environ.get("AWS_PROFILE"):
+                os.environ.pop("AWS_PROFILE", None)
             session = boto3.Session(region_name=region)
 
         return session.client(
