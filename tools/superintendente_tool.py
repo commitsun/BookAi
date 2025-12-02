@@ -504,7 +504,34 @@ def create_consulta_reserva_general_tool():
 
         try:
             raw_response = await consulta_tool.ainvoke(payload)
-            parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
+            if raw_response is None:
+                log.error("Consulta de reservas devolvió respuesta vacía (raw_response=None)")
+                return "❌ No se pudo obtener respuesta del PMS (respuesta vacía)."
+
+            def _parse_response(data: Any) -> tuple[Optional[Any], Optional[str]]:
+                """
+                Intenta parsear la respuesta a JSON y devuelve el error en claro si no es posible.
+                Maneja respuestas de error en texto plano (ej. SSL) para devolverlas al agente.
+                """
+                if isinstance(data, (dict, list)):
+                    return data, None
+
+                if isinstance(data, str):
+                    text = data.strip()
+                    try:
+                        return json.loads(text), None
+                    except json.JSONDecodeError:
+                        # Propaga errores de n8n (p.ej. SSL) en vez de romper el flujo.
+                        err_msg = text[:400]  # evita log/retornos excesivos
+                        log.error("Respuesta no-JSON en consulta_reserva_general: %s", err_msg)
+                        return None, f"Respuesta del PMS no es JSON: {err_msg}"
+
+                log.error("Tipo de respuesta inesperado del PMS: %s", type(data))
+                return None, f"Tipo de respuesta inesperado del PMS: {type(data).__name__}"
+
+            parsed, parse_err = _parse_response(raw_response)
+            if parse_err:
+                return f"❌ Error consultando reservas: {parse_err}"
 
             # 🔎 Filtrar folios para reflejar solo el rango solicitado (tolerancia de 1 día al inicio)
             def _parse_date(val: Any) -> Optional[datetime]:
