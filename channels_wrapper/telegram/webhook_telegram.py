@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import os
 from datetime import datetime
 from typing import Any
 
@@ -25,6 +26,7 @@ from core.message_utils import (
 from core.db import get_conversation_history
 
 log = logging.getLogger("TelegramWebhook")
+AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() == "true"
 
 
 def register_telegram_routes(app, state):
@@ -472,6 +474,7 @@ def register_telegram_routes(app, state):
                     reason = (meta.get("reason") or "").lower()
 
                     kb_allowed = esc_type in {"info_not_found", "manual"}
+                    kb_allowed = kb_allowed and AUTO_KB_PROMPT_ENABLED
                     kb_allowed = kb_allowed and not state.telegram_pending_kb_addition.get(chat_id)
                     kb_allowed = kb_allowed and all(
                         term not in reason for term in ["inapropiad", "ofens", "rechaz", "error"]
@@ -503,11 +506,11 @@ def register_telegram_routes(app, state):
 
                         log.info("Pregunta KB enviada: %s", escalation_id)
                     else:
+                        cause = "deshabilitado" if not AUTO_KB_PROMPT_ENABLED else f"tipo/motivo ({esc_type}/{reason})"
                         log.info(
-                            "⏭️ Se omite sugerencia de KB para escalación %s (tipo: %s, motivo: %s)",
+                            "⏭️ Se omite sugerencia de KB para escalación %s (%s)",
                             escalation_id,
-                            esc_type or "desconocido",
-                            reason or "n/a",
+                            cause,
                         )
 
                 log.info("✅ Procesado mensaje de confirmación/ajuste para escalación %s", escalation_id)

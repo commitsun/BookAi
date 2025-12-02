@@ -350,7 +350,6 @@ class InternoAgent:
 Responde:
 ✅ "sí" / "ok" / "confirmar" → Agregar
 ❌ "no" / "descartar" → Rechazar
-📝 Cualquier otro texto → Ajustar el borrador
 """
 
             return question
