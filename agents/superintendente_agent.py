@@ -667,6 +667,7 @@ class SuperintendenteAgent:
 
         prefix_env = Settings.SUPERINTENDENTE_S3_PREFIX.rstrip("/")
         clean_name = re.sub(r"[^A-Za-z0-9\\-_ ]+", "", hotel_name).strip()
+        tokens = [t for t in re.findall(r"[a-z0-9]+", clean_name.lower()) if t]
         doc_name = f"{clean_name.replace(' ', '_')}.docx" if clean_name else "knowledge_base.docx"
         slug_prefix = clean_name.replace(" ", "_") if clean_name else ""
         prefix_tail = prefix_env.rsplit("/", 1)[-1] if prefix_env else ""
@@ -712,41 +713,38 @@ class SuperintendenteAgent:
                 if cand not in candidates:
                     candidates.append(cand)
 
-        # 🎯 Si hay prefijo y cliente S3, listar documentos bajo ese prefijo y priorizar
-        # cualquiera que contenga '-variable' en el nombre (independiente del hotel).
-        if boto_client and bucket and prefix_env:
-            # Si ya existe un documento que coincide con el hotel, úsalo exclusivamente.
-            # Esto evita crear carpetas nuevas cuando ya hay una para ese hotel.
-            tokens = [t for t in re.findall(r"[a-z0-9]+", clean_name.lower()) if t]
-            try:
-                paginator = boto_client.get_paginator("list_objects_v2")
-                existing_matches: list[str] = []
-                for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix_env}/"):
-                    for obj in page.get("Contents", []):
-                        key = obj.get("Key") or ""
-                        key_lower = key.lower()
-                        if tokens and not all(tok in key_lower for tok in tokens):
-                            continue
-                        if key not in existing_matches:
-                            existing_matches.append(key)
-                if existing_matches:
-                    existing_matches.sort(key=lambda k: (0 if "-variable" in k.lower() else 1, len(k)))
-                    log.info("Candidatos existentes coincidentes para KB: %s", existing_matches)
-                    return existing_matches
-            except Exception as exc:
-                log.warning("No se pudo listar documentos en %s para coincidencias exactas: %s", prefix_env, exc)
+        # 🎯 Buscar primero documentos existentes coincidentes (contienen todos los tokens del hotel)
+        # en los prefijos conocidos; evita crear carpetas nuevas si ya existe una.
+        if boto_client and bucket:
+            search_prefixes: list[str] = []
+            if prefix_env:
+                search_prefixes.append(prefix_env)
+            for pref in prefix_candidates:
+                if pref and pref not in search_prefixes:
+                    search_prefixes.append(pref)
+            if "" not in search_prefixes:
+                search_prefixes.append("")
 
-            try:
-                paginator = boto_client.get_paginator("list_objects_v2")
-                for page in paginator.paginate(Bucket=bucket, Prefix=f"{prefix_env}/"):
-                    for obj in page.get("Contents", []):
-                        key = obj.get("Key") or ""
-                        key_lower = key.lower()
-                        if "-variable" in key_lower and key_lower.endswith((".docx", ".doc")):
-                            if key not in candidates:
-                                candidates.insert(0, key)  # dar prioridad a los encontrados reales
-            except Exception as exc:
-                log.warning("No se pudo listar documentos Variable en %s: %s", prefix_env, exc)
+            for pref in search_prefixes:
+                try:
+                    paginator = boto_client.get_paginator("list_objects_v2")
+                    found: list[str] = []
+                    for page in paginator.paginate(Bucket=bucket, Prefix=f"{pref}/" if pref else ""):
+                        for obj in page.get("Contents", []):
+                            key = obj.get("Key") or ""
+                            key_lower = key.lower()
+                            if tokens and not all(tok in key_lower for tok in tokens):
+                                continue
+                            if not key_lower.endswith((".docx", ".doc")):
+                                continue
+                            if key not in found:
+                                found.append(key)
+                    if found:
+                        found.sort(key=lambda k: (0 if "-variable" in k.lower() else 1, len(k)))
+                        log.info("Candidatos existentes coincidentes para KB: %s", found)
+                        return found
+                except Exception as exc:
+                    log.warning("No se pudo listar documentos en %s: %s", pref or "<root>", exc)
 
         # Añadir base como último recurso
         if base_key not in candidates:
