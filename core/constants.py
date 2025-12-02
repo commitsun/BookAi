@@ -20,5 +20,5 @@ WA_CONFIRM_WORDS = {
 
 WA_CANCEL_WORDS = {"cancel", "cancelar", "no"}
 
-# Hotel por defecto usado en el pipeline y en el modo Superintendente
-DEFAULT_HOTEL_NAME = "Hotel Default"
+# Único hotel activo en el pipeline y modo Superintendente
+ACTIVE_HOTEL_NAME = "Alda Centro Ponferrada"

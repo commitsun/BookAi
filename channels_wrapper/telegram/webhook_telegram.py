@@ -13,7 +13,7 @@ from typing import Any
 from fastapi import Request
 from fastapi.responses import JSONResponse
 
-from core.constants import DEFAULT_HOTEL_NAME, WA_CANCEL_WORDS, WA_CONFIRM_WORDS
+from core.constants import ACTIVE_HOTEL_NAME, WA_CANCEL_WORDS, WA_CONFIRM_WORDS
 from core.escalation_manager import get_escalation
 from core.message_utils import (
     build_kb_preview,
@@ -487,7 +487,7 @@ def register_telegram_routes(app, state):
                             escalation_id=escalation_id or "",
                             topic=topic,
                             response_content=manager_reply,
-                            hotel_name=DEFAULT_HOTEL_NAME,
+                            hotel_name=ACTIVE_HOTEL_NAME,
                             superintendente_agent=state.superintendente_agent,
                         )
 
@@ -495,7 +495,7 @@ def register_telegram_routes(app, state):
                             "escalation_id": escalation_id,
                             "topic": topic,
                             "content": manager_reply,
-                            "hotel_name": DEFAULT_HOTEL_NAME,
+                            "hotel_name": ACTIVE_HOTEL_NAME,
                         }
 
                         await state.channel_manager.send_message(
@@ -535,7 +535,7 @@ def register_telegram_routes(app, state):
                 if _is_short_confirmation(text_lower):
                     target_ids = pending_rm.get("target_ids") or []
                     result = await state.superintendente_agent.handle_kb_removal(
-                        hotel_name=pending_rm.get("hotel_name", DEFAULT_HOTEL_NAME),
+                        hotel_name=pending_rm.get("hotel_name", ACTIVE_HOTEL_NAME),
                         target_ids=target_ids,
                         encargado_id=chat_id,
                         note=text,
@@ -599,10 +599,10 @@ def register_telegram_routes(app, state):
 
                     if last_draft:
                         parts = last_draft.split("|", 2)
-                        kb_hotel = DEFAULT_HOTEL_NAME
+                        kb_hotel = ACTIVE_HOTEL_NAME
                         payload = {}
                         if len(parts) >= 3:
-                            kb_hotel = parts[1] or DEFAULT_HOTEL_NAME
+                            kb_hotel = parts[1] or ACTIVE_HOTEL_NAME
                             try:
                                 payload = json.loads(parts[2])
                             except Exception as exc:
@@ -610,7 +610,7 @@ def register_telegram_routes(app, state):
                         target_ids = payload.get("target_ids") if isinstance(payload, dict) else []
                         if target_ids:
                             result = await state.superintendente_agent.handle_kb_removal(
-                                hotel_name=kb_hotel or DEFAULT_HOTEL_NAME,
+                                hotel_name=kb_hotel or ACTIVE_HOTEL_NAME,
                                 target_ids=target_ids,
                                 encargado_id=chat_id,
                                 note=text,
@@ -648,7 +648,7 @@ def register_telegram_routes(app, state):
                         manager_response=text,
                         topic=pending_kb.get("topic", ""),
                         draft_content=pending_kb.get("content", ""),
-                        hotel_name=pending_kb.get("hotel_name", DEFAULT_HOTEL_NAME),
+                        hotel_name=pending_kb.get("hotel_name", ACTIVE_HOTEL_NAME),
                         superintendente_agent=state.superintendente_agent,
                         pending_state=pending_kb,
                         source=pending_kb.get("source", "escalation"),
@@ -696,7 +696,7 @@ def register_telegram_routes(app, state):
                         if len(parts) >= 5:
                             _, kb_hotel, topic, category, kb_content = parts[:5]
                         else:
-                            kb_hotel = DEFAULT_HOTEL_NAME
+                            kb_hotel = ACTIVE_HOTEL_NAME
                             topic = "Información"
                             category = "general"
                             kb_content = last_draft.replace(kb_marker, "").strip()
@@ -705,7 +705,7 @@ def register_telegram_routes(app, state):
                             topic=topic.strip(),
                             content=kb_content.strip(),
                             encargado_id=chat_id,
-                            hotel_name=kb_hotel or DEFAULT_HOTEL_NAME,
+                            hotel_name=kb_hotel or ACTIVE_HOTEL_NAME,
                             source="superintendente_recovery",
                         )
 
@@ -879,7 +879,7 @@ def register_telegram_routes(app, state):
 
             if super_mode or in_super_session:
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
-                hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", DEFAULT_HOTEL_NAME)
+                hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME)
                 state.superintendente_chats[chat_id] = {"hotel_name": hotel_name}
 
                 try:
@@ -950,7 +950,7 @@ def register_telegram_routes(app, state):
                         total = int(payload.get("total_matches", 0) or len(target_ids or [])) if isinstance(payload, dict) else 0
 
                         pending_payload = {
-                            "hotel_name": kb_hotel or hotel_name or DEFAULT_HOTEL_NAME,
+                            "hotel_name": kb_hotel or hotel_name or ACTIVE_HOTEL_NAME,
                             "criteria": (payload.get("criteria") if isinstance(payload, dict) else "") or "",
                             "date_from": (payload.get("date_from") if isinstance(payload, dict) else "") or "",
                             "date_to": (payload.get("date_to") if isinstance(payload, dict) else "") or "",
@@ -1007,7 +1007,7 @@ def register_telegram_routes(app, state):
                             "escalation_id": "",
                             "topic": topic.strip(),
                             "content": kb_content.strip(),
-                            "hotel_name": kb_hotel or hotel_name or DEFAULT_HOTEL_NAME,
+                            "hotel_name": kb_hotel or hotel_name or ACTIVE_HOTEL_NAME,
                             "source": "superintendente",
                             "category": category.strip() or "general",
                         }
