@@ -14,6 +14,7 @@ import inspect
 import logging
 from datetime import datetime
 from typing import Any, Dict, List, Optional
+import os
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -54,6 +55,30 @@ class SuperintendenteAgent:
         self.llm = ModelConfig.get_llm(model_tier)
 
         log.info("SuperintendenteAgent inicializado (modelo: %s)", self.llm.model_name)
+
+    def _get_s3_client(self):
+        """
+        Crea un cliente S3 tolerante a perfiles ausentes.
+        - Si AWS_PROFILE está seteado y existe, lo usa.
+        - Si no existe (ej. en EC2 con role), cae a credenciales por defecto.
+        """
+        profile = os.getenv("AWS_PROFILE") or None
+        region = Settings.AWS_DEFAULT_REGION
+        session = None
+
+        if profile:
+            try:
+                session = boto3.Session(profile_name=profile, region_name=region)
+            except Exception as exc:
+                log.warning("Perfil AWS '%s' no disponible, uso cadena por defecto: %s", profile, exc)
+
+        if session is None:
+            session = boto3.Session(region_name=region)
+
+        return session.client(
+            "s3",
+            config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
+        )
 
     async def ainvoke(
         self,
@@ -344,11 +369,7 @@ class SuperintendenteAgent:
         if not bucket:
             raise ValueError("S3_BUCKET no configurado en .env")
 
-        boto = boto3.client(
-            "s3",
-            region_name=Settings.AWS_DEFAULT_REGION,
-            config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
-        )
+        boto = self._get_s3_client()
 
         candidates = self._resolve_doc_candidates(
             hotel_name=hotel_name,
@@ -544,11 +565,7 @@ class SuperintendenteAgent:
         if not bucket:
             raise ValueError("S3_BUCKET no configurado en .env")
 
-        boto = boto3.client(
-            "s3",
-            region_name=Settings.AWS_DEFAULT_REGION,
-            config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
-        )
+        boto = self._get_s3_client()
 
         kb_data = await self._load_kb_entries(hotel_name, boto_client=boto, bucket=bucket)
         entries = kb_data.get("entries", [])
@@ -728,11 +745,7 @@ class SuperintendenteAgent:
         if not bucket:
             raise ValueError("S3_BUCKET no configurado en .env")
 
-        boto_client = boto_client or boto3.client(
-            "s3",
-            region_name=Settings.AWS_DEFAULT_REGION,
-            config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
-        )
+        boto_client = boto_client or self._get_s3_client()
 
         candidates = self._resolve_doc_candidates(
             hotel_name=hotel_name,
