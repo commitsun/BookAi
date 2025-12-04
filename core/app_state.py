@@ -12,6 +12,8 @@ from agents.supervisor_input_agent import SupervisorInputAgent
 from agents.supervisor_output_agent import SupervisorOutputAgent
 from agents.interno_agent import InternoAgent
 from agents.superintendente_agent import SuperintendenteAgent
+from core.config import Settings
+from core.template_registry import TemplateRegistry
 from core.memory_manager import MemoryManager
 from core.message_buffer import MessageBufferManager
 from core.db import supabase
@@ -27,6 +29,14 @@ class AppState:
 
         # Dependencias de agentes y canales
         self.memory_manager = MemoryManager()
+        try:
+            self.template_registry = TemplateRegistry.from_supabase(
+                supabase, table=Settings.TEMPLATE_SUPABASE_TABLE
+            )
+        except Exception as exc:
+            self.log.warning("No se pudo cargar registry desde Supabase: %s", exc)
+            self.template_registry = TemplateRegistry()
+
         self.supervisor_input = SupervisorInputAgent(memory_manager=self.memory_manager)
         self.supervisor_output = SupervisorOutputAgent(memory_manager=self.memory_manager)
         self.channel_manager = ChannelManager()
@@ -36,6 +46,7 @@ class AppState:
             memory_manager=self.memory_manager,
             supabase_client=supabase,
             channel_manager=self.channel_manager,
+            template_registry=self.template_registry,
         )
 
         # Estado efímero de la sesión
@@ -48,6 +59,8 @@ class AppState:
         self.superintendente_pending_review: dict = {}
         self.processed_whatsapp_ids: set[str] = set()
         self.processed_whatsapp_queue: deque[str] = deque(maxlen=5000)
+        self.processed_template_keys: set[str] = set()
+        self.processed_template_queue: deque[str] = deque(maxlen=2000)
 
         # Tracking mínimo persistente (retrocompatibilidad)
         self.tracking: dict = {}

@@ -34,6 +34,14 @@ class SendBroadcastInput(BaseModel):
         None,
         description="Parámetros de la plantilla (JSON)",
     )
+    language: str = Field(
+        default="es",
+        description="Código de idioma de la plantilla (ej: es, en)",
+    )
+    hotel_code: Optional[str] = Field(
+        default=None,
+        description="Código externo del hotel (opcional, para plantillas específicas)",
+    )
 
 
 class ReviewConversationsInput(BaseModel):
@@ -188,26 +196,61 @@ def create_add_to_kb_tool(
     )
 
 
-def create_send_broadcast_tool(hotel_name: str, channel_manager: Any, supabase_client: Any):
-    async def _send_broadcast(template_id: str, guest_ids: str, parameters: Optional[dict] = None) -> str:
+def create_send_broadcast_tool(
+    hotel_name: str,
+    channel_manager: Any,
+    supabase_client: Any,
+    template_registry: Any = None,
+):
+    from core.template_registry import TemplateRegistry
+
+    async def _send_broadcast(
+        template_id: str,
+        guest_ids: str,
+        parameters: Optional[dict] = None,
+        language: str = "es",
+        hotel_code: Optional[str] = None,
+    ) -> str:
         try:
             ids = [gid.strip() for gid in guest_ids.split(",") if gid.strip()]
             if not channel_manager:
                 return "⚠️ Canal de envío no configurado."
+
+            target_hotel = hotel_code or hotel_name
+            template_def = None
+            if template_registry:
+                try:
+                    template_def = template_registry.resolve(
+                        hotel_code=target_hotel,
+                        template_code=template_id,
+                        language=language,
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo resolver plantilla en registry: %s", exc)
+
+            wa_template = template_def.whatsapp_name if template_def else template_id
+            payload_params = (
+                template_def.build_meta_parameters(parameters) if template_def else list((parameters or {}).values())
+            )
+            language_to_use = template_def.language if template_def else language
 
             success_count = 0
             for guest_id in ids:
                 try:
                     await channel_manager.send_template_message(
                         guest_id,
-                        template_id,
-                        parameters=parameters,
+                        wa_template,
+                        parameters=payload_params,
+                        language=language_to_use,
                     )
                     success_count += 1
                 except Exception as exc:
                     log.warning("Error enviando a %s: %s", guest_id, exc)
 
-            return f"✅ Broadcast enviado a {success_count}/{len(ids)} huéspedes"
+            return (
+                f"✅ Broadcast enviado a {success_count}/{len(ids)} huéspedes "
+                f"(plantilla={wa_template}, idioma={language_to_use})"
+            )
         except Exception as exc:
             log.error("Error en broadcast: %s", exc)
             return f"❌ Error: {exc}"

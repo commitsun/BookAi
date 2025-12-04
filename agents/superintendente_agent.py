@@ -45,11 +45,13 @@ class SuperintendenteAgent:
         memory_manager: Any,
         supabase_client: Any = None,
         channel_manager: Any = None,
+        template_registry: Any = None,
         model_tier: ModelTier = ModelTier.SUPERINTENDENTE,
     ) -> None:
         self.memory_manager = memory_manager
         self.supabase_client = supabase_client
         self.channel_manager = channel_manager
+        self.template_registry = template_registry
         self.model_tier = model_tier
 
         self.llm = ModelConfig.get_llm(model_tier)
@@ -238,6 +240,7 @@ class SuperintendenteAgent:
                 hotel_name=hotel_name,
                 channel_manager=self.channel_manager,
                 supabase_client=self.supabase_client,
+                template_registry=self.template_registry,
             ),
             create_send_message_main_tool(
                 encargado_id=encargado_id,

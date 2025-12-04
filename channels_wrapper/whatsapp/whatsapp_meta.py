@@ -189,7 +189,7 @@ class WhatsAppChannel(BaseChannel):
             log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
             return
 
-        def _iter_params(params: dict | list | tuple | None) -> Iterable[str]:
+        def _iter_params(params: dict | list | tuple | None) -> Iterable[Any]:
             if params is None:
                 return []
             if isinstance(params, dict):
@@ -198,11 +198,14 @@ class WhatsAppChannel(BaseChannel):
                 return params
             return [params]
 
-        body_params = [
-            {"type": "text", "text": str(val)}
-            for val in _iter_params(parameters)
-            if val is not None
-        ]
+        body_params = []
+        for val in _iter_params(parameters):
+            if val is None:
+                continue
+            if isinstance(val, dict) and (val.get("parameter_name") or val.get("type")):
+                body_params.append(val)
+            else:
+                body_params.append({"type": "text", "text": str(val)})
         components = [{"type": "body", "parameters": body_params}] if body_params else []
 
         payload = {
