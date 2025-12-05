@@ -156,12 +156,17 @@ class SuperintendenteAgent:
             # 🚦 Propagar marcadores especiales si vinieron en pasos intermedios
             intermediates = result.get("intermediate_steps") or []
             wa_marker = None
+            tpl_marker = None
             kb_marker = None
             kb_rm_marker = None
             for _action, observation in intermediates:
                 if isinstance(observation, str) and "[WA_DRAFT]|" in observation:
                     wa_marker = observation[
                         observation.index("[WA_DRAFT]|") :
+                    ].strip()
+                if isinstance(observation, str) and "[TPL_DRAFT]|" in observation:
+                    tpl_marker = observation[
+                        observation.index("[TPL_DRAFT]|") :
                     ].strip()
                 if isinstance(observation, str) and "[KB_DRAFT]|" in observation:
                     kb_marker = observation[
@@ -171,10 +176,12 @@ class SuperintendenteAgent:
                     kb_rm_marker = observation[
                         observation.index("[KB_REMOVE_DRAFT]|") :
                     ].strip()
-                if wa_marker and kb_marker and kb_rm_marker:
+                if wa_marker and tpl_marker and kb_marker and kb_rm_marker:
                     break
             if wa_marker and "[WA_DRAFT]|" not in output:
                 output = f"{wa_marker}\n{output}"
+            if tpl_marker:
+                output = tpl_marker
             if kb_marker and "[KB_DRAFT]|" not in output:
                 output = f"{kb_marker}\n{output}"
             if kb_rm_marker and "[KB_REMOVE_DRAFT]|" not in output:
@@ -208,10 +215,12 @@ class SuperintendenteAgent:
             create_add_to_kb_tool,
             create_consulta_reserva_general_tool,
             create_consulta_reserva_persona_tool,
+            create_list_templates_tool,
             create_review_conversations_tool,
             create_remove_from_kb_tool,
             create_send_broadcast_tool,
             create_send_message_main_tool,
+            create_send_template_tool,
             create_send_whatsapp_tool,
         )
 
@@ -236,11 +245,22 @@ class SuperintendenteAgent:
             ),
             create_consulta_reserva_general_tool(),
             create_consulta_reserva_persona_tool(),
+            create_list_templates_tool(
+                hotel_name=hotel_name,
+                template_registry=self.template_registry,
+                supabase_client=self.supabase_client,
+            ),
             create_send_broadcast_tool(
                 hotel_name=hotel_name,
                 channel_manager=self.channel_manager,
                 supabase_client=self.supabase_client,
                 template_registry=self.template_registry,
+            ),
+            create_send_template_tool(
+                hotel_name=hotel_name,
+                channel_manager=self.channel_manager,
+                template_registry=self.template_registry,
+                supabase_client=self.supabase_client,
             ),
             create_send_message_main_tool(
                 encargado_id=encargado_id,
@@ -263,17 +283,19 @@ class SuperintendenteAgent:
             "RESPONSABILIDADES:\n"
             "1. Agregar y actualizar la base de conocimientos del hotel\n"
             "2. Revisar el historial de conversaciones de huéspedes\n"
-            "3. Enviar mensajes masivos a través de WhatsApp\n"
+            "3. Enviar plantillas individuales o masivas por WhatsApp\n"
             "4. Coordinar con el MainAgent\n"
             "5. Ayudar al encargado a mejorar las respuestas\n\n"
             "HERRAMIENTAS DISPONIBLES:\n"
             "1. agregar_a_base_conocimientos - Agrega información vectorizada a Supabase\n"
             "2. eliminar_de_base_conocimientos - Prepara borrador de eliminación en la base Variable (muestra registros o conteo, requiere confirmación)\n"
             "3. revisar_conversaciones - Revisa conversaciones recientes de huéspedes (pide modo: resumen u original)\n"
-            "4. enviar_broadcast - Envía plantillas masivas a múltiples huéspedes\n"
-            "5. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n"
-            "6. consulta_reserva_general - Consulta folios/reservas entre fechas (usa token auto, devuelve folio_id y folio_code)\n"
-            "7. consulta_reserva_persona - Consulta detalle de folio (usa token auto, incluye portalUrl si existe)\n\n"
+            "4. listar_plantillas_whatsapp - Lista las plantillas disponibles en Supabase por idioma/hotel\n"
+            "5. enviar_broadcast - Envía plantillas masivas a múltiples huéspedes\n"
+            "6. preparar_envio_plantilla - Prepara borrador de envío individual a uno o varios huéspedes (pide parámetros faltantes y espera confirmación)\n"
+            "7. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n"
+            "8. consulta_reserva_general - Consulta folios/reservas entre fechas (usa token auto, devuelve folio_id y folio_code)\n"
+            "9. consulta_reserva_persona - Consulta detalle de folio (usa token auto, incluye portalUrl si existe)\n\n"
             "TONO: Profesional, eficiente, orientado a mejora continua.\n\n"
             "REGLAS CLAVE:\n"
             "- Antes de usar revisar_conversaciones pregunta si prefiere 'resumen' (síntesis IA) o ver los mensajes 'originales'; usa el modo solicitado.\n"
@@ -282,13 +304,16 @@ class SuperintendenteAgent:
             "- No uses revisar_conversaciones salvo que pidan explícitamente historial/mensajes/chat del huésped.\n"
             "- Si consulta_reserva_persona devuelve portalUrl, inclúyelo en la respuesta como enlace para factura/portal.\n"
             "- En paneles de reservas, muestra siempre el folio_id numérico (además del folio_code si quieres) para que el encargado pueda pedir detalle con ese ID.\n"
+            "- Para enviar plantillas individuales o a pocos huéspedes, usa la herramienta 'preparar_envio_plantilla': genera el borrador, muestra parámetros faltantes y espera confirmación ('sí' para enviar, 'no' para cancelar). Si faltan datos, pídelos antes de preparar el envío final.\n"
             "- REGLA CRÍTICA PARA KB: Cuando el encargado pida agregar/actualizar información en la base de conocimientos, "
             "usa SIEMPRE la herramienta 'agregar_a_base_conocimientos'. Devuelve el marcador [KB_DRAFT]|hotel|tema|categoria|contenido "
             "para que el sistema pueda mostrar el borrador completo (TEMA/CATEGORÍA/CONTENIDO) antes de guardar. No omitas el marcador.\n"
             "- Para eliminar información de la base Variable, usa la herramienta 'eliminar_de_base_conocimientos' sin pedir confirmación previa. "
             "Entrega SIEMPRE el marcador [KB_REMOVE_DRAFT]|hotel|payload_json (con conteo y preview) en tu respuesta para que el encargado confirme/cancele. "
             "Si el encargado pide eliminar/quitar/borrar/limpiar o 'revisar' antes de eliminar, no generes propuestas de agregado ni paneles genéricos: "
-            "limítate a invocar 'eliminar_de_base_conocimientos' con el criterio pedido y devuelve el marcador de borrador de eliminación."
+            "limítate a invocar 'eliminar_de_base_conocimientos' con el criterio pedido y devuelve el marcador de borrador de eliminación.\n"
+            "- REGLA CRÍTICA PARA PLANTILLAS: cuando una herramienta devuelva un marcador [TPL_DRAFT]|..., reenvía EXACTAMENTE ese contenido al encargado, sin añadir resúmenes, reformular ni modificar el panel o la plantilla. No agregues una segunda respuesta después del panel.\n"
+            "- Si el último mensaje enviado incluye un borrador de plantilla ([TPL_DRAFT]|...), interpreta 'sí'/'no' o datos adicionales como respuesta a ese borrador; NO invoques herramientas de base de conocimientos en ese contexto."
         )
 
         context = get_time_context()

@@ -56,6 +56,7 @@ class AppState:
         self.telegram_pending_kb_removal: dict = {}
         self.superintendente_chats: dict = {}
         self.superintendente_pending_wa: dict = {}
+        self.superintendente_pending_tpl: dict = {}
         self.superintendente_pending_review: dict = {}
         self.processed_whatsapp_ids: set[str] = set()
         self.processed_whatsapp_queue: deque[str] = deque(maxlen=5000)

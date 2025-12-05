@@ -8,7 +8,7 @@ from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel, Field, root_validator
+from pydantic import BaseModel, Field, model_validator
 
 from core.config import Settings
 from core.template_registry import TemplateRegistry
@@ -36,12 +36,12 @@ class Recipient(BaseModel):
     phone: str = Field(..., description="Teléfono en formato E.164 (+34...)")
     country: Optional[str] = Field(default=None, description="Código de país ISO (opcional)")
 
-    @root_validator(pre=True)
-    def _strip_phone(cls, values: Dict[str, Any]) -> Dict[str, Any]:
-        phone = values.get("phone")
+    @model_validator(mode="before")
+    def _strip_phone(cls, data: Dict[str, Any]) -> Dict[str, Any]:
+        phone = data.get("phone")
         if phone:
-            values["phone"] = str(phone).strip()
-        return values
+            data["phone"] = str(phone).strip()
+        return data
 
 
 class TemplatePayload(BaseModel):

@@ -14,6 +14,7 @@ from pydantic import BaseModel, Field
 
 from core.db import get_conversation_history
 from core.mcp_client import mcp_client
+from core.config import Settings
 
 log = logging.getLogger("SuperintendenteTools")
 
@@ -100,6 +101,326 @@ class RemoveFromKBInput(BaseModel):
     fecha_fin: Optional[str] = Field(
         default=None,
         description="Fecha final YYYY-MM-DD para filtrar los registros a eliminar.",
+    )
+
+
+class ListTemplatesInput(BaseModel):
+    language: str = Field(
+        default="es", description="Idioma a listar (ej: es, en, fr)"
+    )
+    hotel_code: Optional[str] = Field(
+        default=None,
+        description="Código de hotel para filtrar. Si no se pasa, usa el hotel activo.",
+    )
+    refresh: bool = Field(
+        default=False,
+        description="Si true, recarga las plantillas desde Supabase antes de listar.",
+    )
+
+
+class SendTemplateDraftInput(BaseModel):
+    template_code: str = Field(..., description="Código interno de la plantilla.")
+    guest_ids: str = Field(
+        ...,
+        description="IDs/phones de los huéspedes separados por coma o espacios. Se normaliza a dígitos.",
+    )
+    parameters: Optional[Any] = Field(
+        default=None,
+        description="Parámetros a rellenar (dict). También se acepta lista ordenada o JSON string.",
+    )
+    language: str = Field(default="es", description="Idioma de la plantilla (ej: es, en)")
+    hotel_code: Optional[str] = Field(
+        default=None,
+        description="Código de hotel para escoger plantillas específicas.",
+    )
+    refresh: bool = Field(
+        default=False,
+        description="Si true, recarga desde Supabase antes de preparar el borrador.",
+    )
+
+
+def create_list_templates_tool(
+    hotel_name: str,
+    template_registry: Any = None,
+    supabase_client: Any = None,
+):
+    def _format_panel(lines: list[str]) -> str:
+        # Panel sin recuadro extra para evitar duplicados en el chat.
+        return "\n".join(lines)
+
+    def _normalize_lang(lang: str) -> str:
+        return (lang or "es").split("-")[0].strip().lower() or "es"
+
+    async def _list_templates(
+        language: str = "es",
+        hotel_code: Optional[str] = None,
+        refresh: bool = False,
+    ) -> str:
+        if not template_registry:
+            return "⚠️ No tengo acceso al registro de plantillas."
+
+        try:
+            if refresh and supabase_client:
+                template_registry.load_supabase(
+                    supabase_client, table=Settings.TEMPLATE_SUPABASE_TABLE
+                )
+        except Exception as exc:
+            log.warning("No se pudo recargar las plantillas desde Supabase: %s", exc)
+
+        lang_norm = _normalize_lang(language)
+        target_hotel = (hotel_code or "").strip().upper() or None
+        fallback_hotel = (hotel_name or "").strip().upper() or None
+
+        templates = template_registry.list_templates()
+        picked: dict[str, Any] = {}
+        for tpl in templates:
+            if _normalize_lang(tpl.language) != lang_norm:
+                continue
+            tpl_hotel = (tpl.hotel_code or "").strip().upper() or None
+
+            # Filtrado: si se indicó hotel_code, acepta solo ese o las genéricas
+            if target_hotel:
+                if tpl_hotel and tpl_hotel != target_hotel:
+                    continue
+            else:
+                # Sin filtro explícito: acepta las del hotel activo o genéricas
+                if tpl_hotel and fallback_hotel and tpl_hotel != fallback_hotel:
+                    continue
+
+            key = tpl.code
+            prev = picked.get(key)
+            prefer_current = False
+            if not prev:
+                prefer_current = True
+            elif target_hotel and tpl_hotel == target_hotel and not prev.hotel_code:
+                prefer_current = True
+            elif not target_hotel and fallback_hotel and tpl_hotel == fallback_hotel and not prev.hotel_code:
+                prefer_current = True
+
+            if prefer_current:
+                picked[key] = tpl
+
+        if not picked:
+            hotel_label = hotel_code or hotel_name
+            return f"⚠️ No encontré plantillas en {lang_norm} para {hotel_label}."
+
+        lang_label = "español" if lang_norm == "es" else lang_norm
+        hotel_label = hotel_code or hotel_name
+        lines = [
+            f"Estas son las plantillas de WhatsApp disponibles en {lang_label} para {hotel_label}:",
+            "",
+        ]
+
+        for code in sorted(picked.keys()):
+            tpl = picked[code]
+            desc = tpl.description or "Sin descripción"
+            params = list(tpl.parameter_hints.keys())
+            params_preview = ""
+            if params:
+                shown = ", ".join(params[:3])
+                if len(params) > 3:
+                    shown += ", ..."
+                params_preview = f" (pide: {shown})"
+            lines.append(f"• {tpl.whatsapp_name or tpl.code}: {desc}{params_preview}")
+
+        lines.append("")
+        lines.append("Si necesitas el detalle de alguna plantilla o quieres usar alguna, indícamelo.")
+        return _format_panel(lines)
+
+    return StructuredTool.from_function(
+        name="listar_plantillas_whatsapp",
+        description=(
+            "Lista las plantillas de WhatsApp disponibles desde Supabase para un idioma/hotel. "
+            "Úsala cuando el encargado pida ver qué plantillas están registradas."
+        ),
+        coroutine=_list_templates,
+        args_schema=ListTemplatesInput,
+    )
+
+
+def create_send_template_tool(
+    hotel_name: str,
+    channel_manager: Any,
+    template_registry: Any = None,
+    supabase_client: Any = None,
+):
+    from core.template_registry import TemplateDefinition
+
+    def _format_panel(lines: list[str]) -> str:
+        # Panel sin recuadro extra para evitar doble borde.
+        return "\n".join(lines)
+
+    def _normalize_lang(lang: str) -> str:
+        return (lang or "es").split("-")[0].strip().lower() or "es"
+
+    def _parse_guest_ids(raw: str) -> tuple[list[str], list[str]]:
+        display: list[str] = []
+        clean_ids: list[str] = []
+        if not raw:
+            return display, clean_ids
+        parts = re.split(r"[,\n]+|\s+", raw)
+        seen = set()
+        for part in parts:
+            if not part:
+                continue
+            disp = part.strip()
+            normalized = re.sub(r"\D", "", disp)
+            if not normalized:
+                continue
+            if normalized in seen:
+                continue
+            seen.add(normalized)
+            display.append(disp)
+            clean_ids.append(normalized)
+        return display, clean_ids
+
+    def _format_param_label(tpl: TemplateDefinition, name: str) -> str:
+        label = tpl.get_param_label(name) if tpl else name
+        return f"{name} ({label})" if label and label != name else name
+
+    def _normalize_parameters(raw_params: Any, tpl: TemplateDefinition) -> dict:
+        """Acepta dict, lista u otras entradas y devuelve dict nominal."""
+        if raw_params is None:
+            return {}
+        if isinstance(raw_params, dict):
+            return raw_params
+        # Si llega JSON como texto
+        if isinstance(raw_params, str):
+            try:
+                parsed = json.loads(raw_params)
+                if isinstance(parsed, dict):
+                    return parsed
+                if isinstance(parsed, list):
+                    return {name: parsed[idx] for idx, name in enumerate(tpl.parameter_order) if idx < len(parsed)}
+            except Exception:
+                return {}
+        # Si llega lista/tupla, la mapeamos al orden
+        if isinstance(raw_params, (list, tuple)):
+            return {name: raw_params[idx] for idx, name in enumerate(tpl.parameter_order) if idx < len(raw_params)}
+        return {}
+
+    async def _send_template(
+        template_code: str,
+        guest_ids: str,
+        parameters: Optional[dict] = None,
+        language: str = "es",
+        hotel_code: Optional[str] = None,
+        refresh: bool = False,
+    ) -> str:
+        if not channel_manager:
+            return "⚠️ Canal de envío no configurado."
+        if not template_registry:
+            return "⚠️ No tengo acceso al registro de plantillas."
+
+        try:
+            if refresh and supabase_client:
+                template_registry.load_supabase(
+                    supabase_client, table=Settings.TEMPLATE_SUPABASE_TABLE
+                )
+        except Exception as exc:
+            log.warning("No se pudo recargar las plantillas desde Supabase: %s", exc)
+
+        lang_norm = _normalize_lang(language)
+        hotel_filter = (hotel_code or "").strip().upper() or None
+        tpl = None
+        try:
+            hotel_candidates = []
+            if hotel_filter:
+                hotel_candidates.append(hotel_filter)
+            if hotel_name and hotel_name not in hotel_candidates:
+                hotel_candidates.append(hotel_name)
+            hotel_candidates.append(None)
+
+            for h in hotel_candidates:
+                tpl = template_registry.resolve(
+                    hotel_code=h,
+                    template_code=template_code,
+                    language=lang_norm,
+                )
+                if tpl:
+                    break
+        except Exception as exc:
+            log.warning("No se pudo resolver plantilla '%s': %s", template_code, exc)
+
+        if not tpl:
+            hotel_label = hotel_filter or hotel_name
+            return (
+                f"⚠️ No encontré la plantilla '{template_code}' en {lang_norm} "
+                f"para {hotel_label}. Pide el listado para ver las disponibles."
+            )
+
+        display_ids, normalized_ids = _parse_guest_ids(guest_ids)
+        if not normalized_ids:
+            return "⚠️ No encontré ningún huésped válido. Indica al menos un número con prefijo de país."
+
+        provided = _normalize_parameters(parameters, tpl)
+        missing = []
+        for name in tpl.parameter_order:
+            val = provided.get(name)
+            if val is None or (isinstance(val, str) and not val.strip()):
+                missing.append(name)
+
+        wa_template = tpl.whatsapp_name or tpl.code
+        language_to_use = _normalize_lang(tpl.language or lang_norm)
+        prepared_params = tpl.build_meta_parameters(provided)
+
+        lines = [
+            f"Borrador preparado para enviar la plantilla {wa_template} a {', '.join(display_ids)}.",
+        ]
+
+        if missing:
+            lines.append("Faltan los siguientes parámetros obligatorios:")
+            for name in missing:
+                lines.append(f"• {_format_param_label(tpl, name)}")
+            lines.append("")
+            lines.append(
+                "Por favor, indícame los valores para estos campos o confirma si deseas enviarlo tal cual "
+                "(los campos pendientes aparecerán vacíos en el mensaje)."
+            )
+        elif tpl.parameter_order or provided:
+            lines.append("Parámetros incluidos en el borrador:")
+            shown = False
+            for name in tpl.parameter_order:
+                val = provided.get(name)
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    continue
+                shown = True
+                lines.append(f"• {tpl.get_param_label(name)}: {val}")
+            for name, val in provided.items():
+                if name in tpl.parameter_order:
+                    continue
+                if val is None or (isinstance(val, str) and not val.strip()):
+                    continue
+                shown = True
+                lines.append(f"• {name}: {val}")
+            if not shown:
+                lines.append("• (sin parámetros)")
+
+        lines.append("")
+        lines.append('✅ Responde "sí" para enviar.')
+        lines.append('✏️ Si necesitas cambios, indícalo y preparo otro borrador.')
+        lines.append('❌ Responde "no" para cancelar.')
+
+        payload = {
+            "template": wa_template,
+            "language": language_to_use,
+            "parameters": prepared_params,
+            "guest_ids": normalized_ids,
+            "display_guest_ids": display_ids,
+        }
+
+        marker = json.dumps(payload, ensure_ascii=False)
+        preview = _format_panel(lines)
+        return f"[TPL_DRAFT]|{marker}\n{preview}"
+
+    return StructuredTool.from_function(
+        name="preparar_envio_plantilla",
+        description=(
+            "Prepara un borrador para enviar una plantilla de WhatsApp a uno o varios huéspedes. "
+            "Muestra parámetros faltantes y espera confirmación antes de enviarla."
+        ),
+        coroutine=_send_template,
+        args_schema=SendTemplateDraftInput,
     )
 
 

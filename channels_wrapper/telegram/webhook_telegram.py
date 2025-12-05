@@ -586,6 +586,7 @@ def register_telegram_routes(app, state):
                 and chat_id not in state.telegram_pending_kb_removal
                 and chat_id not in state.telegram_pending_kb_addition
                 and chat_id not in state.superintendente_pending_wa
+                and chat_id not in state.superintendente_pending_tpl
             ):
                 try:
                     recent = state.memory_manager.get_memory(chat_id, limit=15) if state.memory_manager else []
@@ -680,7 +681,11 @@ def register_telegram_routes(app, state):
             # --------------------------------------------------------
             # 3️⃣ bis - Recuperación de confirmación de KB perdida
             # --------------------------------------------------------
-            if _is_short_confirmation(text_lower) and chat_id not in state.superintendente_pending_wa:
+            if (
+                _is_short_confirmation(text_lower)
+                and chat_id not in state.superintendente_pending_wa
+                and chat_id not in state.superintendente_pending_tpl
+            ):
                 try:
                     recent = state.memory_manager.get_memory(chat_id, limit=15) if state.memory_manager else []
                     kb_marker = "[KB_DRAFT]|"
@@ -735,8 +740,6 @@ def register_telegram_routes(app, state):
             in_super_session = (
                 chat_id in state.superintendente_chats
                 and chat_id not in state.telegram_pending_confirmations
-                and chat_id not in state.telegram_pending_kb_addition
-                and chat_id not in state.telegram_pending_kb_removal
                 and original_msg_id is None
             )
 
@@ -745,6 +748,7 @@ def register_telegram_routes(app, state):
             # en el flujo de confirmación de WhatsApp pendiente
             # --------------------------------------------------------
             bypass_wa_flow = False
+            bypass_tpl_flow = False
             has_kb_pending = chat_id in state.telegram_pending_kb_addition or chat_id in state.telegram_pending_kb_removal
             if chat_id in state.superintendente_pending_wa:
                 if text_lower.startswith("/super") or has_kb_pending or any(
@@ -753,6 +757,57 @@ def register_telegram_routes(app, state):
                     log.info("[WA_CONFIRM] Se descarta borrador WA por nueva instrucción (%s)", chat_id)
                     state.superintendente_pending_wa.pop(chat_id, None)
                     bypass_wa_flow = True
+            if chat_id in state.superintendente_pending_tpl:
+                if text_lower.startswith("/super") or _looks_like_new_instruction(text_lower):
+                    log.info("[TPL_CONFIRM] Se descarta borrador de plantilla por nueva instrucción (%s)", chat_id)
+                    state.superintendente_pending_tpl.pop(chat_id, None)
+                    bypass_tpl_flow = True
+
+            # --------------------------------------------------------
+            # 1️⃣ ter - Confirmación de envío de plantillas (Superintendente)
+            # --------------------------------------------------------
+            if chat_id in state.superintendente_pending_tpl and not bypass_tpl_flow:
+                pending_tpl = state.superintendente_pending_tpl[chat_id]
+                guest_ids = pending_tpl.get("guest_ids") or []
+                display_ids = pending_tpl.get("display_guest_ids") or guest_ids
+                template_id = pending_tpl.get("template")
+                language_code = pending_tpl.get("language") or "es"
+                parameters = pending_tpl.get("parameters")
+
+                if _is_short_wa_confirmation(text_lower):
+                    sent = 0
+                    errors = 0
+                    for gid in guest_ids:
+                        try:
+                            await state.channel_manager.send_template_message(
+                                gid,
+                                template_id,
+                                parameters=parameters,
+                                language=language_code,
+                                channel="whatsapp",
+                            )
+                            sent += 1
+                        except Exception as exc:
+                            errors += 1
+                            log.warning("[TPL_CONFIRM] Error enviando a %s: %s", gid, exc, exc_info=True)
+
+                    state.superintendente_pending_tpl.pop(chat_id, None)
+                    dest_label = ", ".join(display_ids)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        f"✅ Plantilla {template_id} enviada a {sent}/{len(guest_ids)} huésped(es): {dest_label}",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "tpl_sent"})
+
+                if _is_short_wa_cancel(text_lower):
+                    state.superintendente_pending_tpl.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "Operación cancelada.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "tpl_cancelled"})
 
             # --------------------------------------------------------
             # 1️⃣ ter - Confirmación/ajuste de envío WhatsApp directo
@@ -828,7 +883,12 @@ def register_telegram_routes(app, state):
                                 msg_to_send,
                                 channel="whatsapp",
                             )
-                            await state.memory_manager.save(chat_id, "system", f"[WA_SENT]|{guest_id}|{msg_to_send}")
+                            if state.memory_manager:
+                                state.memory_manager.save(
+                                    chat_id,
+                                    "system",
+                                    f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                )
                             await state.channel_manager.send_message(
                                 chat_id,
                                 f"✅ Mensaje enviado a {guest_id}:\n{msg_to_send}",
@@ -877,6 +937,70 @@ def register_telegram_routes(app, state):
                     state.superintendente_pending_review.pop(chat_id, None)
                     return JSONResponse({"status": "history_served"})
 
+            # ✅ Confirmaciones rápidas de borradores de plantilla
+            normalized_reply = text.strip().lower()
+            tpl_pending = state.superintendente_pending_tpl.get(chat_id)
+            # Recupera último borrador desde la memoria si se reinició el proceso.
+            if not tpl_pending and normalized_reply in {"sí", "si", "no"}:
+                try:
+                    recent = state.memory_manager.get_memory(chat_id, limit=10)
+                    marker = "[TPL_DRAFT]|"
+                    last_draft = None
+                    for msg in reversed(recent):
+                        content = msg.get("content", "")
+                        if marker in content:
+                            line = next((ln for ln in content.splitlines() if marker in ln), "")
+                            raw_payload = line[len(marker):] if line else content.split(marker, 1)[1]
+                            raw_payload = raw_payload.split("\n", 1)[0].strip()
+                            try:
+                                tpl_pending = json.loads(raw_payload)
+                            except Exception:
+                                tpl_pending = None
+                            break
+                except Exception as exc:
+                    log.warning("[TPL_RECOVER] No se pudo recuperar borrador: %s", exc)
+
+            if tpl_pending and normalized_reply in {"sí", "si", "no"}:
+                if normalized_reply == "no":
+                    state.superintendente_pending_tpl.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        "❌ Envío cancelado. Si necesitas otro borrador, indícame la plantilla y los datos.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "tpl_cancelled"})
+
+                try:
+                    template = tpl_pending.get("template")
+                    guest_ids = tpl_pending.get("guest_ids") or []
+                    parameters = tpl_pending.get("parameters") or []
+                    language = tpl_pending.get("language") or "es"
+
+                    for gid in guest_ids:
+                        await state.channel_manager.send_template_message(
+                            gid,
+                            template,
+                            parameters=parameters,
+                            language=language,
+                            channel="whatsapp",
+                        )
+
+                    state.superintendente_pending_tpl.pop(chat_id, None)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        f"✅ Plantilla '{template}' enviada a {', '.join(guest_ids)}.",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "tpl_sent"})
+                except Exception as exc:
+                    log.error("[TPL_SEND] Error enviando plantilla: %s", exc, exc_info=True)
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        f"❌ No se pudo enviar la plantilla: {exc}",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "tpl_error"}, status_code=500)
+
             if super_mode or in_super_session:
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
                 hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME)
@@ -910,11 +1034,12 @@ def register_telegram_routes(app, state):
                                 }
                                 log.info("[WA_DRAFT] Registrado draft para %s desde %s", guest_id, chat_id)
                                 try:
-                                    await state.memory_manager.save(
-                                        conversation_id=chat_id,
-                                        role="system",
-                                        content=f"[WA_DRAFT]|{guest_id}|{msg_to_send}",
-                                    )
+                                    if state.memory_manager:
+                                        state.memory_manager.save(
+                                            conversation_id=chat_id,
+                                            role="system",
+                                            content=f"[WA_DRAFT]|{guest_id}|{msg_to_send}",
+                                        )
                                 except Exception:
                                     pass
                                 preview = (
@@ -930,6 +1055,51 @@ def register_telegram_routes(app, state):
                                     channel="telegram",
                                 )
                                 return JSONResponse({"status": "wa_draft"})
+
+                    tpl_marker = "[TPL_DRAFT]|"
+                    if tpl_marker in response:
+                        marker_line = next((ln for ln in response.splitlines() if tpl_marker in ln), "")
+                        raw_payload = marker_line[len(tpl_marker):] if marker_line else response.split(tpl_marker, 1)[1]
+                        raw_payload = raw_payload.split("\n", 1)[0].strip()
+                        try:
+                            tpl_payload = json.loads(raw_payload)
+                        except Exception as exc:
+                            log.error("[TPL_DRAFT] No se pudo parsear el payload: %s", exc, exc_info=True)
+                            tpl_payload = None
+
+                        if tpl_payload:
+                            state.superintendente_pending_tpl[chat_id] = tpl_payload
+                            # Al iniciar un borrador de plantilla, limpia pendientes de KB para evitar colisiones de confirmación.
+                            state.telegram_pending_kb_addition.pop(chat_id, None)
+                            state.telegram_pending_kb_removal.pop(chat_id, None)
+                            # Guarda el marcador en memoria para poder recuperar tras reinicios.
+                            try:
+                                if state.memory_manager:
+                                    state.memory_manager.save(
+                                        conversation_id=chat_id,
+                                        role="system",
+                                        content=f"{tpl_marker}{raw_payload}",
+                                    )
+                            except Exception as exc:
+                                log.warning("[TPL_DRAFT] No se pudo guardar en memoria: %s", exc)
+                            preview = response.replace(marker_line, "").replace(f"{tpl_marker}{raw_payload}", "").strip()
+                            if not preview:
+                                guests = tpl_payload.get("display_guest_ids") or tpl_payload.get("guest_ids") or []
+                                guest_label = ", ".join(guests)
+                                preview = (
+                                    f"📝 Borrador preparado para {guest_label} "
+                                    f"(plantilla {tpl_payload.get('template')}).\n"
+                                    "✅ Responde 'sí' para enviar o 'no' para cancelar."
+                                )
+
+                            await state.channel_manager.send_message(
+                                chat_id,
+                                format_superintendente_message(preview),
+                                channel="telegram",
+                            )
+                            return JSONResponse({"status": "tpl_draft"})
+                        else:
+                            response = response.replace(marker_line, "").replace(f"{tpl_marker}{raw_payload}", "").strip()
 
                     kb_remove_marker = "[KB_REMOVE_DRAFT]|"
                     if kb_remove_marker in response:
@@ -973,11 +1143,12 @@ def register_telegram_routes(app, state):
                         state.telegram_pending_kb_removal[chat_id] = pending_payload
 
                         try:
-                            await state.memory_manager.save(
-                                conversation_id=chat_id,
-                                role="system",
-                                content=draft_payload,
-                            )
+                            if state.memory_manager:
+                                state.memory_manager.save(
+                                    conversation_id=chat_id,
+                                    role="system",
+                                    content=draft_payload,
+                                )
                         except Exception:
                             pass
 
@@ -1056,6 +1227,11 @@ def register_telegram_routes(app, state):
                             formatted = (
                                 "📝 Borrador de WhatsApp listo. "
                                 "Di 'sí' para enviarlo o escribe ajustes para modificar el mensaje."
+                            )
+                        elif "[TPL_DRAFT]|" in (response or ""):
+                            formatted = (
+                                "📝 Borrador de plantilla listo. "
+                                "Responde 'sí' para enviar o 'no' para cancelar."
                             )
                         else:
                             formatted = "No hay contenido para mostrar. ¿Quieres que reformule o muestre el borrador?"

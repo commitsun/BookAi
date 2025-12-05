@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import requests
-from typing import Tuple, Optional, Iterable
+from typing import Tuple, Optional, Iterable, Any
 
 from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
@@ -180,7 +180,7 @@ class WhatsAppChannel(BaseChannel):
         parameters: dict | list | tuple | None = None,
         *,
         language: str = "es",
-    ):
+    ) -> bool:
         """
         Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
         Soporta parámetros opcionales en orden de aparición.
@@ -198,14 +198,33 @@ class WhatsAppChannel(BaseChannel):
                 return params
             return [params]
 
+        def _normalize_param(val: Any) -> dict | None:
+            """
+            Normaliza parámetros para Meta evitando enviar parameter_name vacío
+            (causa error #100 en la API).
+            """
+            if val is None:
+                return None
+            if not isinstance(val, dict):
+                return {"type": "text", "text": str(val)}
+
+            pname = (val.get("parameter_name") or "").strip()
+            ptype = val.get("type") or "text"
+            ptext = "" if val.get("text") is None else str(val.get("text"))
+
+            if pname:
+                return {"type": ptype, "parameter_name": pname, "text": ptext}
+
+            # Sin nombre: mandamos como ordinal simple para evitar rechazo.
+            if "text" in val:
+                return {"type": ptype, "text": ptext}
+            return {"type": "text", "text": str(val)}
+
         body_params = []
         for val in _iter_params(parameters):
-            if val is None:
-                continue
-            if isinstance(val, dict) and (val.get("parameter_name") or val.get("type")):
-                body_params.append(val)
-            else:
-                body_params.append({"type": "text", "text": str(val)})
+            norm = _normalize_param(val)
+            if norm:
+                body_params.append(norm)
         components = [{"type": "body", "parameters": body_params}] if body_params else []
 
         payload = {
@@ -232,11 +251,33 @@ class WhatsAppChannel(BaseChannel):
                 timeout=10,
             )
             if r.status_code != 200:
-                log.error(f"⚠️ Error WhatsApp (template {template_id}): {r.text}")
-            else:
-                log.info(f"🚀 WhatsApp (plantilla) → {user_id}: {template_id} ({r.status_code})")
+                log.error(
+                    "⚠️ Error WhatsApp (template %s → %s): status=%s body=%s payload=%s",
+                    template_id,
+                    user_id,
+                    r.status_code,
+                    r.text,
+                    payload,
+                )
+                return False
+
+            log.info(
+                "🚀 WhatsApp (plantilla) → %s: %s (%s) params=%s",
+                user_id,
+                template_id,
+                r.status_code,
+                payload.get("template", {}).get("components"),
+            )
+            return True
         except Exception as e:
-            log.error(f"⚠️ Error enviando plantilla WhatsApp: {e}", exc_info=True)
+            log.error(
+                "⚠️ Error enviando plantilla WhatsApp (%s → %s): %s",
+                template_id,
+                user_id,
+                e,
+                exc_info=True,
+            )
+            return False
 
     # ---------------------------------------------------------------------
     # Parser de payload (Meta Webhook)

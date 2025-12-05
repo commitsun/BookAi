@@ -167,14 +167,21 @@ class ChannelManager:
                     return
             self._recent_sends[key] = (payload_hash, now)
 
+            result = None
             if asyncio.iscoroutinefunction(send_fn):
-                await send_fn(chat_id, template_id, parameters=parameters, language=language)
+                result = await send_fn(chat_id, template_id, parameters=parameters, language=language)
             else:
-                send_fn(chat_id, template_id, parameters=parameters, language=language)
+                result = send_fn(chat_id, template_id, parameters=parameters, language=language)
+
+            # Considera éxito si no devuelve nada o es truthy
+            ok = True if result is None else bool(result)
+            if not ok:
+                raise RuntimeError(f"El canal '{channel}' no confirmó el envío de la plantilla.")
 
             log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
         except Exception as e:
             log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
+            raise
 
 
     # ------------------------------------------------------------------

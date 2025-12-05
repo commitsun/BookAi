@@ -9,6 +9,7 @@ Permite:
 from __future__ import annotations
 
 import logging
+import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, List, Optional
 
@@ -34,6 +35,101 @@ def _norm_hotel(hotel_code: Optional[str]) -> Optional[str]:
     return clean.upper() or None
 
 
+def _norm_param_key(key: Any) -> str:
+    return re.sub(r"\s+", "_", str(key or "").strip())
+
+
+def _is_missing_column_error(exc: Exception, column: str) -> bool:
+    """
+    Detecta errores de columna inexistente en Supabase/Postgrest.
+    Se usa un chequeo relajado porque la estructura del APIError puede variar.
+    """
+    code = getattr(exc, "code", None) or getattr(getattr(exc, "response", None), "status_code", None)
+    if str(code) == "42703":  # undefined_column en Postgres
+        return True
+
+    text = str(getattr(exc, "message", "")) or str(exc)
+    if hasattr(exc, "args") and exc.args:
+        payload = exc.args[0]
+        if isinstance(payload, dict):
+            payload_code = payload.get("code") or payload.get("status")
+            if str(payload_code) == "42703":
+                return True
+            text = str(payload)
+        else:
+            text = str(payload)
+    return column in text and "does not exist" in text
+
+
+def _extract_param_hints(data: Dict[str, Any]) -> Dict[str, str]:
+    """
+    Extrae metadatos de parámetros (labels/ayudas) desde la fila de Supabase.
+    Soporta estructuras flexibles: dict plano, lista de dicts o campos conocidos.
+    """
+    candidate = (
+        data.get("parameter_hints")
+        or data.get("param_hints")
+        or data.get("parameters_info")
+        or data.get("parameters_meta")
+        or data.get("parameters_labels")
+        or data.get("parameters")
+        or data.get("params")
+    )
+
+    hints: Dict[str, str] = {}
+
+    def _pick_label(val: Any) -> Optional[str]:
+        if isinstance(val, str):
+            return val.strip() or None
+        if isinstance(val, dict):
+            return (
+                val.get("label")
+                or val.get("title")
+                or val.get("description")
+                or val.get("hint")
+                or val.get("help")
+            )
+        return None
+
+    if isinstance(candidate, dict):
+        for key, val in candidate.items():
+            name = _norm_param_key(key)
+            if not name:
+                continue
+            label = _pick_label(val)
+            if label:
+                hints[name] = str(label).strip()
+    elif isinstance(candidate, list):
+        for item in candidate:
+            if not isinstance(item, dict):
+                continue
+            name = _norm_param_key(item.get("name") or item.get("key") or item.get("code"))
+            if not name:
+                continue
+            label = _pick_label(item)
+            if label:
+                hints[name] = str(label).strip()
+
+    # Intenta extraer desde la estructura de Meta si no se obtuvo nada
+    if not hints:
+        components = data.get("components") or []
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            example = comp.get("example") or {}
+            params = example.get("body_text_named_params") or example.get("header_text_named_params") or []
+            for p in params:
+                if not isinstance(p, dict):
+                    continue
+                name = _norm_param_key(p.get("param_name") or p.get("name"))
+                if not name:
+                    continue
+                label = _pick_label(p) or name
+                hints[name] = str(label).strip()
+
+    return hints
+
+
 @dataclass
 class TemplateDefinition:
     """Definición de plantilla WhatsApp."""
@@ -46,6 +142,7 @@ class TemplateDefinition:
     parameter_format: str = "ORDINAL"  # ORDINAL o NAMED
     description: Optional[str] = None
     active: bool = True
+    parameter_hints: Dict[str, str] = field(default_factory=dict)
 
     def key(self) -> str:
         return TemplateRegistry.build_key(
@@ -77,16 +174,29 @@ class TemplateDefinition:
 
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TemplateDefinition":
+        hints = _extract_param_hints(data)
+        order = list(data.get("parameter_order") or [])
+        if not order and hints:
+            order = list(hints.keys())
+        param_format_raw = str(data.get("parameter_format", "") or "").strip().upper()
+        if not param_format_raw:
+            # Si no viene especificado pero hay hints/orden, asumimos NAMED (nuevo formato de Meta).
+            param_format_raw = "NAMED" if order or hints else "ORDINAL"
         return cls(
             code=_norm_code(data.get("code")),
             language=_norm_lang(data.get("language")),
             hotel_code=_norm_hotel(data.get("hotel_code")),
             whatsapp_name=(data.get("whatsapp_name") or data.get("code") or "").strip(),
-            parameter_order=list(data.get("parameter_order") or []),
+            parameter_order=order,
             description=data.get("description"),
             active=bool(data.get("active", True)),
-            parameter_format=str(data.get("parameter_format", "ORDINAL")).upper(),
+            parameter_format=param_format_raw or "ORDINAL",
+            parameter_hints=hints,
         )
+
+    def get_param_label(self, name: str) -> str:
+        key = _norm_param_key(name)
+        return self.parameter_hints.get(key) or name
 
     def build_meta_parameters(self, provided: Dict[str, Any] | None) -> List[Any]:
         """
@@ -152,14 +262,24 @@ class TemplateRegistry:
             log.warning("TemplateRegistry: supabase_client no disponible.")
             return
         try:
-            query = supabase_client.table(table).select("*").limit(1000)
+            def _base_query():
+                return supabase_client.table(table).select("*").limit(1000)
+
+            query = _base_query()
             try:
-                query = query.eq("active", True)
-            except Exception:
-                # Si no existe la columna active, se ignora el filtro
-                pass
-            resp = query.execute()
+                resp = query.eq("active", True).execute()
+            except Exception as exc:
+                if _is_missing_column_error(exc, "active"):
+                    log.warning(
+                        "TemplateRegistry: columna 'active' no existe en %s, cargando sin filtro.", table
+                    )
+                    resp = _base_query().execute()
+                else:
+                    raise
             data = resp.data or []
+            if data and any(isinstance(item, dict) and "active" in item for item in data):
+                # Si la columna existe, filtramos localmente para mantener compatibilidad.
+                data = [item for item in data if item.get("active", True)]
             loaded = 0
             for item in data:
                 tpl = TemplateDefinition.from_dict(item)
