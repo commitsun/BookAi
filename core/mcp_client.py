@@ -19,6 +19,7 @@ if not mcp_url:
 mcp_connections = {
     "InfoAgent": {"transport": "streamable_http", "url": mcp_url},
     "DispoPreciosAgent": {"transport": "streamable_http", "url": mcp_url},
+    "OnboardingAgent": {"transport": "streamable_http", "url": mcp_url},
     # InternoAgent NO usa MCP — es local (Telegram + Supabase)
 }
 
@@ -53,6 +54,9 @@ async def get_filtered_tools(server_name: str):
                 filtered.append(t)
 
             elif server_name == "DispoPreciosAgent" and any(k in n for k in ["disponibilidad", "precio", "token"]):
+                filtered.append(t)
+
+            elif server_name == "OnboardingAgent" and any(k in n for k in ["token", "habitacion", "reserva"]):
                 filtered.append(t)
 
         logger.info(f"[MCP] Tools para {server_name}: {[t.name for t in filtered]}")

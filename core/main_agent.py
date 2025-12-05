@@ -23,6 +23,7 @@ from tools.sub_agent_tool_wrapper import create_sub_agent_tool
 from agents.dispo_precios_agent import DispoPreciosAgent
 from agents.info_agent import InfoAgent
 from agents.interno_agent import InternoAgent
+from agents.onboarding_agent import OnboardingAgent
 
 # Utilidades
 from core.utils.utils_prompt import load_prompt
@@ -100,6 +101,21 @@ class MainAgent:
                     "si no hay datos, recurre a Google antes de escalar."
                 ),
                 sub_agent=info_agent,
+                memory_manager=self.memory_manager,
+                chat_id=chat_id,
+                hotel_name=hotel_name,
+            )
+        )
+
+        onboarding_agent = OnboardingAgent(memory_manager=self.memory_manager)
+        tools.append(
+            create_sub_agent_tool(
+                name="onboarding_reservas",
+                description=(
+                    "Gestiona reservas completas: obtiene token, identifica roomTypeId y crea la reserva. "
+                    "Úsala cuando el huésped quiera confirmar una reserva con datos concretos."
+                ),
+                sub_agent=onboarding_agent,
                 memory_manager=self.memory_manager,
                 chat_id=chat_id,
                 hotel_name=hotel_name,
