@@ -175,18 +175,20 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
 
     try:
         target_lang = language_manager.detect_language(esc.guest_message)
+        target_lang = language_manager.detect_language(manager_response, prev_lang=target_lang)
     except Exception:
         target_lang = "es"
 
     system_prompt = (
         "Eres un asistente especializado en atención hotelera.\n"
         "Tu tarea es reformular el mensaje del encargado para el huésped con un tono cálido, empático y profesional.\n"
-        "Usa el mismo idioma del huésped.\n"
+        "Usa SIEMPRE el idioma del huésped: {target_lang}.\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
 
     user_prompt = (
+        f"Idioma objetivo (ISO 639-1): {target_lang}\n\n"
         f"Mensaje original del huésped:\n{esc.guest_message}\n\n"
         f"Respuesta del encargado:\n{manager_response}\n"
     )
@@ -254,13 +256,13 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
     # ✅ Caso 2: confirmado → envío final
     if confirmed:
-        final_text = (esc.draft_response or "").strip()
+        final_text = (esc.draft_response or adjustments or "").strip()
         if not final_text:
             return "⚠️ No hay texto final disponible para enviar."
 
         try:
-            lang = language_manager.detect_language(final_text)
-            final_text = language_manager.ensure_language(final_text, lang)
+            guest_lang = language_manager.detect_language(esc.guest_message)
+            final_text = language_manager.ensure_language(final_text, guest_lang)
         except Exception:
             pass
 

@@ -348,7 +348,21 @@ class MainAgent:
                     escalation_type="error",
                     context="Escalación por excepción en MainAgent",
                 )
-                return EscalationMessages.get_by_context("urgent")
+                fallback_msg = (
+                    "Ha ocurrido un problema interno y ya lo estoy revisando con el encargado. "
+                    "Te aviso en breve."
+                )
+
+                # Guarda el intercambio aunque haya error para no perder contexto
+                try:
+                    if self.memory_manager:
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", fallback_msg)
+                except Exception:
+                    log.debug("No se pudo guardar en memoria tras excepción", exc_info=True)
+
+                # Mensaje determinista → evita duplicados por variaciones aleatorias
+                return fallback_msg
 
 
 def create_main_agent(

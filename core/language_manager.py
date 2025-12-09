@@ -2,11 +2,15 @@
 import os
 import re
 from functools import lru_cache
-from typing import Optional
+from typing import Optional, Tuple
+
 from langchain_openai import ChatOpenAI
+from langdetect import DetectorFactory, LangDetectException, detect_langs
 
 OPENAI_MODEL = "gpt-4.1-mini"
 
+# Fijamos seed para resultados deterministas en langdetect
+DetectorFactory.seed = 0
 
 @lru_cache(maxsize=1)
 def _ack_tokens() -> set[str]:
@@ -44,6 +48,28 @@ def _normalize_ack(text: str) -> str:
     return txt
 
 
+def _langdetect_guess(text: str) -> Optional[Tuple[str, float]]:
+    """
+    Intenta detectar idioma de forma rápida sin LLM.
+    Devuelve (lang, prob) o None si no se puede determinar.
+    """
+    if not text:
+        return None
+    try:
+        candidates = detect_langs(text)
+        if not candidates:
+            return None
+        best = candidates[0]
+        code = (best.lang or "").strip().lower()
+        if len(code) != 2:
+            return None
+        return code, best.prob
+    except LangDetectException:
+        return None
+    except Exception:
+        return None
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -63,6 +89,51 @@ class LanguageManager:
         if normalized in _ack_tokens():
             return (prev_lang or "es")
 
+        # Mensajes muy cortos (ej. "no", "ok"): intenta detectar rápido y,
+        # si no hay alta confianza, conserva el idioma previo para evitar saltos.
+        words = text.split()
+        if len(words) == 1 and len(text) <= 4:
+            guess = _langdetect_guess(text)
+            if guess:
+                code, prob = guess
+                threshold = 0.8
+                if prob >= threshold:
+                    return code
+            if prev_lang:
+                return prev_lang.strip().lower()
+
+        # Paso 1: heurística rápida con langdetect
+        guess = _langdetect_guess(text)
+        if guess:
+            code, prob = guess
+            threshold_env = os.getenv("LANGDETECT_THRESHOLD")
+            try:
+                threshold = float(threshold_env) if threshold_env else 0.75
+            except ValueError:
+                threshold = 0.75
+
+            # Si hay idioma previo y el nuevo difiere, exige evidencia clara para cambiar
+            if prev_lang and code != prev_lang.strip().lower():
+                msg_len = len(text)
+                alpha_chars = sum(ch.isalpha() for ch in text)
+                alpha_ratio = alpha_chars / max(msg_len, 1)
+                word_count = len(text.split())
+                # Reglas de cambio: mensaje suficientemente largo y con letras,
+                # y probabilidad alta.
+                switch_threshold = float(os.getenv("LANG_SWITCH_THRESHOLD", "0.92"))
+
+                if word_count < 3 or alpha_ratio < 0.6:
+                    return prev_lang.strip().lower()
+
+                if prob < max(threshold, switch_threshold):
+                    return prev_lang.strip().lower()
+
+            if prob >= threshold:
+                return code
+            # Si es ambiguo pero hay idioma previo, mantenemos el previo
+            if prev_lang:
+                return prev_lang.strip().lower()
+
         prompt = [
             {
                 "role": "system",
@@ -79,11 +150,17 @@ class LanguageManager:
             out = self.llm.invoke(prompt).content.strip().lower()
             out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "es"
             if len(out) != 2:
-                return "es"
+                return (prev_lang or "es")
+
+            # Evitar cambios bruscos si el LLM devuelve un idioma distinto sin evidencia fuerte
+            if prev_lang and out != prev_lang.strip().lower():
+                # Si el mensaje es corto, conserva el idioma previo
+                if len(text) < 40:
+                    return prev_lang.strip().lower()
             return out
         except Exception as e:
             print(f"⚠️ Error detectando idioma: {e}")
-            return "es"
+            return (prev_lang or "es")
 
     def ensure_language(self, text: str, lang_code: str) -> str:
         if not text:

@@ -270,9 +270,7 @@ class TemplateRegistry:
                 resp = query.eq("active", True).execute()
             except Exception as exc:
                 if _is_missing_column_error(exc, "active"):
-                    log.warning(
-                        "TemplateRegistry: columna 'active' no existe en %s, cargando sin filtro.", table
-                    )
+                    log.info("TemplateRegistry: la columna 'active' no existe en %s; se carga sin filtro.", table)
                     resp = _base_query().execute()
                 else:
                     raise

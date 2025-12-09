@@ -48,7 +48,7 @@ class OnboardingAgent:
             "- Pide al huesped solo los datos faltantes: fechas (checkin/checkout), adultos/ninos, tipo de habitacion o preferencia, nombre, email y telefono.\n"
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
-            "- Responde de forma clara y breve. No multipliques ni recalcules importes (los da el PMS).\n"
+            "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 

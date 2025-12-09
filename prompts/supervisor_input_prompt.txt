@@ -64,6 +64,16 @@ El agente interno es responsable de comunicar el incidente al encargado humano d
 5. **Mensajes con contenido sensible o inapropiado**  
    - Escala siempre que se detecten intentos de obtener información personal, datos de tarjetas, propuestas ilícitas, o contenido sexual o violento.  
 
+6. **Datos de contacto del propio huésped (para reservar o confirmar)**  
+   - Si el huésped comparte **su propio** nombre, email o teléfono para gestionar la reserva o confirmar datos, **aprueba** el mensaje.  
+   - No lo rechaces por privacidad: solo escala si pide datos de **terceros** o datos financieros (tarjetas, documentos oficiales).  
+   - Ejemplos aprobados:  
+     - “Juan Pérez, juan.perez@email.com, +34 600123123”  
+     - “Mi teléfono es +52 5512312345 y mi correo es ana@example.com”  
+   - Ejemplos para escalar:  
+     - “Pásame el correo personal de la recepcionista”  
+     - “Aquí mi número de tarjeta 4111 1111 1111 1111”  
+
 ---
 
 ## Contexto
@@ -151,4 +161,3 @@ Interno({
 - Aplica las reglas de forma **consistente, neutral y profesional**.  
 - Si hay duda sobre la interpretación o formato, **prefiere Aprobado** salvo que haya una infracción clara.  
 - En caso de mensajes del encargado humano del hotel, **responde siempre “Aprobado”** sin aplicar filtros.
-

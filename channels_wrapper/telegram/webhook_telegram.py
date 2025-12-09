@@ -24,6 +24,7 @@ from core.message_utils import (
     sanitize_wa_message,
 )
 from core.db import get_conversation_history
+from core.language_manager import language_manager
 
 log = logging.getLogger("TelegramWebhook")
 AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() == "true"
@@ -93,6 +94,25 @@ def register_telegram_routes(app, state):
             return True
 
         return 0 < len(tokens) <= 2 and all(tok in cancel_words for tok in tokens)
+
+    def _normalize_guest_id(guest_id: str | None) -> str:
+        return str(guest_id or "").replace("+", "").strip()
+
+    def _ensure_guest_language(msg: str, guest_id: str) -> str:
+        """Mantiene el idioma del huésped al reenviar mensajes del superintendente."""
+        if not msg:
+            return msg
+        try:
+            lang = (
+                state.chat_lang.get(_normalize_guest_id(guest_id))
+                or state.chat_lang.get(guest_id)
+            )
+            if not lang:
+                return msg
+            return language_manager.ensure_language(msg, lang)
+        except Exception as exc:
+            log.warning("[LANG] No se pudo ajustar idioma para %s: %s", guest_id, exc)
+            return msg
 
     def _looks_like_new_instruction(text: str) -> bool:
         """
@@ -819,15 +839,16 @@ def register_telegram_routes(app, state):
 
                 if _is_short_wa_confirmation(text_lower):
                     log.info("[WA_CONFIRM] Enviando mensaje a %s desde %s", guest_id, chat_id)
+                    final_msg = _ensure_guest_language(draft_msg, guest_id)
                     await state.channel_manager.send_message(
                         guest_id,
-                        draft_msg,
+                        final_msg,
                         channel="whatsapp",
                     )
                     state.superintendente_pending_wa.pop(chat_id, None)
                     await state.channel_manager.send_message(
                         chat_id,
-                        f"✅ Enviado a {guest_id}: {draft_msg}",
+                        f"✅ Enviado a {guest_id}: {final_msg}",
                         channel="telegram",
                     )
                     return JSONResponse({"status": "wa_sent"})
@@ -846,6 +867,7 @@ def register_telegram_routes(app, state):
                 llm = getattr(state.superintendente_agent, "llm", None)
                 rewritten = await _rewrite_wa_draft(llm, draft_msg, text)
                 rewritten = _clean_wa_payload(rewritten)
+                rewritten = _ensure_guest_language(rewritten, guest_id)
                 state.superintendente_pending_wa[chat_id]["message"] = rewritten
                 await state.channel_manager.send_message(
                     chat_id,
@@ -878,6 +900,7 @@ def register_telegram_routes(app, state):
                         if len(parts) == 3:
                             guest_id, msg_raw = parts[1], parts[2]
                             msg_to_send = _clean_wa_payload(msg_raw)
+                            msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
                             await state.channel_manager.send_message(
                                 guest_id,
                                 msg_to_send,
@@ -1028,6 +1051,7 @@ def register_telegram_routes(app, state):
                                 response = response.replace(draft_payload, "").strip()
                             else:
                                 msg_to_send = _clean_wa_payload(msg_raw)
+                                msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
                                 state.superintendente_pending_wa[chat_id] = {
                                     "guest_id": guest_id,
                                     "message": msg_to_send,

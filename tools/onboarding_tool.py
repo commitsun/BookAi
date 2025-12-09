@@ -24,6 +24,24 @@ def _find_tool(tools: list[Any], candidates: list[str]) -> Optional[Any]:
     return None
 
 
+def _safe_parse_json(raw: Any, context: str) -> Optional[Any]:
+    """
+    Intenta parsear JSON de forma tolerante:
+    - Devuelve None si viene vacío o no parseable.
+    - Loguea el contexto para facilitar debugging sin romper el flujo.
+    """
+    if raw is None:
+        return None
+    if isinstance(raw, str) and not raw.strip():
+        log.info("Respuesta vacía en %s", context)
+        return []
+    try:
+        return json.loads(raw) if isinstance(raw, str) else raw
+    except Exception as exc:
+        log.warning("No se pudo parsear respuesta en %s: %s", context, exc)
+        return []
+
+
 async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any], Optional[str]]:
     try:
         tools = await mcp_client.get_tools(server_name=server_name)
@@ -90,7 +108,9 @@ def create_room_type_tool():
 
         try:
             raw = await type_tool.ainvoke(payload)
-            parsed = json.loads(raw) if isinstance(raw, str) else raw
+            parsed = _safe_parse_json(raw, "tipos de habitacion")
+            if parsed is None:
+                return "⚠️ No pude leer la lista de tipos de habitación (respuesta vacía o inválida)."
         except Exception as exc:  # pragma: no cover - fallbacks de red
             log.error("Error consultando tipos de habitacion: %s", exc, exc_info=True)
             return f"❌ Error consultando tipos de habitacion: {exc}"
@@ -103,7 +123,15 @@ def create_room_type_tool():
             ]
             if matched:
                 return json.dumps(matched, ensure_ascii=False)
-            return f"⚠️ No encontre coincidencias para '{room_type_name}'. Tipos disponibles: {json.dumps(items, ensure_ascii=False)}"
+            if not items:
+                return (
+                    f"⚠️ No pude obtener la lista de tipos de habitación ahora mismo. "
+                    f"Intento de nuevo o lo consulto con el encargado."
+                )
+            return (
+                f"⚠️ No encontré coincidencias para '{room_type_name}'. "
+                f"Tipos disponibles: {json.dumps(items, ensure_ascii=False)}"
+            )
 
         return json.dumps(items, ensure_ascii=False)
 
@@ -158,8 +186,11 @@ def create_reservation_tool():
             "key": token,
         }
         raw = await type_tool.ainvoke(payload)
-        parsed = json.loads(raw) if isinstance(raw, str) else raw
+        parsed = _safe_parse_json(raw, "resolver roomTypeId")
         items = parsed if isinstance(parsed, list) else []
+
+        if not items:
+            return None, "No pude obtener la lista de tipos de habitación en este momento."
 
         target = room_type_name.strip().lower()
         for item in items:

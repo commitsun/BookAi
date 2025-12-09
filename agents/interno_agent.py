@@ -253,12 +253,17 @@ class InternoAgent:
     ) -> str:
 
         chat_id = chat_id or self._resolve_guest_chat_id(escalation_id)
-        return await self.ainvoke(
+        draft_result = await self.ainvoke(
             user_input=f"Respuesta del encargado: {manager_reply}",
             chat_id=chat_id,
             escalation_id=escalation_id,
             escalation_context="HUMAN_RESPONSE",
             context_window=20,
+        )
+        return self._ensure_draft_preview(
+            escalation_id=escalation_id,
+            manager_reply=manager_reply,
+            draft_result=draft_result,
         )
 
     async def send_confirmed_response(
@@ -614,6 +619,44 @@ Responde:
         except Exception as exc:
             log.warning("No se pudo refinar KB con IA: %s", exc, exc_info=True)
             return topic, category, draft_content
+
+    def _ensure_draft_preview(self, escalation_id: str, manager_reply: str, draft_result: str) -> str:
+        """
+        Refuerza el flujo de borradores:
+        - Asegura que haya draft_response guardado en memoria/DB
+        - Devuelve un mensaje con instrucciones claras de OK/modificar si el agente no las generó
+        """
+
+        esc = self.escalations.get(escalation_id)
+        base_draft = (manager_reply or "").strip()
+
+        if esc:
+            if esc.draft_response and esc.draft_response.strip():
+                base_draft = esc.draft_response.strip()
+            else:
+                esc.draft_response = base_draft
+                try:
+                    from core.escalation_db import update_escalation
+                    update_escalation(escalation_id, {"draft_response": base_draft})
+                except Exception as exc:
+                    log.debug("No se pudo actualizar draft_response en DB: %s", exc)
+
+        preview = (draft_result or "").strip()
+        if not base_draft:
+            return preview or "No se pudo generar un borrador."
+
+        normalized = preview.lower()
+        has_prompt = "borrador" in normalized and "ok" in normalized
+
+        if has_prompt:
+            return preview
+
+        return (
+            "📝 *BORRADOR DE RESPUESTA PROPUESTO:*\n\n"
+            f"{base_draft}\n\n"
+            "✏️ Si deseas modificar el texto, escribe tus ajustes directamente.\n"
+            "✅ Si estás conforme, responde con 'OK' para enviarlo al huésped."
+        )
 
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
         if not self.memory_manager:
