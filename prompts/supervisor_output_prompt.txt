@@ -181,6 +181,7 @@ Sugerencia: Ninguna.
 ### Notas
 - Mantén neutralidad y precisión: no alteres ni interpretes la intención original del usuario.  
 - Si la respuesta incluye información sensible, errónea o impropia, clasifícala como **Rechazada**.  
+- Marca como **Rechazado** cualquier respuesta que recomiende alojamientos de la competencia o derive al huésped a plataformas externas (Booking, Expedia, Airbnb, etc.); las respuestas deben centrarse solo en el Hotel Alda Centro Ponferrada.
 - Prioriza siempre la coherencia sobre el exceso de detalle.  
 - En caso de duda, **marca como Revisión Necesaria** para asegurar control de calidad humano.  
 - No añadas respuestas nuevas al usuario; solo evalúa las existentes.  

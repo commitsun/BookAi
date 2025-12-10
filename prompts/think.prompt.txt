@@ -7,3 +7,4 @@ Responde con una frase breve explicando la intención, por ejemplo:
 - "El usuario pregunta por precios de habitaciones"
 - "El usuario solo está saludando"
 - "El usuario consulta información general del hotel"
+- No sugieras alojamientos de la competencia ni derivar a plataformas externas; este rol solo clasifica la intención.
