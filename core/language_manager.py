@@ -12,6 +12,18 @@ OPENAI_MODEL = "gpt-4.1-mini"
 # Fijamos seed para resultados deterministas en langdetect
 DetectorFactory.seed = 0
 
+# Mapeo simple nombre → ISO 639-1 para peticiones explícitas de idioma
+LANG_ALIASES = {
+    "es": {"espanol", "español", "castellano", "spanish"},
+    "en": {"ingles", "inglés", "english"},
+    "pt": {"portugues", "portugués", "portuguese", "português", "brasileiro"},
+    "fr": {"frances", "francés", "french"},
+    "it": {"italiano", "italian"},
+    "de": {"aleman", "alemán", "german", "deutsch"},
+    "gl": {"gallego", "galego"},
+    "ca": {"catalan", "catalán"},
+}
+
 @lru_cache(maxsize=1)
 def _ack_tokens() -> set[str]:
     """
@@ -48,6 +60,28 @@ def _normalize_ack(text: str) -> str:
     return txt
 
 
+def _short_greeting_lang(text: str) -> Optional[str]:
+    """
+    Heurística rápida para saludos cortos que langdetect suele confundir.
+    """
+    token = (text or "").strip().lower()
+    greetings = {
+        "hola": "es",
+        "buenas": "es",
+        "hello": "en",
+        "hi": "en",
+        "hey": "en",
+        "bonjour": "fr",
+        "salut": "fr",
+        "ciao": "it",
+        "hallo": "de",
+        "ola": "pt",  # sin tilde, típico portugués
+        "olá": "pt",
+        "oi": "pt",
+    }
+    return greetings.get(token)
+
+
 def _langdetect_guess(text: str) -> Optional[Tuple[str, float]]:
     """
     Intenta detectar idioma de forma rápida sin LLM.
@@ -70,6 +104,46 @@ def _langdetect_guess(text: str) -> Optional[Tuple[str, float]]:
         return None
 
 
+def _explicit_language_request(text: str) -> Optional[str]:
+    """
+    Detecta si el usuario pide explícitamente hablar en un idioma concreto.
+    Busca combinaciones de verbos típicos + nombre de idioma para evitar falsos positivos.
+    """
+    if not text:
+        return None
+
+    txt = (text or "").lower()
+    keywords = [
+        "habla",
+        "hablar",
+        "responde",
+        "respóndeme",
+        "contesta",
+        "puedes",
+        "podemos",
+        "hablemos",
+        "idioma",
+        "cambia",
+        "cambiar",
+        "language",
+        "speak",
+        "reply",
+        "respond",
+        "write",
+        "talk",
+    ]
+
+    if not any(word in txt for word in keywords):
+        return None
+
+    for code, aliases in LANG_ALIASES.items():
+        for alias in aliases:
+            if re.search(rf"\b{alias}\b", txt):
+                return code
+
+    return None
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -80,27 +154,59 @@ class LanguageManager:
 
     @lru_cache(maxsize=4096)
     def detect_language(self, text: str, prev_lang: Optional[str] = None) -> str:
-        text = (text or "").strip()
+        raw_text = (text or "").strip()
+        # Si vienen varios mensajes combinados (con saltos de línea), usa la última línea real
+        if "\n" in raw_text:
+            parts = [p.strip() for p in raw_text.split("\n") if p.strip()]
+            text = parts[-1] if parts else raw_text
+        else:
+            text = raw_text
+
+        base_lang = (prev_lang or "es").strip().lower() or "es"
+
         if not text:
-            return (prev_lang or "es")
+            return base_lang
+
+        explicit = _explicit_language_request(text)
+        if explicit:
+            return explicit
 
         # Evita cambiar de idioma por acuses/saludos cortos
         normalized = _normalize_ack(text)
         if normalized in _ack_tokens():
-            return (prev_lang or "es")
+            return base_lang
 
-        # Mensajes muy cortos (ej. "no", "ok"): intenta detectar rápido y,
-        # si no hay alta confianza, conserva el idioma previo para evitar saltos.
+        # Mensajes de una sola palabra y cortos (saludos/acuses)
         words = text.split()
-        if len(words) == 1 and len(text) <= 4:
+        if len(words) == 1 and len(text) <= 10:
+            direct = _short_greeting_lang(text)
+            if direct:
+                return direct
             guess = _langdetect_guess(text)
             if guess:
                 code, prob = guess
                 threshold = 0.8
+                if prev_lang and code != base_lang and prob < 0.92:
+                    return base_lang
                 if prob >= threshold:
                     return code
-            if prev_lang:
-                return prev_lang.strip().lower()
+            # como último recurso, intenta con LLM breve
+            llm_quick = self.llm.invoke(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Return ONLY the 2-letter ISO code of the language of the word. "
+                            "If unsure, return 'es'. No punctuation."
+                        ),
+                    },
+                    {"role": "user", "content": text},
+                ]
+            ).content.strip().lower()
+            llm_quick = llm_quick.split()[0].strip(" .,:;|[](){}\"'") if llm_quick else ""
+            if len(llm_quick) == 2:
+                return llm_quick
+            return base_lang
 
         # Paso 1: heurística rápida con langdetect
         guess = _langdetect_guess(text)
@@ -112,27 +218,10 @@ class LanguageManager:
             except ValueError:
                 threshold = 0.75
 
-            # Si hay idioma previo y el nuevo difiere, exige evidencia clara para cambiar
-            if prev_lang and code != prev_lang.strip().lower():
-                msg_len = len(text)
-                alpha_chars = sum(ch.isalpha() for ch in text)
-                alpha_ratio = alpha_chars / max(msg_len, 1)
-                word_count = len(text.split())
-                # Reglas de cambio: mensaje suficientemente largo y con letras,
-                # y probabilidad alta.
-                switch_threshold = float(os.getenv("LANG_SWITCH_THRESHOLD", "0.92"))
-
-                if word_count < 3 or alpha_ratio < 0.6:
-                    return prev_lang.strip().lower()
-
-                if prob < max(threshold, switch_threshold):
-                    return prev_lang.strip().lower()
-
             if prob >= threshold:
                 return code
-            # Si es ambiguo pero hay idioma previo, mantenemos el previo
             if prev_lang:
-                return prev_lang.strip().lower()
+                return base_lang
 
         prompt = [
             {
@@ -150,23 +239,20 @@ class LanguageManager:
             out = self.llm.invoke(prompt).content.strip().lower()
             out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "es"
             if len(out) != 2:
-                return (prev_lang or "es")
+                return base_lang
 
-            # Evitar cambios bruscos si el LLM devuelve un idioma distinto sin evidencia fuerte
-            if prev_lang and out != prev_lang.strip().lower():
-                # Si el mensaje es corto, conserva el idioma previo
-                if len(text) < 40:
-                    return prev_lang.strip().lower()
             return out
         except Exception as e:
             print(f"⚠️ Error detectando idioma: {e}")
-            return (prev_lang or "es")
+            return base_lang
 
     def ensure_language(self, text: str, lang_code: str) -> str:
         if not text:
             return text
 
         lang_code = (lang_code or "es").lower().strip()
+        if len(lang_code) != 2:
+            lang_code = "es"
         prompt = [
             {
                 "role": "system",
