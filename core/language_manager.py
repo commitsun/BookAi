@@ -24,6 +24,18 @@ LANG_ALIASES = {
     "ca": {"catalan", "catalán"},
 }
 
+DEFAULT_SUPPORTED_LANGS = {"es", "en", "pt", "fr", "it", "de", "gl", "ca"}
+
+
+@lru_cache(maxsize=1)
+def _supported_langs() -> set[str]:
+    """
+    Lista de idiomas soportados. Configurable via SUPPORTED_LANGS (coma separada).
+    """
+    raw = os.getenv("SUPPORTED_LANGS", "")
+    langs = {x.strip().lower() for x in raw.split(",") if x.strip()}
+    return langs or set(DEFAULT_SUPPORTED_LANGS)
+
 @lru_cache(maxsize=1)
 def _ack_tokens() -> set[str]:
     """
@@ -163,13 +175,14 @@ class LanguageManager:
             text = raw_text
 
         base_lang = (prev_lang or "es").strip().lower() or "es"
+        supported = _supported_langs()
 
         if not text:
             return base_lang
 
         explicit = _explicit_language_request(text)
         if explicit:
-            return explicit
+            return explicit if explicit in supported else base_lang
 
         # Evita cambiar de idioma por acuses/saludos cortos
         normalized = _normalize_ack(text)
@@ -189,7 +202,7 @@ class LanguageManager:
                 if prev_lang and code != base_lang and prob < 0.92:
                     return base_lang
                 if prob >= threshold:
-                    return code
+                    return code if code in supported else base_lang
             # como último recurso, intenta con LLM breve
             llm_quick = self.llm.invoke(
                 [
@@ -204,7 +217,7 @@ class LanguageManager:
                 ]
             ).content.strip().lower()
             llm_quick = llm_quick.split()[0].strip(" .,:;|[](){}\"'") if llm_quick else ""
-            if len(llm_quick) == 2:
+            if len(llm_quick) == 2 and llm_quick in supported:
                 return llm_quick
             return base_lang
 
@@ -219,7 +232,7 @@ class LanguageManager:
                 threshold = 0.75
 
             if prob >= threshold:
-                return code
+                return code if code in supported else base_lang
             if prev_lang:
                 return base_lang
 
@@ -241,6 +254,8 @@ class LanguageManager:
             if len(out) != 2:
                 return base_lang
 
+            if out not in supported:
+                return base_lang
             return out
         except Exception as e:
             print(f"⚠️ Error detectando idioma: {e}")
