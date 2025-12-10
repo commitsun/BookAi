@@ -47,6 +47,8 @@ def _ack_tokens() -> set[str]:
     if tokens:
         return tokens
     return {
+        "si",
+        "sí",
         "ok",
         "okay",
         "okey",

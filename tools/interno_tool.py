@@ -51,6 +51,15 @@ ESCALATIONS_STORE: Dict[str, Escalation] = {}
 # Se usa para evitar enviar múltiples plantillas al encargado por la misma escalación.
 NOTIFIED_ESCALATIONS: Dict[str, str] = {}
 
+# Gestor de memoria compartido (inyectado desde InternoAgent)
+_MEMORY_MANAGER = None
+
+
+def set_memory_manager(memory_manager):
+    """Permite que las tools guarden mensajes en la memoria global."""
+    global _MEMORY_MANAGER
+    _MEMORY_MANAGER = memory_manager
+
 # =============================================================
 # 📥 INPUT SCHEMAS
 # =============================================================
@@ -268,8 +277,15 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
         try:
             ChannelManager = importlib.import_module("channels_wrapper.manager").ChannelManager
-            cm = ChannelManager()
+            cm = ChannelManager(memory_manager=_MEMORY_MANAGER)
             await cm.send_message(esc.guest_chat_id, final_text, channel="whatsapp")
+
+            # Guarda el mensaje real que vio el huésped en la memoria compartida.
+            try:
+                if _MEMORY_MANAGER:
+                    _MEMORY_MANAGER.save(esc.guest_chat_id, "assistant", final_text)
+            except Exception as mem_exc:
+                log.warning("⚠️ No se pudo guardar en memoria el envío final: %s", mem_exc)
 
             esc.final_response = final_text
             esc.manager_confirmed = True
@@ -310,8 +326,9 @@ async def confirmar_y_enviar_tool(**kwargs) -> str:
     return await confirmar_y_enviar(**kwargs)
 
 
-def create_interno_tools():
+def create_interno_tools(memory_manager=None):
     """Devuelve la lista de herramientas disponibles para el agente interno."""
+    set_memory_manager(memory_manager)
     return [
         notificar_encargado_tool,
         generar_borrador_tool,

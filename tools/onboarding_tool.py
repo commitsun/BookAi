@@ -146,7 +146,7 @@ def create_room_type_tool():
     )
 
 
-def create_reservation_tool():
+def create_reservation_tool(memory_manager=None, chat_id: str = ""):
     class ReservationInput(BaseModel):
         checkin: str = Field(..., description="Fecha check-in YYYY-MM-DD")
         checkout: str = Field(..., description="Fecha check-out YYYY-MM-DD")
@@ -257,6 +257,44 @@ def create_reservation_tool():
         if partner_requests:
             reservation_payload["reservations"][0]["partnerRequests"] = partner_requests.strip()
 
+        # 🚧 Prevención de duplicados: si ya se creó una reserva con el mismo payload hace segundos, reutiliza respuesta.
+        fingerprint = json.dumps(
+            {
+                "checkin": reservation_payload["reservations"][0]["checkin"],
+                "checkout": reservation_payload["reservations"][0]["checkout"],
+                "adults": reservation_payload["reservations"][0]["adults"],
+                "children": reservation_payload["reservations"][0]["children"],
+                "room_type_id": reservation_payload["reservations"][0]["roomTypeId"],
+                "partner_name": reservation_payload["partnerName"],
+                "partner_email": reservation_payload["partnerEmail"],
+                "partner_phone": reservation_payload["partnerPhone"],
+                "partner_requests": reservation_payload["reservations"][0].get("partnerRequests", ""),
+            },
+            sort_keys=True,
+            ensure_ascii=False,
+        )
+
+        if memory_manager and chat_id:
+            try:
+                last = memory_manager.get_flag(chat_id, "onboarding_last_reservation")
+                if last:
+                    last_fp = last.get("fingerprint")
+                    ts = last.get("timestamp")
+                    last_response = last.get("response")
+                    if last_fp == fingerprint and ts:
+                        from datetime import datetime, timedelta
+
+                        # Ventana corta para evitar dos reservas iguales en segundos/minutos
+                        ts_dt = datetime.fromisoformat(ts) if isinstance(ts, str) else None
+                        if ts_dt and datetime.utcnow() - ts_dt < timedelta(minutes=3):
+                            log.info("🛑 Reserva duplicada detectada para %s, devolviendo respuesta previa", chat_id)
+                            return last_response or (
+                                "⚠️ Ya generé una reserva con estos mismos datos hace un momento. "
+                                "Si necesitas modificarla o cancelarla, indícalo."
+                            )
+            except Exception as exc:
+                log.warning("No se pudo revisar duplicados de reserva: %s", exc)
+
         try:
             payload = {
                 **reservation_payload,
@@ -273,9 +311,29 @@ def create_reservation_tool():
                     parsed = json.loads(raw)
                 except json.JSONDecodeError:
                     log.warning("Respuesta de reserva no es JSON, devolviendo texto.")
-                    return raw
+                    response_text = raw
+                else:
+                    response_text = json.dumps(parsed, ensure_ascii=False)
+            else:
+                response_text = json.dumps(parsed, ensure_ascii=False)
 
-            return json.dumps(parsed, ensure_ascii=False)
+            if memory_manager and chat_id and "❌" not in response_text:
+                try:
+                    from datetime import datetime
+
+                    memory_manager.set_flag(
+                        chat_id,
+                        "onboarding_last_reservation",
+                        {
+                            "fingerprint": fingerprint,
+                            "timestamp": datetime.utcnow().isoformat(),
+                            "response": response_text,
+                        },
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo guardar flag de reserva para %s: %s", chat_id, exc)
+
+            return response_text
         except Exception as exc:  # pragma: no cover - fallbacks de red
             log.error("Error creando reserva: %s", exc, exc_info=True)
             return f"❌ Error creando la reserva: {exc}"

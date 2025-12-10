@@ -17,11 +17,12 @@ class ChannelManager:
     Cada canal debe heredar de BaseChannel y aceptar `openai_api_key` en su constructor.
     """
 
-    def __init__(self):
+    def __init__(self, memory_manager=None):
         self.channels = {}
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
         self._recent_sends = {}  # {(channel, chat_id): (message, timestamp)}
         self._dedup_window = 8.0
+        self.memory_manager = memory_manager
         self._load_channels()
 
     # ------------------------------------------------------------------

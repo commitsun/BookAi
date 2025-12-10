@@ -34,11 +34,6 @@ class OnboardingAgent:
         self.memory_manager = memory_manager
         self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
         self.prompt_text = self._build_prompt()
-        self.tools = [
-            create_token_tool(),
-            create_room_type_tool(),
-            create_reservation_tool(),
-        ]
         log.info("OnboardingAgent inicializado (modelo: %s)", self.llm.model_name)
 
     def _build_prompt(self) -> str:
@@ -52,7 +47,7 @@ class OnboardingAgent:
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
-    def _build_executor(self) -> AgentExecutor:
+    def _build_executor(self, tools) -> AgentExecutor:
         prompt = ChatPromptTemplate.from_messages(
             [
                 ("system", self.prompt_text),
@@ -61,10 +56,10 @@ class OnboardingAgent:
                 MessagesPlaceholder(variable_name="agent_scratchpad"),
             ]
         )
-        agent = create_openai_tools_agent(self.llm, self.tools, prompt)
+        agent = create_openai_tools_agent(self.llm, tools, prompt)
         return AgentExecutor(
             agent=agent,
-            tools=self.tools,
+            tools=tools,
             verbose=True,
             return_intermediate_steps=False,
             max_iterations=6,
@@ -79,7 +74,12 @@ class OnboardingAgent:
         chat_history: Optional[list[Any]] = None,
     ) -> str:
         """Punto de entrada para SubAgentTool."""
-        executor = self._build_executor()
+        tools = [
+            create_token_tool(),
+            create_room_type_tool(),
+            create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
+        ]
+        executor = self._build_executor(tools)
         result = await executor.ainvoke(
             input={
                 "input": pregunta,

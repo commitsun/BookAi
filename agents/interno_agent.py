@@ -74,7 +74,7 @@ class InternoAgent:
             chat_history = chat_history or []
 
             # --- Tools ---
-            tools = create_interno_tools()
+            tools = create_interno_tools(memory_manager=self.memory_manager)
 
             # --- Prompt ---
             system_prompt = self._build_system_prompt(escalation_context)

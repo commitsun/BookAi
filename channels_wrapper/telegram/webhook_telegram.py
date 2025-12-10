@@ -806,6 +806,16 @@ def register_telegram_routes(app, state):
                                 language=language_code,
                                 channel="whatsapp",
                             )
+                            try:
+                                if state.memory_manager:
+                                    payload_preview = parameters if isinstance(parameters, (dict, list)) else str(parameters or "")
+                                    state.memory_manager.save(
+                                        gid,
+                                        "assistant",
+                                        f"[TPL_SENT]|{template_id}|{payload_preview}",
+                                    )
+                            except Exception as mem_exc:
+                                log.warning("[TPL_CONFIRM] No se pudo guardar plantilla en memoria (%s): %s", gid, mem_exc)
                             sent += 1
                         except Exception as exc:
                             errors += 1
@@ -845,6 +855,11 @@ def register_telegram_routes(app, state):
                         final_msg,
                         channel="whatsapp",
                     )
+                    try:
+                        if state.memory_manager:
+                            state.memory_manager.save(guest_id, "assistant", final_msg)
+                    except Exception as mem_exc:
+                        log.warning("[WA_CONFIRM] No se pudo guardar memoria para %s: %s", guest_id, mem_exc)
                     state.superintendente_pending_wa.pop(chat_id, None)
                     await state.channel_manager.send_message(
                         chat_id,
@@ -906,6 +921,11 @@ def register_telegram_routes(app, state):
                                 msg_to_send,
                                 channel="whatsapp",
                             )
+                            try:
+                                if state.memory_manager:
+                                    state.memory_manager.save(guest_id, "assistant", msg_to_send)
+                            except Exception as mem_exc:
+                                log.warning("[WA_CONFIRM_RECOVERY] No se pudo guardar memoria para %s: %s", guest_id, mem_exc)
                             if state.memory_manager:
                                 state.memory_manager.save(
                                     chat_id,
@@ -1007,6 +1027,16 @@ def register_telegram_routes(app, state):
                             language=language,
                             channel="whatsapp",
                         )
+                        try:
+                            if state.memory_manager:
+                                payload_preview = parameters if isinstance(parameters, (dict, list)) else str(parameters or "")
+                                state.memory_manager.save(
+                                    gid,
+                                    "assistant",
+                                    f"[TPL_SENT]|{template}|{payload_preview}",
+                                )
+                        except Exception as mem_exc:
+                            log.warning("[TPL_SEND] No se pudo guardar plantilla en memoria (%s): %s", gid, mem_exc)
 
                     state.superintendente_pending_tpl.pop(chat_id, None)
                     await state.channel_manager.send_message(
