@@ -71,6 +71,7 @@ jobs:
           echo "ROOMDOO_PASSWORD=${{ secrets.ROOMDOO_PASSWORD }}" >> .env
           echo "ROOMDOO_AVAIL_URL=${{ secrets.ROOMDOO_AVAIL_URL }}" >> .env
           echo "ROOMDOO_PMS_PROPERTY_ID=${{ secrets.ROOMDOO_PMS_PROPERTY_ID }}" >> .env
+          echo "ROOMDOO_BEARER_TOKEN=${{ secrets.ROOMDOO_BEARER_TOKEN }}" >> .env
 
           # AWS S3
           echo "S3_BUCKET=${{ secrets.S3_BUCKET }}" >> .env
