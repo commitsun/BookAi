@@ -155,15 +155,15 @@ class SuperintendenteAgent:
 
             # 🚦 Propagar marcadores especiales si vinieron en pasos intermedios
             intermediates = result.get("intermediate_steps") or []
-            wa_marker = None
+            wa_markers: list[str] = []
             tpl_marker = None
             kb_marker = None
             kb_rm_marker = None
             for _action, observation in intermediates:
                 if isinstance(observation, str) and "[WA_DRAFT]|" in observation:
-                    wa_marker = observation[
-                        observation.index("[WA_DRAFT]|") :
-                    ].strip()
+                    wa_markers.append(
+                        observation[observation.index("[WA_DRAFT]|") :].strip()
+                    )
                 if isinstance(observation, str) and "[TPL_DRAFT]|" in observation:
                     tpl_marker = observation[
                         observation.index("[TPL_DRAFT]|") :
@@ -176,10 +176,17 @@ class SuperintendenteAgent:
                     kb_rm_marker = observation[
                         observation.index("[KB_REMOVE_DRAFT]|") :
                     ].strip()
-                if wa_marker and tpl_marker and kb_marker and kb_rm_marker:
+                if wa_markers and tpl_marker and kb_marker and kb_rm_marker:
                     break
-            if wa_marker and "[WA_DRAFT]|" not in output:
-                output = f"{wa_marker}\n{output}"
+            if wa_markers:
+                markers_block = "\n".join(wa_markers)
+                if "[WA_DRAFT]|" not in output:
+                    output = f"{markers_block}\n{output}"
+                else:
+                    # Añade los que no estén ya presentes para no perder borradores múltiples
+                    for marker in wa_markers:
+                        if marker not in output:
+                            output = f"{marker}\n{output}"
             if tpl_marker:
                 output = tpl_marker
             if kb_marker and "[KB_DRAFT]|" not in output:

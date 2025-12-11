@@ -424,6 +424,60 @@ def register_telegram_routes(app, state):
 
         return base.strip()
 
+    def _parse_wa_drafts(raw_text: str) -> list[dict]:
+        """
+        Extrae uno o varios borradores [WA_DRAFT]|guest|msg de una respuesta
+        del superintendente. Devuelve lista de dicts {guest_id, message}.
+        """
+        if "[WA_DRAFT]|" not in (raw_text or ""):
+            return []
+
+        drafts: list[dict] = []
+        parts = (raw_text or "").split("[WA_DRAFT]|")
+        for chunk in parts[1:]:
+            if not chunk:
+                continue
+            subparts = chunk.split("|", 1)
+            if len(subparts) < 2:
+                continue
+            guest_id = subparts[0].strip()
+            msg = subparts[1].strip()
+            if not guest_id or not msg:
+                continue
+            msg_clean = _clean_wa_payload(msg)
+            msg_clean = _ensure_guest_language(msg_clean, guest_id)
+            drafts.append({"guest_id": guest_id, "message": msg_clean})
+        return drafts
+
+    def _format_wa_preview(drafts: list[dict]) -> str:
+        """
+        Construye el panel de confirmación para uno o varios borradores WA.
+        """
+        if not drafts:
+            return ""
+
+        if len(drafts) == 1:
+            guest_id = drafts[0].get("guest_id")
+            msg = drafts[0].get("message", "")
+            return (
+                f"📝 Borrador WhatsApp para {guest_id}:\n"
+                f"{msg}\n\n"
+                "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
+                "✅ Responde 'sí' para enviar.\n"
+                "❌ Responde 'no' para descartar."
+            )
+
+        lines = ["📝 Borradores de WhatsApp preparados:"]
+        for draft in drafts:
+            guest_id = draft.get("guest_id", "")
+            msg = draft.get("message", "")
+            lines.append(f"• {guest_id}: {msg}")
+        lines.append("")
+        lines.append("✏️ Escribe ajustes para aplicar a todos.")
+        lines.append("✅ Responde 'sí' para enviar todos.")
+        lines.append("❌ Responde 'no' para descartar.")
+        return "\n".join(lines)
+
     @app.post("/webhook/telegram")
     async def telegram_webhook_handler(request: Request):
         """
@@ -843,27 +897,46 @@ def register_telegram_routes(app, state):
             # 1️⃣ ter - Confirmación/ajuste de envío WhatsApp directo
             # --------------------------------------------------------
             if chat_id in state.superintendente_pending_wa and not bypass_wa_flow:
-                pending = state.superintendente_pending_wa[chat_id]
-                guest_id = pending.get("guest_id")
-                draft_msg = pending.get("message", "")
+                pending_raw = state.superintendente_pending_wa[chat_id]
+                drafts: list[dict] = []
+                if isinstance(pending_raw, list):
+                    drafts = [d for d in pending_raw if isinstance(d, dict) and d.get("guest_id")]
+                elif isinstance(pending_raw, dict) and pending_raw.get("drafts"):
+                    drafts = [d for d in pending_raw.get("drafts", []) if isinstance(d, dict) and d.get("guest_id")]
+                elif isinstance(pending_raw, dict) and pending_raw.get("guest_id"):
+                    drafts = [pending_raw]
+
+                if not drafts:
+                    state.superintendente_pending_wa.pop(chat_id, None)
+                    log.info("[WA_CONFIRM] Borrador vacío, se limpia estado (%s)", chat_id)
+                    return JSONResponse({"status": "wa_missing_draft"})
+
+                guest_id = drafts[0].get("guest_id")
+                draft_msg = drafts[0].get("message", "")
 
                 if _is_short_wa_confirmation(text_lower):
-                    log.info("[WA_CONFIRM] Enviando mensaje a %s desde %s", guest_id, chat_id)
-                    final_msg = _ensure_guest_language(draft_msg, guest_id)
-                    await state.channel_manager.send_message(
-                        guest_id,
-                        final_msg,
-                        channel="whatsapp",
-                    )
-                    try:
-                        if state.memory_manager:
-                            state.memory_manager.save(guest_id, "assistant", final_msg)
-                    except Exception as mem_exc:
-                        log.warning("[WA_CONFIRM] No se pudo guardar memoria para %s: %s", guest_id, mem_exc)
+                    log.info("[WA_CONFIRM] Enviando %s borrador(es) desde %s", len(drafts), chat_id)
+                    sent = 0
+                    for draft in drafts:
+                        gid = draft.get("guest_id")
+                        msg_raw = draft.get("message", "")
+                        final_msg = _ensure_guest_language(msg_raw, gid)
+                        await state.channel_manager.send_message(
+                            gid,
+                            final_msg,
+                            channel="whatsapp",
+                        )
+                        try:
+                            if state.memory_manager:
+                                state.memory_manager.save(gid, "assistant", final_msg)
+                        except Exception as mem_exc:
+                            log.warning("[WA_CONFIRM] No se pudo guardar memoria para %s: %s", gid, mem_exc)
+                        sent += 1
                     state.superintendente_pending_wa.pop(chat_id, None)
+                    guest_list = ", ".join([d.get("guest_id", "") for d in drafts])
                     await state.channel_manager.send_message(
                         chat_id,
-                        f"✅ Enviado a {guest_id}: {final_msg}",
+                        f"✅ Enviado a {sent}/{len(drafts)} huésped(es): {guest_list}",
                         channel="telegram",
                     )
                     return JSONResponse({"status": "wa_sent"})
@@ -883,16 +956,13 @@ def register_telegram_routes(app, state):
                 rewritten = await _rewrite_wa_draft(llm, draft_msg, text)
                 rewritten = _clean_wa_payload(rewritten)
                 rewritten = _ensure_guest_language(rewritten, guest_id)
-                state.superintendente_pending_wa[chat_id]["message"] = rewritten
+                updated = []
+                for draft in drafts:
+                    updated.append({"guest_id": draft.get("guest_id"), "message": rewritten})
+                state.superintendente_pending_wa[chat_id] = {"drafts": updated}
                 await state.channel_manager.send_message(
                     chat_id,
-                    (
-                        f"📝 Borrador WhatsApp para {guest_id}:\n"
-                        f"{rewritten}\n\n"
-                        "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
-                        "✅ Responde 'sí' para enviar.\n"
-                        "❌ Responde 'no' para descartar."
-                    ),
+                    _format_wa_preview(updated),
                     channel="telegram",
                 )
                 return JSONResponse({"status": "wa_updated"})
@@ -903,17 +973,35 @@ def register_telegram_routes(app, state):
             if _is_short_wa_confirmation(text_lower):
                 try:
                     recent = state.memory_manager.get_memory(chat_id, limit=10)
+                    marker_bulk = "[WA_BULK]|"
                     marker = "[WA_DRAFT]|"
-                    last_draft = None
+                    drafts = []
                     for msg in reversed(recent):
-                        content = msg.get("content", "")
+                        content = msg.get("content", "") or ""
+                        if marker_bulk in content:
+                            raw_json = content.split(marker_bulk, 1)[1].strip()
+                            try:
+                                parsed = json.loads(raw_json)
+                                drafts = [
+                                    {"guest_id": d.get("guest_id"), "message": d.get("message", "")}
+                                    for d in parsed
+                                    if isinstance(d, dict) and d.get("guest_id")
+                                ]
+                            except Exception as exc:
+                                log.warning("[WA_CONFIRM_RECOVERY] No pude parsear WA_BULK: %s", exc)
+                            break
                         if marker in content:
                             last_draft = content[content.index(marker):]
-                            break
-                    if last_draft:
-                        parts = last_draft.split("|", 2)
-                        if len(parts) == 3:
-                            guest_id, msg_raw = parts[1], parts[2]
+                            parts = last_draft.split("|", 2)
+                            if len(parts) == 3:
+                                drafts = [{"guest_id": parts[1], "message": parts[2]}]
+                                break
+
+                    if drafts:
+                        sent = 0
+                        for draft in drafts:
+                            guest_id = draft.get("guest_id")
+                            msg_raw = draft.get("message", "")
                             msg_to_send = _clean_wa_payload(msg_raw)
                             msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
                             await state.channel_manager.send_message(
@@ -932,12 +1020,15 @@ def register_telegram_routes(app, state):
                                     "system",
                                     f"[WA_SENT]|{guest_id}|{msg_to_send}",
                                 )
-                            await state.channel_manager.send_message(
-                                chat_id,
-                                f"✅ Mensaje enviado a {guest_id}:\n{msg_to_send}",
-                                channel="telegram",
-                            )
-                            return JSONResponse({"status": "wa_sent_recovered"})
+                            sent += 1
+
+                        guest_list = ", ".join([d.get("guest_id", "") for d in drafts])
+                        await state.channel_manager.send_message(
+                            chat_id,
+                            f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}",
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "wa_sent_recovered"})
                 except Exception as exc:
                     log.error("[WA_CONFIRM_RECOVERY] Error: %s", exc, exc_info=True)
 
@@ -1066,49 +1157,43 @@ def register_telegram_routes(app, state):
                         hotel_name=hotel_name,
                     )
 
-                    marker = "[WA_DRAFT]|"
-                    if marker in response:
-                        draft_payload = response[response.index(marker):]
-                        parts = draft_payload.split("|", 2)
-                        if len(parts) == 3:
-                            guest_id, msg_raw = parts[1], parts[2]
-                            wa_intent = phone_hint or any(
-                                term in text_lower
-                                for term in {"dile", "enviale", "envíale", "mandale", "mándale", "manda", "enviar"}
-                            )
-                            if not wa_intent:
-                                log.info("[WA_DRAFT] Ignorado por falta de intención explícita (%s)", chat_id)
-                                response = response.replace(draft_payload, "").strip()
-                            else:
-                                msg_to_send = _clean_wa_payload(msg_raw)
-                                msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
-                                state.superintendente_pending_wa[chat_id] = {
-                                    "guest_id": guest_id,
-                                    "message": msg_to_send,
-                                }
-                                log.info("[WA_DRAFT] Registrado draft para %s desde %s", guest_id, chat_id)
-                                try:
-                                    if state.memory_manager:
+                    wa_drafts = _parse_wa_drafts(response)
+                    if wa_drafts:
+                        wa_intent = phone_hint or any(
+                            term in text_lower for term in {"dile", "enviale", "envíale", "mandale", "mándale", "manda", "enviar"}
+                        )
+                        if not wa_intent:
+                            log.info("[WA_DRAFT] Ignorado por falta de intención explícita (%s)", chat_id)
+                            response = re.sub(r"\[WA_DRAFT\]\|.*", "", response, flags=re.S).strip()
+                        else:
+                            pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]
+                            state.superintendente_pending_wa[chat_id] = pending_payload
+                            log.info("[WA_DRAFT] Registrado %s borrador(es) desde %s", len(wa_drafts), chat_id)
+                            try:
+                                if state.memory_manager:
+                                    if len(wa_drafts) > 1:
                                         state.memory_manager.save(
                                             conversation_id=chat_id,
                                             role="system",
-                                            content=f"[WA_DRAFT]|{guest_id}|{msg_to_send}",
+                                            content=f"[WA_BULK]|{json.dumps(wa_drafts, ensure_ascii=False)}",
                                         )
-                                except Exception:
-                                    pass
-                                preview = (
-                                    f"📝 Borrador WhatsApp para {guest_id}:\n"
-                                    f"{msg_to_send}\n\n"
-                                    "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
-                                    "✅ Responde 'sí' para enviar.\n"
-                                    "❌ Responde 'no' para descartar."
-                                )
-                                await state.channel_manager.send_message(
-                                    chat_id,
-                                    preview,
-                                    channel="telegram",
-                                )
-                                return JSONResponse({"status": "wa_draft"})
+                                    else:
+                                        draft = wa_drafts[0]
+                                        state.memory_manager.save(
+                                            conversation_id=chat_id,
+                                            role="system",
+                                            content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                        )
+                            except Exception as exc:
+                                log.warning("[WA_DRAFT] No se pudo guardar borrador en memoria: %s", exc)
+
+                            preview = _format_wa_preview(wa_drafts)
+                            await state.channel_manager.send_message(
+                                chat_id,
+                                preview,
+                                channel="telegram",
+                            )
+                            return JSONResponse({"status": "wa_draft"})
 
                     tpl_marker = "[TPL_DRAFT]|"
                     if tpl_marker in response:
