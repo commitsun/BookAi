@@ -1,6 +1,9 @@
 import logging
+import re
 from pathlib import Path
 from typing import Dict, Tuple, Optional
+
+from core.utils.time_context import get_time_context
 
 log = logging.getLogger("PromptLoader")
 uvicorn_log = logging.getLogger("uvicorn.error")
@@ -26,6 +29,16 @@ def load_prompt(filename: str) -> str:
         return cached[1]
 
     content = path.read_text(encoding="utf-8", errors="replace")
+    # Replace {{$now}} placeholders with live time context.
+    now_re = r"\{\{\s*\$now\s*\}\}"
+    if re.search(now_re, content):
+        now_value = get_time_context()
+        content, count = re.subn(now_re, now_value, content)
+        log.info("🕒 Reemplazo dinámico {{$now}} aplicado (%s): %s", count, now_value)
+        try:
+            uvicorn_log.info("🕒 Reemplazo dinámico {{$now}} aplicado (%s): %s", count, now_value)
+        except Exception:
+            pass
     _PROMPT_CACHE[filename] = (current_mtime, content)
 
     message = f"📜 Prompt cargado/refrescado: {filename} ({len(content)} chars)"
