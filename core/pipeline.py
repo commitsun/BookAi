@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 
 from core.language_manager import language_manager
 from core.main_agent import create_main_agent
@@ -27,6 +28,16 @@ async def process_user_message(
     """
     try:
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
+
+        clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
+        bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
+        if isinstance(bookai_flags, dict) and bookai_flags.get(clean_id) is False:
+            try:
+                state.memory_manager.save(clean_id, "user", user_message)
+            except Exception as exc:
+                log.warning("No se pudo guardar mensaje con BookAI apagado: %s", exc)
+            log.info("🤫 BookAI desactivado para %s; se omite respuesta automática.", clean_id)
+            return None
 
         prev_lang = state.chat_lang.get(chat_id)
         try:

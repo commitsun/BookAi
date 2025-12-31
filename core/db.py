@@ -32,6 +32,8 @@ def save_message(conversation_id: str, role: str, content: str) -> None:
             "conversation_id": clean_id,
             "role": role,
             "content": content,
+            "read_status": False,
+            "original_chat_id": clean_id,
         }
 
         supabase.table("chat_history").insert(data).execute()

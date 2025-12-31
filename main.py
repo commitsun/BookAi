@@ -13,6 +13,7 @@ from core.pipeline import process_user_message  # re-export para compatibilidad
 from channels_wrapper.telegram.webhook_telegram import register_telegram_routes
 from channels_wrapper.whatsapp.webhook_whatsapp import register_whatsapp_routes
 from api.template_routes import register_template_routes
+from api.chatter_routes import register_chatter_routes
 
 # =============================================================
 # CONFIG GLOBAL / LOGGING
@@ -51,6 +52,7 @@ log.info("✅ Sistema inicializado con agentes y estado compartido")
 register_whatsapp_routes(app, state)
 register_telegram_routes(app, state)
 register_template_routes(app, state)
+register_chatter_routes(app, state)
 
 # =============================================================
 # HEALTHCHECK
