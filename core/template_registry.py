@@ -275,6 +275,37 @@ class TemplateDefinition:
             # Para ORDINAL mantenemos compatibilidad
         return self.to_ordinal_params(provided)
 
+    def render_content(self, provided: Dict[str, Any] | None) -> Optional[str]:
+        """
+        Rellena el texto base de la plantilla usando los parametros disponibles.
+        Soporta placeholders tipo {{1}} para ordinal y {{nombre}} para named.
+        """
+        base = (self.content or "").strip()
+        if not base:
+            return None
+
+        text = base
+        provided = provided or {}
+
+        def _replace(token: str, value: Any) -> None:
+            nonlocal text
+            pattern = r"\{\{\s*" + re.escape(token) + r"\s*\}\}"
+            text = re.sub(pattern, "" if value is None else str(value), text)
+
+        if self.parameter_format == "NAMED":
+            ordered_keys = list(self.parameter_order)
+            for key in provided.keys():
+                if key not in ordered_keys:
+                    ordered_keys.append(key)
+            for key in ordered_keys:
+                _replace(key, provided.get(key))
+        else:
+            values = self.to_ordinal_params(provided)
+            for idx, value in enumerate(values, start=1):
+                _replace(str(idx), value)
+
+        return text
+
 
 class TemplateRegistry:
     """Registro en memoria de plantillas (fuente Supabase)."""

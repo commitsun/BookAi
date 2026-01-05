@@ -142,6 +142,9 @@ def register_template_routes(app, state) -> None:
 
             # Registrar evento para contexto futuro
             try:
+                rendered = template_def.render_content(payload.template.parameters) if template_def else None
+                if rendered:
+                    state.memory_manager.save(chat_id, role="assistant", content=rendered)
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = payload.source.instance_id or payload.source.instance_url
                 state.memory_manager.save(

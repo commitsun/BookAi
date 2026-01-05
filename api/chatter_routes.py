@@ -351,6 +351,9 @@ def register_chatter_routes(app, state) -> None:
             raise HTTPException(status_code=500, detail="Error enviando plantilla")
 
         try:
+            rendered = template_def.render_content(payload.parameters) if template_def else None
+            if rendered:
+                state.memory_manager.save(chat_id, role="assistant", content=rendered)
             state.memory_manager.save(
                 chat_id,
                 role="system",
