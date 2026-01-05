@@ -130,6 +130,43 @@ def _extract_param_hints(data: Dict[str, Any]) -> Dict[str, str]:
     return hints
 
 
+def _extract_template_text(data: Dict[str, Any]) -> Optional[str]:
+    """
+    Intenta extraer el texto base de la plantilla desde la fila de Supabase.
+    Soporta múltiples campos y estructura components (Meta).
+    """
+    for key in (
+        "content",
+        "body",
+        "body_text",
+        "message",
+        "template_text",
+        "template_body",
+    ):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+
+    components = data.get("components") or []
+    if isinstance(components, list):
+        parts: List[str] = []
+        for comp in components:
+            if not isinstance(comp, dict):
+                continue
+            text = comp.get("text")
+            if not isinstance(text, str) or not text.strip():
+                continue
+            comp_type = str(comp.get("type") or "").upper()
+            if comp_type and comp_type != "BODY":
+                parts.append(f"{comp_type}: {text.strip()}")
+            else:
+                parts.append(text.strip())
+        if parts:
+            return "\n".join(parts)
+
+    return None
+
+
 @dataclass
 class TemplateDefinition:
     """Definición de plantilla WhatsApp."""
@@ -143,6 +180,8 @@ class TemplateDefinition:
     description: Optional[str] = None
     active: bool = True
     parameter_hints: Dict[str, str] = field(default_factory=dict)
+    content: Optional[str] = None
+    components: List[Dict[str, Any]] = field(default_factory=list)
 
     def key(self) -> str:
         return TemplateRegistry.build_key(
@@ -192,6 +231,8 @@ class TemplateDefinition:
             active=bool(data.get("active", True)),
             parameter_format=param_format_raw or "ORDINAL",
             parameter_hints=hints,
+            content=_extract_template_text(data),
+            components=list(data.get("components") or []) if isinstance(data.get("components"), list) else [],
         )
 
     def get_param_label(self, name: str) -> str:

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -12,6 +13,7 @@ from pydantic import BaseModel, Field
 from core.config import Settings
 from core.db import supabase
 from core.escalation_db import list_pending_escalations
+from core.template_registry import TemplateRegistry, TemplateDefinition
 
 log = logging.getLogger("ChatterRoutes")
 
@@ -28,6 +30,15 @@ class SendMessageRequest(BaseModel):
 
 class ToggleBookAiRequest(BaseModel):
     bookai_enabled: bool = Field(..., description="Activa o desactiva BookAI para el hilo")
+
+
+class SendTemplateRequest(BaseModel):
+    chat_id: str = Field(..., description="ID del chat (telefono)")
+    template_code: str = Field(..., description="Codigo interno de la plantilla")
+    hotel_code: Optional[str] = Field(default=None, description="Codigo del hotel (opcional)")
+    language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
+    parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
+    channel: str = Field(default="whatsapp", description="Canal de salida")
 
 
 # ---------------------------------------------------------------------------
@@ -82,6 +93,22 @@ def _bookai_settings(state) -> Dict[str, bool]:
         state.tracking["bookai_enabled"] = {}
         settings = state.tracking["bookai_enabled"]
     return settings
+
+
+def _template_registry(state) -> Optional[TemplateRegistry]:
+    registry = getattr(state, "template_registry", None)
+    if registry and isinstance(registry, TemplateRegistry):
+        return registry
+    return None
+
+
+def _parse_ts(value: Optional[str]) -> Optional[datetime]:
+    if not value:
+        return None
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
 
 
 # ---------------------------------------------------------------------------
@@ -250,6 +277,133 @@ def register_chatter_routes(app, state) -> None:
         return {
             "chat_id": clean_id,
             "read_status": True,
+        }
+
+    @router.get("/templates")
+    async def list_templates(
+        hotel_code: Optional[str] = Query(default=None),
+        language: Optional[str] = Query(default=None),
+        _: None = Depends(_verify_bearer),
+    ):
+        registry = _template_registry(state)
+        if not registry:
+            raise HTTPException(status_code=500, detail="Template registry no disponible")
+
+        items: List[TemplateDefinition] = registry.list_templates()
+        results = []
+        for tpl in items:
+            if hotel_code and (tpl.hotel_code or "").upper() != hotel_code.upper():
+                continue
+            if language and (tpl.language or "").lower() != language.lower():
+                continue
+            results.append(
+                {
+                    "code": tpl.code,
+                    "whatsapp_name": tpl.whatsapp_name,
+                    "language": tpl.language,
+                    "hotel_code": tpl.hotel_code,
+                    "description": tpl.description,
+                    "content": tpl.content,
+                    "parameter_format": tpl.parameter_format,
+                    "parameter_order": tpl.parameter_order,
+                    "parameter_hints": tpl.parameter_hints,
+                }
+            )
+
+        return {"items": results}
+
+    @router.post("/templates/send")
+    async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
+        chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
+        if payload.channel.lower() != "whatsapp":
+            raise HTTPException(status_code=422, detail="Canal no soportado")
+
+        registry = _template_registry(state)
+        template_code = payload.template_code
+        language = (payload.language or "es").lower()
+
+        template_def = None
+        if registry:
+            template_def = registry.resolve(
+                hotel_code=payload.hotel_code,
+                template_code=template_code,
+                language=language,
+            )
+
+        if template_def:
+            template_name = template_def.whatsapp_name or template_code
+            parameters = template_def.build_meta_parameters(payload.parameters)
+            language = template_def.language or language
+        else:
+            template_name = template_code
+            parameters = list((payload.parameters or {}).values())
+
+        try:
+            await state.channel_manager.send_template_message(
+                chat_id,
+                template_name,
+                parameters=parameters,
+                language=language,
+                channel="whatsapp",
+            )
+        except Exception as exc:
+            log.error("Error enviando plantilla: %s", exc, exc_info=True)
+            raise HTTPException(status_code=500, detail="Error enviando plantilla")
+
+        try:
+            state.memory_manager.save(
+                chat_id,
+                role="system",
+                content=f"[TEMPLATE_SENT] plantilla={template_name} lang={language}",
+            )
+        except Exception as exc:
+            log.warning("No se pudo registrar plantilla en memoria: %s", exc)
+
+        return {
+            "status": "sent",
+            "chat_id": chat_id,
+            "template": template_name,
+            "language": language,
+        }
+
+    @router.get("/chats/{chat_id}/window")
+    async def check_window(
+        chat_id: str,
+        _: None = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+        resp = (
+            supabase.table("chat_history")
+            .select("created_at")
+            .eq("conversation_id", clean_id)
+            .eq("role", "user")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        last_ts = rows[0].get("created_at") if rows else None
+        last_dt = _parse_ts(last_ts)
+
+        if not last_dt:
+            return {
+                "chat_id": clean_id,
+                "needs_template": True,
+                "last_user_message_at": None,
+                "hours_since_last_user_msg": None,
+                "reason": "sin_mensajes_previos",
+            }
+
+        now = datetime.now(timezone.utc)
+        delta_hours = (now - last_dt).total_seconds() / 3600.0
+        needs_template = delta_hours >= 24
+
+        return {
+            "chat_id": clean_id,
+            "needs_template": needs_template,
+            "last_user_message_at": last_dt.isoformat(),
+            "hours_since_last_user_msg": round(delta_hours, 2),
+            "reason": "ventana_superada" if needs_template else "ventana_activa",
         }
 
     app.include_router(router)
