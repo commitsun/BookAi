@@ -1,4 +1,4 @@
-"""Rutas REST para el chatter de Roomdoo."""
+"""Rutas FastAPI para el chatter de Roomdoo."""
 
 from __future__ import annotations
 
@@ -394,7 +394,7 @@ def register_chatter_routes(app, state) -> None:
                 "needs_template": True,
                 "last_user_message_at": None,
                 "hours_since_last_user_msg": None,
-                "reason": "sin_mensajes_previos",
+                "reason": "necesita_plantilla",
             }
 
         now = datetime.now(timezone.utc)

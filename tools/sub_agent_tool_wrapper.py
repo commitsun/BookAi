@@ -15,10 +15,22 @@ log = logging.getLogger("SubAgentTool")
 
 
 class SubAgentToolInput(BaseModel):
-    """Schema de entrada para sub-agentes"""
+    """Schema de entrada para sub-agentes."""
 
-    query: str = Field(
-        ..., description="Pregunta o tarea para el sub-agente"
+    query: str | None = Field(
+        default=None, description="Pregunta o tarea para el sub-agente"
+    )
+    pregunta: str | None = Field(
+        default=None, description="Compat: pregunta del huésped"
+    )
+    mensaje_cliente: str | None = Field(
+        default=None, description="Compat: mensaje original del cliente"
+    )
+    motivo: str | None = Field(
+        default=None, description="Compat: motivo de la escalación"
+    )
+    tipo: str | None = Field(
+        default=None, description="Compat: tipo de escalación"
     )
 
 
@@ -38,9 +50,20 @@ class SubAgentTool(BaseTool):
     class Config:
         arbitrary_types_allowed = True
 
-    async def _arun(self, query: str) -> str:
+    async def _arun(
+        self,
+        query: str | None = None,
+        pregunta: str | None = None,
+        mensaje_cliente: str | None = None,
+        motivo: str | None = None,
+        tipo: str | None = None,
+    ) -> str:
         try:
-            log.info("SubAgentTool._arun: %s - query: %s", self.name, query[:50])
+            effective_query = query or pregunta or mensaje_cliente or ""
+            if not effective_query:
+                raise ValueError("Falta 'query' o 'pregunta' para el sub-agente.")
+
+            log.info("SubAgentTool._arun: %s - query: %s", self.name, effective_query[:50])
 
             chat_history = None
             if self.memory_manager and self.chat_id:
@@ -58,11 +81,13 @@ class SubAgentTool(BaseTool):
 
             # Caso 1: sub-agente es InternoAgent
             if hasattr(self.sub_agent, "handle_guest_escalation"):
+                reason = motivo or "Consulta del huésped gestionada por MainAgent"
+                escalation_type = tipo or "manual"
                 result = await self.sub_agent.handle_guest_escalation(
                     chat_id=self.chat_id,
-                    guest_message=query,
-                    reason="Consulta del huésped gestionada por MainAgent",
-                    escalation_type="manual",
+                    guest_message=effective_query,
+                    reason=reason,
+                    escalation_type=escalation_type,
                     context=(
                         f"Escalación manual desde MainAgent ({self.hotel_name})"
                         if self.hotel_name
@@ -73,7 +98,7 @@ class SubAgentTool(BaseTool):
             # Caso 2: agentes simples tipo InfoAgent / DispoPreciosAgent
             elif hasattr(self.sub_agent, "handle"):
                 result = await self.sub_agent.handle(
-                    pregunta=query,
+                    pregunta=effective_query,
                     chat_id=self.chat_id,
                     chat_history=chat_history,
                 )
@@ -81,7 +106,7 @@ class SubAgentTool(BaseTool):
             # Caso 3: agente compatible con ainvoke → llama con kwargs dinámicos
             elif hasattr(self.sub_agent, "ainvoke"):
                 invoke_kwargs = {
-                    "user_input": query,
+                    "user_input": effective_query,
                     "chat_id": self.chat_id,
                     "escalation_context": "MAIN_AGENT_TOOL",
                 }
@@ -98,9 +123,9 @@ class SubAgentTool(BaseTool):
                     payload = {
                         "escalation_id": f"esc_{self.chat_id}_{int(datetime.utcnow().timestamp())}",
                         "guest_chat_id": self.chat_id,
-                        "guest_message": query,
-                        "escalation_type": "manual",
-                        "reason": "Solicitud del huésped desde MainAgent",
+                        "guest_message": effective_query,
+                        "escalation_type": tipo or "manual",
+                        "reason": motivo or "Solicitud del huésped desde MainAgent",
                         "context": (
                             f"Escalación manual desde MainAgent ({self.hotel_name})"
                             if self.hotel_name
@@ -121,14 +146,14 @@ class SubAgentTool(BaseTool):
 
                 if iscoroutinefunction(invoke_callable):
                     result = await invoke_callable(
-                        query,
+                        effective_query,
                         chat_history=chat_history,
                         chat_id=self.chat_id,
                     )
                 else:
                     result = await asyncio.to_thread(
                         invoke_callable,
-                        query,
+                        effective_query,
                         chat_history=chat_history,
                         chat_id=self.chat_id,
                     )
@@ -146,7 +171,14 @@ class SubAgentTool(BaseTool):
             )
             return f"Error procesando consulta en {self.name}: {exc}"
 
-    def _run(self, query: str) -> str:
+    def _run(
+        self,
+        query: str | None = None,
+        pregunta: str | None = None,
+        mensaje_cliente: str | None = None,
+        motivo: str | None = None,
+        tipo: str | None = None,
+    ) -> str:
         try:
             loop = asyncio.get_event_loop()
         except RuntimeError:
@@ -158,7 +190,15 @@ class SubAgentTool(BaseTool):
             nest_asyncio.apply()
 
         try:
-            return loop.run_until_complete(self._arun(query))
+            return loop.run_until_complete(
+                self._arun(
+                    query=query,
+                    pregunta=pregunta,
+                    mensaje_cliente=mensaje_cliente,
+                    motivo=motivo,
+                    tipo=tipo,
+                )
+            )
         except Exception as exc:
             log.error("Error en SubAgentTool._run: %s", exc)
             return f"Error: {exc}"

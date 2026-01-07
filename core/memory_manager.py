@@ -74,7 +74,13 @@ class MemoryManager:
             return []
 
     # ----------------------------------------------------------------------
-    def save(self, conversation_id: str, role: str, content: str) -> None:
+    def save(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        escalation_id: Optional[str] = None,
+    ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
         Cumple con la restricción de Supabase (role ∈ {'user','assistant','system','tool'}).
@@ -89,6 +95,8 @@ class MemoryManager:
             "content": content.strip(),
             "created_at": datetime.utcnow().isoformat(),
         }
+        if escalation_id:
+            entry["escalation_id"] = escalation_id
 
         # Guardar en RAM
         self.runtime_memory.setdefault(cid, []).append(entry)
@@ -97,7 +105,7 @@ class MemoryManager:
 
         # Guardar en Supabase
         try:
-            save_message(cid, normalized_role, entry["content"])
+            save_message(cid, normalized_role, entry["content"], escalation_id=escalation_id)
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")

@@ -18,7 +18,12 @@ logging.info("✅ Conexión con Supabase inicializada correctamente.")
 # ======================================================
 # 💾 Guardar mensaje (sin embeddings)
 # ======================================================
-def save_message(conversation_id: str, role: str, content: str) -> None:
+def save_message(
+    conversation_id: str,
+    role: str,
+    content: str,
+    escalation_id: str | None = None,
+) -> None:
     """
     Guarda un mensaje en la base de datos relacional de Supabase.
     - conversation_id: número del usuario sin '+'
@@ -35,8 +40,17 @@ def save_message(conversation_id: str, role: str, content: str) -> None:
             "read_status": False,
             "original_chat_id": clean_id,
         }
+        if escalation_id:
+            data["escalation_id"] = escalation_id
 
-        supabase.table("chat_history").insert(data).execute()
+        try:
+            supabase.table("chat_history").insert(data).execute()
+        except Exception:
+            if "escalation_id" in data:
+                data.pop("escalation_id", None)
+                supabase.table("chat_history").insert(data).execute()
+            else:
+                raise
         logging.info(f"💾 Mensaje guardado correctamente en conversación {clean_id}")
 
     except Exception as e:

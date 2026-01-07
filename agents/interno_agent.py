@@ -143,6 +143,7 @@ class InternoAgent:
                 conversation_id=chat_id,
                 role="system",
                 content=f"[InternoAgent-Error] {exc}",
+                escalation_id=escalation_id,
             )
             raise
 
@@ -161,12 +162,14 @@ class InternoAgent:
             conversation_id=chat_id,
             role="user",
             content=user_input,
+            escalation_id=escalation_id,
         )
         await self._safe_call(
             getattr(self.memory_manager, "save", None),
             conversation_id=chat_id,
             role="assistant",
             content=f"[InternoAgent] {output}",
+            escalation_id=escalation_id,
         )
 
         if notify_result:
@@ -175,6 +178,7 @@ class InternoAgent:
                 conversation_id=chat_id,
                 role="system",
                 content=f"[InternoAgent] Notificación enviada: {notify_result}",
+                escalation_id=escalation_id,
             )
 
     async def handle_guest_escalation(
