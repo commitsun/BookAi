@@ -67,7 +67,7 @@ def _clean_chat_id(chat_id: str) -> str:
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
     if role == "user":
-        return "cliente"
+        return "user"
     if role == "assistant":
         return "bookai"
     return "bookai"
