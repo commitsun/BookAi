@@ -26,6 +26,7 @@ class SendMessageRequest(BaseModel):
     chat_id: str = Field(..., description="ID del chat (telefono)")
     message: str = Field(..., description="Texto del mensaje a enviar")
     channel: str = Field(default="whatsapp", description="Canal de salida")
+    sender: Optional[str] = Field(default="bookai", description="Emisor (cliente, bookai, user)")
 
 
 class ToggleBookAiRequest(BaseModel):
@@ -238,7 +239,11 @@ def register_chatter_routes(app, state) -> None:
 
         await state.channel_manager.send_message(chat_id, payload.message, channel="whatsapp")
         try:
-            state.memory_manager.save(chat_id, "assistant", payload.message)
+            sender = (payload.sender or "bookai").strip().lower()
+            role = "assistant"
+            if sender in {"cliente", "user", "usuario", "guest"}:
+                role = "user"
+            state.memory_manager.save(chat_id, role, payload.message)
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
