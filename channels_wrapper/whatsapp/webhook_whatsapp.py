@@ -65,6 +65,9 @@ def register_whatsapp_routes(app, state):
             data = await request.json()
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
             msg = value.get("messages", [{}])[0]
+            contacts = value.get("contacts", [])
+            profile = contacts[0].get("profile", {}) if contacts else {}
+            client_name = profile.get("name")
             sender = msg.get("from")
             msg_type = msg.get("type")
             msg_id = msg.get("id")
@@ -99,6 +102,8 @@ def register_whatsapp_routes(app, state):
                 return JSONResponse({"status": "ignored"})
 
             log.info("💬 WhatsApp %s: %s", sender, text)
+            if client_name:
+                state.memory_manager.set_flag(sender, "client_name", client_name)
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(

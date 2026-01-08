@@ -133,7 +133,7 @@ def register_chatter_routes(app, state) -> None:
         while len(ordered_ids) < target:
             resp = (
                 supabase.table("chat_history")
-                .select("conversation_id, content, created_at")
+                .select("conversation_id, content, created_at, client_name")
                 .order("created_at", desc=True)
                 .range(offset, offset + batch_size - 1)
                 .execute()
@@ -156,6 +156,25 @@ def register_chatter_routes(app, state) -> None:
         page_ids = ordered_ids[(page - 1) * page_size:page * page_size]
         pending_map = _pending_actions()
         bookai_flags = _bookai_settings(state)
+        client_names: Dict[str, str] = {}
+        if page_ids:
+            try:
+                resp_names = (
+                    supabase.table("chat_history")
+                    .select("conversation_id, client_name, created_at")
+                    .in_("conversation_id", page_ids)
+                    .eq("role", "user")
+                    .order("created_at", desc=True)
+                    .limit(500)
+                    .execute()
+                )
+                for row in resp_names.data or []:
+                    cid = str(row.get("conversation_id") or "").strip()
+                    name = row.get("client_name")
+                    if cid and name and cid not in client_names:
+                        client_names[cid] = name
+            except Exception as exc:
+                log.warning("No se pudo cargar client_name: %s", exc)
 
         items = []
         for cid in page_ids:
@@ -173,7 +192,7 @@ def register_chatter_routes(app, state) -> None:
                     "last_message": last.get("content"),
                     "last_message_at": last.get("created_at"),
                     "avatar": None,
-                    "client_name": None,
+                    "client_name": client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
                     "bookai_enabled": bool(bookai_flags.get(cid, True)),
                     "unread_count": 0,

@@ -80,6 +80,7 @@ class MemoryManager:
         role: str,
         content: str,
         escalation_id: Optional[str] = None,
+        client_name: Optional[str] = None,
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
@@ -90,6 +91,9 @@ class MemoryManager:
         valid_roles = {"user", "assistant", "system", "tool"}
         normalized_role = role if role in valid_roles else "assistant"
 
+        if not client_name and normalized_role == "user":
+            client_name = self.get_flag(cid, "client_name")
+
         entry = {
             "role": normalized_role,
             "content": content.strip(),
@@ -97,6 +101,8 @@ class MemoryManager:
         }
         if escalation_id:
             entry["escalation_id"] = escalation_id
+        if client_name and normalized_role == "user":
+            entry["client_name"] = client_name
 
         # Guardar en RAM
         self.runtime_memory.setdefault(cid, []).append(entry)
@@ -105,7 +111,13 @@ class MemoryManager:
 
         # Guardar en Supabase
         try:
-            save_message(cid, normalized_role, entry["content"], escalation_id=escalation_id)
+            save_message(
+                cid,
+                normalized_role,
+                entry["content"],
+                escalation_id=escalation_id,
+                client_name=client_name if normalized_role == "user" else None,
+            )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
