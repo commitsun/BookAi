@@ -24,7 +24,6 @@ from core.message_utils import (
     sanitize_wa_message,
 )
 from core.db import get_conversation_history
-from core.language_manager import language_manager
 
 log = logging.getLogger("TelegramWebhook")
 AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() == "true"
@@ -100,19 +99,7 @@ def register_telegram_routes(app, state):
 
     def _ensure_guest_language(msg: str, guest_id: str) -> str:
         """Mantiene el idioma del huésped al reenviar mensajes del superintendente."""
-        if not msg:
-            return msg
-        try:
-            lang = (
-                state.chat_lang.get(_normalize_guest_id(guest_id))
-                or state.chat_lang.get(guest_id)
-            )
-            if not lang:
-                return msg
-            return language_manager.ensure_language(msg, lang)
-        except Exception as exc:
-            log.warning("[LANG] No se pudo ajustar idioma para %s: %s", guest_id, exc)
-            return msg
+        return msg
 
     def _looks_like_new_instruction(text: str) -> bool:
         """

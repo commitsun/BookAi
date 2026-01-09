@@ -20,7 +20,6 @@ from langchain_core.tools import tool
 import html
 
 # 🧩 Core imports
-from core.language_manager import language_manager
 from core.escalation_db import save_escalation, update_escalation
 from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
@@ -192,22 +191,15 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
     # ✅ Usa configuración centralizada para el modelo del agente interno
     llm = ModelConfig.get_llm(ModelTier.INTERNAL)
 
-    try:
-        target_lang = language_manager.detect_language(esc.guest_message)
-        target_lang = language_manager.detect_language(manager_response, prev_lang=target_lang)
-    except Exception:
-        target_lang = "es"
-
     system_prompt = (
         "Eres un asistente especializado en atención hotelera.\n"
         "Tu tarea es reformular el mensaje del encargado para el huésped con un tono cálido, empático y profesional.\n"
-        "Usa SIEMPRE el idioma del huésped: {target_lang}.\n"
+        "Usa SIEMPRE el idioma del huésped (el mismo idioma que su mensaje).\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
 
     user_prompt = (
-        f"Idioma objetivo (ISO 639-1): {target_lang}\n\n"
         f"Mensaje original del huésped:\n{esc.guest_message}\n\n"
         f"Respuesta del encargado:\n{manager_response}\n"
     )
@@ -278,12 +270,6 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
         final_text = (esc.draft_response or adjustments or "").strip()
         if not final_text:
             return "⚠️ No hay texto final disponible para enviar."
-
-        try:
-            guest_lang = language_manager.detect_language(esc.guest_message)
-            final_text = language_manager.ensure_language(final_text, guest_lang)
-        except Exception:
-            pass
 
         try:
             ChannelManager = importlib.import_module("channels_wrapper.manager").ChannelManager

@@ -14,7 +14,8 @@ Analiza la respuesta generada por el sistema principal del hotel siguiendo este 
 4. **Concisión:** Revisa que la respuesta no incluya información de más ni explicaciones excesivas que puedan confundir al usuario.  
 5. **Seguridad:** Comprueba que no comparta datos internos del sistema, información confidencial o suposiciones sobre el cliente.  
 6. **Coherencia conversacional:** Analiza si la respuesta corresponde lógicamente a la conversación previa.  
-   - Si la respuesta repite varias veces la misma frase o parece un bucle (por ejemplo, “Estoy consultando con el encargado...” más de dos veces), márcala como **Rechazada** con motivo **“Repetición o loop detectado.”**
+   - Solo marca **Rechazada** si detectas un bucle real de mensajes de espera o escalación (por ejemplo, “Estoy consultando con el encargado...” repetido más de dos veces).  
+   - Si la respuesta repite bloques por efecto de buffer o formato (confirmaciones de reserva duplicadas, listados repetidos), **NO** la rechaces: apruébala si el contenido es correcto y seguro.
 
 ***
 
@@ -26,6 +27,7 @@ Debes marcar la respuesta como "Aprobado" siempre que:
 - El tono sea educado y profesional (cálido, cercano, amable está permitido).
 - La información dada sea razonable y no obviously inventada.
 - Aunque la respuesta sea breve, directa o muy sencilla ("Sí, tenemos gimnasio en la planta 2.").
+- Si la respuesta incluye una **confirmación de reserva** (con fechas, habitación, nombre, email o teléfono) y el contenido es correcto, incluso si aparece repetida por buffer o duplicación.
 
 No debes marcar "Revisión Necesaria" ni "Rechazado" solo porque la respuesta:
 - Empiece con un saludo ("Hola", "Buenos días").
@@ -83,6 +85,7 @@ Aprueba directamente (Estado: Aprobado) en estos casos, siempre que el contenido
 - Mensajes intermedios o de cortesía que informan al huésped que se está consultando algo.  
   Ejemplo: “Un momento, estoy verificando con el encargado.”  
 - Respuestas breves tipo *inciso* que mantienen la comunicación activa mientras se procesa la solicitud.
+- Confirmaciones de reserva completas, aunque estén duplicadas o incluyan el mismo bloque repetido.
 
 ***
 

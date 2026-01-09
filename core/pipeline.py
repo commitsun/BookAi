@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import re
 
-from core.language_manager import language_manager
 from core.main_agent import create_main_agent
 
 log = logging.getLogger("Pipeline")
@@ -20,11 +19,10 @@ async def process_user_message(
 ) -> str | None:
     """
     Flujo principal:
-      1. Detección de idioma
-      2. Supervisor Input
-      3. Main Agent
-      4. Supervisor Output
-      5. Escalación → InternoAgent
+      1. Supervisor Input
+      2. Main Agent
+      3. Supervisor Output
+      4. Escalación → InternoAgent
     """
     try:
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
@@ -38,14 +36,6 @@ async def process_user_message(
                 log.warning("No se pudo guardar mensaje con BookAI apagado: %s", exc)
             log.info("🤫 BookAI desactivado para %s; se omite respuesta automática.", clean_id)
             return None
-
-        prev_lang = state.chat_lang.get(chat_id)
-        try:
-            guest_lang = language_manager.detect_language(user_message, prev_lang=prev_lang)
-        except Exception:
-            guest_lang = prev_lang or "es"
-        state.chat_lang[chat_id] = guest_lang
-        log.info("🌐 Idioma detectado: %s", guest_lang)
 
         input_validation = await state.supervisor_input.validate(user_message)
         estado_in = input_validation.get("estado", "Aprobado")
@@ -70,8 +60,7 @@ async def process_user_message(
 
         async def send_inciso_callback(msg: str):
             try:
-                localized = language_manager.ensure_language(msg, guest_lang)
-                await state.channel_manager.send_message(chat_id, localized, channel=channel)
+                await state.channel_manager.send_message(chat_id, msg, channel=channel)
             except Exception as exc:
                 log.error("❌ Error enviando inciso: %s", exc)
 
@@ -138,8 +127,7 @@ async def process_user_message(
             )
             return None
 
-        localized = language_manager.ensure_language(response_raw, guest_lang)
-        return localized
+        return response_raw
 
     except Exception as exc:
         log.error("💥 Error crítico en pipeline: %s", exc, exc_info=True)

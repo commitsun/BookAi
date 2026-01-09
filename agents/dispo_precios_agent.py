@@ -18,7 +18,6 @@ from langchain.tools import Tool
 
 # Core imports
 from core.mcp_client import mcp_client
-from core.language_manager import language_manager
 from core.utils.normalize_reply import normalize_reply
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
@@ -475,7 +474,6 @@ class DispoPreciosAgent:
     async def handle(self, pregunta: str, chat_history=None, chat_id: str = None) -> str:
         """Entrada principal del subagente (modo asíncrono) con soporte de memoria."""
         log.info(f"📩 [DispoPreciosAgent] Recibida pregunta: {pregunta}")
-        lang = language_manager.detect_language(pregunta)
 
         try:
             if not chat_history and self.memory_manager and chat_id:
@@ -505,8 +503,7 @@ class DispoPreciosAgent:
                 ""
             )
 
-            raw_output = language_manager.ensure_language(output, lang)
-            respuesta_final = normalize_reply(raw_output, pregunta, agent_name="DispoPreciosAgent")
+            respuesta_final = normalize_reply(output, pregunta, agent_name="DispoPreciosAgent")
 
             # 🧹 Limpieza de duplicados y redundancias
             seen, cleaned = set(), []
