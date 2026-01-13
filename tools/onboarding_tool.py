@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 from typing import Any, Optional, Tuple
+import re
 
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
@@ -40,6 +41,40 @@ def _safe_parse_json(raw: Any, context: str) -> Optional[Any]:
     except Exception as exc:
         log.warning("No se pudo parsear respuesta en %s: %s", context, exc)
         return []
+
+
+def _extract_folio_id(payload: Any) -> Optional[str]:
+    """Intenta extraer un folio_id desde una respuesta de reserva."""
+    if payload is None:
+        return None
+
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            match = re.search(r"folio[_\s-]*id\"?\s*[:=]\s*\"?(\d+)", payload, re.IGNORECASE)
+            return match.group(1) if match else None
+
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_folio_id(item)
+            if found:
+                return found
+        return None
+
+    if isinstance(payload, dict):
+        for key in ("folio_id", "folioId", "folio"):
+            if key in payload:
+                val = payload.get(key)
+                if isinstance(val, dict):
+                    nested = _extract_folio_id(val)
+                    if nested:
+                        return nested
+                if isinstance(val, (int, str)) and str(val).isdigit():
+                    return str(val)
+        return None
+
+    return None
 
 
 async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any], Optional[str]]:
@@ -321,6 +356,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                 try:
                     from datetime import datetime
 
+                    folio_id = _extract_folio_id(parsed)
                     memory_manager.set_flag(
                         chat_id,
                         "onboarding_last_reservation",
@@ -328,6 +364,14 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                             "fingerprint": fingerprint,
                             "timestamp": datetime.utcnow().isoformat(),
                             "response": response_text,
+                            "meta": {
+                                "checkin": reservation_payload["reservations"][0]["checkin"],
+                                "checkout": reservation_payload["reservations"][0]["checkout"],
+                                "partner_name": reservation_payload["partnerName"],
+                                "partner_email": reservation_payload["partnerEmail"],
+                                "partner_phone": reservation_payload["partnerPhone"],
+                                "folio_id": folio_id,
+                            },
                         },
                     )
                 except Exception as exc:
@@ -361,4 +405,131 @@ def create_token_tool():
         name="obtener_token_reservas",
         description="Devuelve el token actual consultando la tool buscar_token via MCP.",
         coroutine=_get_token,
+    )
+
+
+def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
+    from tools.superintendente_tool import (
+        create_consulta_reserva_general_tool,
+        create_consulta_reserva_persona_tool,
+    )
+
+    class ConsultaReservaPropiaInput(BaseModel):
+        folio_id: Optional[str] = Field(
+            default=None,
+            description="Folio_id si el huésped lo tiene (opcional).",
+        )
+        fecha_inicio: Optional[str] = Field(
+            default=None,
+            description="Fecha inicio (YYYY-MM-DD) si no hay folio_id.",
+        )
+        fecha_fin: Optional[str] = Field(
+            default=None,
+            description="Fecha fin (YYYY-MM-DD) si no hay folio_id.",
+        )
+        partner_name: Optional[str] = Field(
+            default=None,
+            description="Nombre del huésped para filtrar.",
+        )
+        partner_email: Optional[str] = Field(
+            default=None,
+            description="Email del huésped para filtrar.",
+        )
+        partner_phone: Optional[str] = Field(
+            default=None,
+            description="Teléfono del huésped para filtrar.",
+        )
+        pms_property_id: int = Field(default=38, description="Propiedad PMS (siempre 38).")
+
+    def _normalize_phone(val: Optional[str]) -> str:
+        return re.sub(r"\D+", "", val or "")
+
+    async def _consulta_reserva_propia(
+        folio_id: Optional[str] = None,
+        fecha_inicio: Optional[str] = None,
+        fecha_fin: Optional[str] = None,
+        partner_name: Optional[str] = None,
+        partner_email: Optional[str] = None,
+        partner_phone: Optional[str] = None,
+        pms_property_id: int = 38,
+    ) -> str:
+        last_flag = None
+        if memory_manager and chat_id:
+            try:
+                last_flag = memory_manager.get_flag(chat_id, "onboarding_last_reservation")
+            except Exception as exc:
+                log.warning("No se pudo leer flag de reserva para %s: %s", chat_id, exc)
+
+        meta = (last_flag or {}).get("meta") or {}
+
+        resolved_folio = folio_id or meta.get("folio_id")
+        if not resolved_folio and last_flag:
+            resolved_folio = _extract_folio_id(last_flag.get("response"))
+
+        if resolved_folio:
+            tool = create_consulta_reserva_persona_tool()
+            return await tool.ainvoke(
+                {"folio_id": str(resolved_folio), "pms_property_id": pms_property_id}
+            )
+
+        fecha_inicio = fecha_inicio or meta.get("checkin")
+        fecha_fin = fecha_fin or meta.get("checkout")
+        if not fecha_inicio or not fecha_fin:
+            return (
+                "Para consultar tu reserva necesito el folio_id o las fechas de entrada y salida."
+            )
+
+        partner_name = (partner_name or meta.get("partner_name") or "").strip()
+        partner_email = (partner_email or meta.get("partner_email") or "").strip()
+        partner_phone = (partner_phone or meta.get("partner_phone") or "").strip()
+
+        if not any([partner_name, partner_email, partner_phone]):
+            return (
+                "Para filtrar tu reserva necesito tu nombre, email o teléfono."
+            )
+
+        tool = create_consulta_reserva_general_tool()
+        raw = await tool.ainvoke(
+            {
+                "fecha_inicio": fecha_inicio,
+                "fecha_fin": fecha_fin,
+                "pms_property_id": pms_property_id,
+            }
+        )
+
+        if isinstance(raw, str) and raw.strip().startswith("❌"):
+            return raw
+
+        parsed = _safe_parse_json(raw, "consulta_reserva_propia")
+        if not isinstance(parsed, list):
+            return json.dumps(parsed, ensure_ascii=False) if parsed else "No se encontraron reservas."
+
+        filtered = []
+        phone_norm = _normalize_phone(partner_phone)
+        for item in parsed:
+            item_name = str(item.get("partner_name") or "").strip().lower()
+            item_email = str(item.get("partner_email") or "").strip().lower()
+            item_phone = _normalize_phone(item.get("partner_phone"))
+
+            if partner_name and partner_name.lower() not in item_name:
+                continue
+            if partner_email and partner_email.lower() not in item_email:
+                continue
+            if phone_norm and phone_norm not in item_phone:
+                continue
+            filtered.append(item)
+
+        if not filtered:
+            return "No encontré reservas activas con esos datos."
+
+        return json.dumps(filtered, ensure_ascii=False)
+
+    return StructuredTool.from_function(
+        name="consultar_reserva_propia",
+        description=(
+            "Consulta la reserva del propio huésped. Usa folio_id si lo hay; "
+            "si no, necesita fechas y datos del huésped para filtrar."
+        ),
+        coroutine=_consulta_reserva_propia,
+        args_schema=ConsultaReservaPropiaInput,
     )

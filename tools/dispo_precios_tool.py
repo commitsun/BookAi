@@ -20,7 +20,7 @@ class DispoPreciosInput(BaseModel):
     """Input schema para la herramienta de disponibilidad y precios."""
     consulta: str = Field(
         description=(
-            "La consulta del usuario sobre disponibilidad, precios, tipos de habitación o reservas. "
+            "La consulta del usuario sobre disponibilidad, precios o tipos de habitación. "
             "Incluye TODOS los detalles relevantes: fechas, número de huéspedes, preferencias, etc."
         )
     )
@@ -99,7 +99,6 @@ class DispoPreciosTool:
                 "- Disponibilidad de habitaciones para fechas específicas\n"
                 "- Precios y tarifas de habitaciones\n"
                 "- Tipos de habitaciones disponibles\n"
-                "- Consultas sobre reservas\n"
                 "- Capacidad de huéspedes por habitación\n"
                 "\n"
                 "Esta herramienta tiene acceso directo al sistema de gestión del hotel (PMS). "

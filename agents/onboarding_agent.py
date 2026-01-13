@@ -19,6 +19,7 @@ from core.config import ModelConfig, ModelTier
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 from tools.onboarding_tool import (
+    create_consulta_reserva_propia_tool,
     create_room_type_tool,
     create_reservation_tool,
     create_token_tool,
@@ -44,6 +45,7 @@ class OnboardingAgent:
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
+            "- Si el huesped pide consultar su reserva, usa consultar_reserva_propia (folio_id si lo tiene; si no, pide fechas y nombre/email/telefono).\n"
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
@@ -78,6 +80,10 @@ class OnboardingAgent:
             create_token_tool(),
             create_room_type_tool(),
             create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
+            create_consulta_reserva_propia_tool(
+                memory_manager=self.memory_manager,
+                chat_id=chat_id,
+            ),
         ]
         executor = self._build_executor(tools)
         result = await executor.ainvoke(

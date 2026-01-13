@@ -64,7 +64,7 @@ class MainAgent:
             "Tu responsabilidad es ORQUESTAR: decidir qué herramienta usar según la consulta del usuario.\n\n"
             "HERRAMIENTAS DISPONIBLES:\n"
             "1. Think → consultas complejas.\n"
-            "2. disponibilidad_precios → precios/reservas.\n"
+            "2. disponibilidad_precios → precios y disponibilidad.\n"
             "3. base_conocimientos → servicios, políticas, info general.\n"
             "4. Inciso → mensajes intermedios.\n"
             "5. escalar_interno → escalar al encargado humano.\n\n"
@@ -83,7 +83,7 @@ class MainAgent:
                 name="disponibilidad_precios",
                 description=(
                     "Consulta disponibilidad, tipos de habitaciones y precios. "
-                    "Úsala para reservas, fechas y tarifas."
+                    "Úsala para fechas, tarifas y tipos de habitación."
                 ),
                 sub_agent=dispo_agent,
                 memory_manager=self.memory_manager,
@@ -112,8 +112,9 @@ class MainAgent:
             create_sub_agent_tool(
                 name="onboarding_reservas",
                 description=(
-                    "Gestiona reservas completas: obtiene token, identifica roomTypeId y crea la reserva. "
-                    "Úsala cuando el huésped quiera confirmar una reserva con datos concretos."
+                    "Gestiona reservas completas: obtiene token, identifica roomTypeId, crea la reserva "
+                    "y consulta reservas propias del huésped. Úsala cuando el huésped quiera confirmar "
+                    "una reserva con datos concretos o revisar su reserva."
                 ),
                 sub_agent=onboarding_agent,
                 memory_manager=self.memory_manager,
