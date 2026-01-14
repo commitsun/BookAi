@@ -31,6 +31,7 @@ from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 
 log = logging.getLogger("SuperintendenteAgent")
+log.setLevel(logging.INFO)
 
 
 class SuperintendenteAgent:
@@ -107,6 +108,13 @@ class SuperintendenteAgent:
         try:
             log.info("SuperintendenteAgent ainvoke: %s", encargado_id)
 
+            resolved_hotel_name = self._sanitize_hotel_name(hotel_name) or hotel_name
+            if self.memory_manager and encargado_id:
+                try:
+                    self.memory_manager.set_flag(encargado_id, "property_name", resolved_hotel_name)
+                except Exception:
+                    pass
+
             if chat_history is None:
                 chat_history = await self._safe_call(
                     getattr(self.memory_manager, "get_memory_as_messages", None),
@@ -115,9 +123,10 @@ class SuperintendenteAgent:
                 )
             chat_history = chat_history or []
 
-            tools = await self._create_tools(hotel_name, encargado_id)
+            tools = await self._create_tools(resolved_hotel_name, encargado_id)
 
-            system_prompt = self._build_system_prompt(hotel_name)
+            system_prompt = self._build_system_prompt(resolved_hotel_name)
+            log.info("Superintendente hotel_name activo: %s (encargado_id=%s)", resolved_hotel_name, encargado_id)
 
             prompt_template = ChatPromptTemplate.from_messages(
                 [
@@ -332,6 +341,36 @@ class SuperintendenteAgent:
         context = get_time_context()
         return f"{context}\n{base}\n\nHotel: {hotel_name}"
 
+    def _sanitize_hotel_name(self, hotel_name: str) -> str:
+        raw = " ".join((hotel_name or "").split())
+        if not raw:
+            return ""
+        match = re.search(r"(hotel|hostal)\s+alda[^,.;\n]*", raw, flags=re.IGNORECASE)
+        if match:
+            raw = match.group(0).strip()
+        raw = re.sub(
+            r"\s+(que|para|con|donde|cuando|hay|tiene|sobre)\b.*$",
+            "",
+            raw,
+            flags=re.IGNORECASE,
+        ).strip()
+        return raw
+
+    def _resolve_hotel_name(self, hotel_name: str, encargado_id: str) -> tuple[str, bool]:
+        if self.memory_manager and encargado_id:
+            try:
+                stored = self.memory_manager.get_flag(encargado_id, "property_name")
+            except Exception:
+                stored = None
+            if stored:
+                cleaned = self._sanitize_hotel_name(str(stored))
+                if cleaned:
+                    return cleaned, True
+        cleaned = self._sanitize_hotel_name(hotel_name)
+        if cleaned:
+            return cleaned, False
+        return hotel_name, False
+
     async def handle_kb_addition(
         self,
         topic: str,
@@ -351,11 +390,13 @@ class SuperintendenteAgent:
 
             clean_content = self._clean_kb_content(content)
 
+            resolved_name, from_memory = self._resolve_hotel_name(hotel_name, encargado_id)
             result = await self._append_to_knowledge_document(
                 topic=topic,
                 content=clean_content,
-                hotel_name=hotel_name,
+                hotel_name=resolved_name,
                 source_type=source,
+                use_env=False,
             )
 
             confirmation = (
@@ -404,6 +445,7 @@ class SuperintendenteAgent:
         content: str,
         hotel_name: str,
         source_type: str,
+        use_env: bool = True,
     ) -> Dict[str, Any]:
         """
         Anexa la información al documento de conocimientos en S3.
@@ -419,6 +461,7 @@ class SuperintendenteAgent:
             hotel_name=hotel_name,
             boto_client=boto,
             bucket=bucket,
+            use_env=use_env,
         )
 
         tmp_dir = Path(tempfile.mkdtemp())
@@ -486,7 +529,7 @@ class SuperintendenteAgent:
                 "error": "Necesito un criterio o un rango de fechas para buscar qué eliminar.",
             }
 
-        kb_data = await self._load_kb_entries(hotel_name)
+        kb_data = await self._load_kb_entries(hotel_name, use_env=False)
         entries = kb_data.get("entries", [])
         if not entries:
             return {
@@ -611,7 +654,13 @@ class SuperintendenteAgent:
 
         boto = self._get_s3_client()
 
-        kb_data = await self._load_kb_entries(hotel_name, boto_client=boto, bucket=bucket)
+        resolved_name, from_memory = self._resolve_hotel_name(hotel_name, encargado_id)
+        kb_data = await self._load_kb_entries(
+            resolved_name,
+            boto_client=boto,
+            bucket=bucket,
+            use_env=False,
+        )
         entries = kb_data.get("entries", [])
         key_used = kb_data.get("key")
         local_path = kb_data.get("path")
@@ -683,13 +732,19 @@ class SuperintendenteAgent:
             "doc_key": key_used,
         }
 
-    def _resolve_doc_candidates(self, hotel_name: str, boto_client: Any = None, bucket: str | None = None) -> list[str]:
+    def _resolve_doc_candidates(
+        self,
+        hotel_name: str,
+        boto_client: Any = None,
+        bucket: str | None = None,
+        use_env: bool = True,
+    ) -> list[str]:
         """
         Devuelve una lista ordenada de posibles keys en S3 para el documento de KB del hotel.
         Prioriza archivos que contengan '-Variable' antes de la extensión y agrega fallback final.
         """
 
-        if Settings.SUPERINTENDENTE_S3_DOC:
+        if use_env and Settings.SUPERINTENDENTE_S3_DOC:
             env_key = Settings.SUPERINTENDENTE_S3_DOC.strip('\"\\\' ')
             candidates = [env_key]
             # También probar variante "-Variable" si no está incluida
@@ -706,11 +761,18 @@ class SuperintendenteAgent:
             log.info("Candidatos para documento KB (env): %s", candidates)
             return candidates
 
-        prefix_env = Settings.SUPERINTENDENTE_S3_PREFIX.rstrip("/")
+        prefix_env = Settings.SUPERINTENDENTE_S3_PREFIX.rstrip("/") if use_env else ""
         clean_name = re.sub(r"[^A-Za-z0-9\\-_ ]+", "", hotel_name).strip()
         tokens = [t for t in re.findall(r"[a-z0-9]+", clean_name.lower()) if t]
+        stop_tokens = {"hotel", "hostal", "centro"}
+        tokens = [t for t in tokens if t not in stop_tokens]
         doc_name = f"{clean_name.replace(' ', '_')}.docx" if clean_name else "knowledge_base.docx"
         slug_prefix = clean_name.replace(" ", "_") if clean_name else ""
+        alt_slug_prefix = ""
+        if slug_prefix.lower().startswith("hotel_"):
+            alt_slug_prefix = slug_prefix[6:]
+        elif slug_prefix.lower().startswith("hostal_"):
+            alt_slug_prefix = slug_prefix[7:]
         prefix_tail = prefix_env.rsplit("/", 1)[-1] if prefix_env else ""
 
         # base_key por defecto
@@ -722,6 +784,13 @@ class SuperintendenteAgent:
             prefix_candidates.append(prefix_env)
         if slug_prefix and slug_prefix not in prefix_candidates:
             prefix_candidates.append(slug_prefix)
+        if alt_slug_prefix and alt_slug_prefix not in prefix_candidates:
+            prefix_candidates.append(alt_slug_prefix)
+        tokens_title = [t.title() for t in tokens]
+        if tokens_title:
+            title_prefix = "_".join(tokens_title)
+            if title_prefix not in prefix_candidates:
+                prefix_candidates.append(title_prefix)
         if "" not in prefix_candidates:
             prefix_candidates.append("")
 
@@ -733,6 +802,7 @@ class SuperintendenteAgent:
                 [
                     f"{raw_name}-Variable.docx",
                     f"{clean_name.replace(' ', '_')}-Variable.docx",
+                    f"{'_'.join(tokens_title)}-Variable.docx" if tokens_title else "",
                     f"{doc_name[:-5]}-Variable.docx" if doc_name.endswith(".docx") else f"{doc_name}-Variable.docx",
                 ]
             )
@@ -799,6 +869,7 @@ class SuperintendenteAgent:
         hotel_name: str,
         boto_client: Any = None,
         bucket: str | None = None,
+        use_env: bool = True,
     ) -> dict[str, Any]:
         """
         Descarga el documento de KB y lo parsea en entradas discretas con índices.
@@ -814,6 +885,7 @@ class SuperintendenteAgent:
             hotel_name=hotel_name,
             boto_client=boto_client,
             bucket=bucket,
+            use_env=use_env,
         )
 
         tmp_dir = Path(tempfile.mkdtemp())

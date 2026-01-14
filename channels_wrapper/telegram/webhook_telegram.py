@@ -26,6 +26,7 @@ from core.message_utils import (
 from core.db import get_conversation_history
 
 log = logging.getLogger("TelegramWebhook")
+log.setLevel(logging.INFO)
 AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() == "true"
 
 
@@ -1135,7 +1136,23 @@ def register_telegram_routes(app, state):
             if super_mode or in_super_session:
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
                 hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME)
-                state.superintendente_chats[chat_id] = {"hotel_name": hotel_name}
+                if payload:
+                    payload_lower = payload.lower()
+                    if "alda" in payload_lower and ("hotel" in payload_lower or "hostal" in payload_lower):
+                        match = re.search(
+                            r"(hotel|hostal)\s+alda[^,.\\n]*",
+                            payload,
+                            flags=re.IGNORECASE,
+                        )
+                        hotel_name = match.group(0).strip() if match else payload.strip()
+                        state.superintendente_chats[chat_id] = {"hotel_name": hotel_name}
+                        if state.memory_manager:
+                            try:
+                                state.memory_manager.set_flag(chat_id, "property_name", hotel_name)
+                            except Exception:
+                                pass
+                else:
+                    state.superintendente_chats[chat_id] = {"hotel_name": hotel_name}
 
                 try:
                     response = await state.superintendente_agent.ainvoke(
