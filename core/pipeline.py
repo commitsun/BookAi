@@ -6,6 +6,7 @@ import logging
 import re
 
 from core.main_agent import create_main_agent
+from core.instance_context import hydrate_dynamic_context
 
 log = logging.getLogger("Pipeline")
 
@@ -16,6 +17,7 @@ async def process_user_message(
     state,
     hotel_name: str = "Hotel",
     channel: str = "whatsapp",
+    instance_number: str | None = None,
 ) -> str | None:
     """
     Flujo principal:
@@ -63,6 +65,15 @@ async def process_user_message(
                 await state.channel_manager.send_message(chat_id, msg, channel=channel)
             except Exception as exc:
                 log.error("❌ Error enviando inciso: %s", exc)
+
+        try:
+            hydrate_dynamic_context(
+                state=state,
+                chat_id=chat_id,
+                instance_number=instance_number,
+            )
+        except Exception as exc:
+            log.warning("No se pudo hidratar contexto dinamico: %s", exc)
 
         main_agent = create_main_agent(
             memory_manager=state.memory_manager,

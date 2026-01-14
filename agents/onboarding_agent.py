@@ -18,6 +18,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from core.config import ModelConfig, ModelTier
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
+from core.utils.dynamic_context import build_dynamic_context_from_memory
 from tools.onboarding_tool import (
     create_consulta_reserva_propia_tool,
     create_room_type_tool,
@@ -76,9 +77,23 @@ class OnboardingAgent:
         chat_history: Optional[list[Any]] = None,
     ) -> str:
         """Punto de entrada para SubAgentTool."""
+        base_prompt = load_prompt("onboarding_prompt.txt") or (
+            "Eres el agente de onboarding para crear reservas de hotel.\n"
+            "- Usa siempre las tools disponibles (token -> tipo de habitacion -> reserva) en ese orden logico.\n"
+            "- Pide al huesped solo los datos faltantes: fechas (checkin/checkout), adultos/ninos, tipo de habitacion o preferencia, nombre, email y telefono.\n"
+            "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
+            "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
+            "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
+            "- Si el huesped pide consultar su reserva, usa consultar_reserva_propia (folio_id si lo tiene; si no, pide fechas y nombre/email/telefono).\n"
+        )
+        dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
+        if dynamic_context:
+            self.prompt_text = f"{get_time_context()}\n{base_prompt.strip()}\n\n{dynamic_context}"
+        else:
+            self.prompt_text = f"{get_time_context()}\n{base_prompt.strip()}"
         tools = [
             create_token_tool(),
-            create_room_type_tool(),
+            create_room_type_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_consulta_reserva_propia_tool(
                 memory_manager=self.memory_manager,

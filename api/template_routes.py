@@ -132,6 +132,18 @@ def register_template_routes(app, state) -> None:
             if not chat_id:
                 raise HTTPException(status_code=422, detail="Teléfono de destino inválido")
 
+            if payload.source.instance_url:
+                try:
+                    state.memory_manager.set_flag(chat_id, "instance_url", payload.source.instance_url)
+                except Exception as exc:
+                    log.warning("No se pudo guardar instance_url en memoria: %s", exc)
+
+            if payload.meta and payload.meta.property_id is not None:
+                try:
+                    state.memory_manager.set_flag(chat_id, "property_id", payload.meta.property_id)
+                except Exception as exc:
+                    log.warning("No se pudo guardar property_id en memoria: %s", exc)
+
             await state.channel_manager.send_template_message(
                 chat_id,
                 wa_template,

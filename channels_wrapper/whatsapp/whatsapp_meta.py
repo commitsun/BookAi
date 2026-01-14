@@ -150,9 +150,11 @@ class WhatsAppChannel(BaseChannel):
     # Envío de mensajes a WhatsApp (Meta Graph API)
     # ---------------------------------------------------------------------
     def send_message(self, user_id: str, text: str):
-        url = f"https://graph.facebook.com/v19.0/{C.WHATSAPP_PHONE_ID}/messages"
+        phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
+        token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
+        url = f"https://graph.facebook.com/v19.0/{phone_id}/messages"
         headers = {
-            "Authorization": f"Bearer {C.WHATSAPP_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
         payload = {
@@ -185,7 +187,9 @@ class WhatsAppChannel(BaseChannel):
         Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
         Soporta parámetros opcionales en orden de aparición.
         """
-        if not C.WHATSAPP_TOKEN or not C.WHATSAPP_PHONE_ID:
+        phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
+        token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
+        if not token or not phone_id:
             log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
             return
 
@@ -239,13 +243,13 @@ class WhatsAppChannel(BaseChannel):
         }
 
         headers = {
-            "Authorization": f"Bearer {C.WHATSAPP_TOKEN}",
+            "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
 
         try:
             r = requests.post(
-                f"https://graph.facebook.com/v19.0/{C.WHATSAPP_PHONE_ID}/messages",
+                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
                 headers=headers,
                 json=payload,
                 timeout=10,

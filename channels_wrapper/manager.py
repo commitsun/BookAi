@@ -55,6 +55,8 @@ class ChannelManager:
 
                 # Instanciar canal
                 channel_instance = channel_class(openai_api_key=self.openai_api_key)
+                if self.memory_manager:
+                    setattr(channel_instance, "context_memory_manager", self.memory_manager)
                 self.channels[name] = channel_instance
                 log.info(f"✅ Canal '{name}' cargado correctamente desde {module_path}")
 
@@ -121,6 +123,16 @@ class ChannelManager:
             if not send_fn:
                 raise AttributeError(f"El canal '{channel}' no implementa send_message().")
 
+            if channel == "whatsapp" and self.memory_manager:
+                try:
+                    phone_id = self.memory_manager.get_flag(chat_id, "whatsapp_phone_id")
+                    token = self.memory_manager.get_flag(chat_id, "whatsapp_token")
+                    if phone_id and token:
+                        setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
+                        setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                except Exception as exc:
+                    log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
+
             if asyncio.iscoroutinefunction(send_fn):
                 await send_fn(chat_id, message)
             else:
@@ -156,6 +168,16 @@ class ChannelManager:
             send_fn = getattr(channel_obj, "send_template_message", None)
             if not send_fn:
                 raise AttributeError(f"El canal '{channel}' no implementa send_template_message().")
+
+            if channel == "whatsapp" and self.memory_manager:
+                try:
+                    phone_id = self.memory_manager.get_flag(chat_id, "whatsapp_phone_id")
+                    token = self.memory_manager.get_flag(chat_id, "whatsapp_token")
+                    if phone_id and token:
+                        setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
+                        setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                except Exception as exc:
+                    log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 
             payload_hash = f"{template_id}|{parameters}"
             key = (channel, chat_id, "template")

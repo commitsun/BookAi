@@ -14,6 +14,12 @@ from pydantic import BaseModel, Field
 
 from core.db import get_conversation_history
 from core.mcp_client import mcp_client
+from core.instance_context import (
+    fetch_instance_by_code,
+    fetch_property_by_code,
+    fetch_property_by_id,
+    DEFAULT_PROPERTY_TABLE,
+)
 from core.config import Settings
 
 log = logging.getLogger("SuperintendenteTools")
@@ -75,18 +81,53 @@ class SendWhatsAppInput(BaseModel):
 class ConsultaReservaGeneralInput(BaseModel):
     fecha_inicio: str = Field(..., description="Fecha de inicio en formato YYYY-MM-DD")
     fecha_fin: str = Field(..., description="Fecha final en formato YYYY-MM-DD")
-    pms_property_id: int = Field(
+    property_id: Optional[int] = Field(
+        default=None,
+        description="ID de propiedad (property_id).",
+    )
+    pms_property_id: Optional[int] = Field(
         default=38,
-        description="ID de la propiedad en el PMS (por defecto 38)",
+        description="ID de la propiedad en el PMS (compatibilidad)",
+    )
+    instance_url: Optional[str] = Field(
+        default=None,
+        description="URL de la instancia (opcional)",
+    )
+    hotel_code: Optional[str] = Field(
+        default=None,
+        description="Codigo o nombre del hotel (opcional).",
     )
 
 
 class ConsultaReservaPersonaInput(BaseModel):
     folio_id: str = Field(..., description="ID del folio de la reserva")
-    pms_property_id: int = Field(
-        default=38,
-        description="ID de la propiedad en el PMS (por defecto 38)",
+    property_id: Optional[int] = Field(
+        default=None,
+        description="ID de propiedad (property_id).",
     )
+    pms_property_id: Optional[int] = Field(
+        default=38,
+        description="ID de la propiedad en el PMS (compatibilidad)",
+    )
+    instance_url: Optional[str] = Field(
+        default=None,
+        description="URL de la instancia (opcional)",
+    )
+    hotel_code: Optional[str] = Field(
+        default=None,
+        description="Codigo o nombre del hotel (opcional).",
+    )
+
+
+def _hotel_code_variants(raw: Optional[str]) -> list[str]:
+    clean = (raw or "").strip()
+    if not clean:
+        return []
+    variants = [clean]
+    for prefix in ("Hotel ", "Hostal "):
+        if not clean.lower().startswith(prefix.lower()):
+            variants.append(f"{prefix}{clean}")
+    return list(dict.fromkeys(variants))
 
 
 class RemoveFromKBInput(BaseModel):
@@ -835,11 +876,14 @@ async def _obtener_token_mcp(tools: list[Any]) -> tuple[Optional[str], Optional[
         return None, f"Error obteniendo token desde MCP: {exc}"
 
 
-def create_consulta_reserva_general_tool():
+def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = ""):
     async def _consulta_reserva_general(
         fecha_inicio: str,
         fecha_fin: str,
+        property_id: Optional[int] = None,
         pms_property_id: int = 38,
+        instance_url: Optional[str] = None,
+        hotel_code: Optional[str] = None,
     ) -> str:
         """
         Consulta folios/reservas en un rango de fechas vía MCP → n8n.
@@ -863,8 +907,64 @@ def create_consulta_reserva_general_tool():
             "parameters1_Value": fecha_fin.strip(),
             "key": token,
         }
+        if property_id is not None:
+            pms_property_id = property_id
+        if instance_url:
+            payload["instance_url"] = instance_url
+        if memory_manager and chat_id:
+            try:
+                if hotel_code:
+                    memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                dynamic_instance_url = memory_manager.get_flag(chat_id, "instance_url")
+                dynamic_property_id = memory_manager.get_flag(chat_id, "property_id")
+            except Exception:
+                dynamic_instance_url = None
+                dynamic_property_id = None
+            if dynamic_instance_url:
+                payload["instance_url"] = dynamic_instance_url
+            if dynamic_property_id is not None and pms_property_id is None:
+                pms_property_id = dynamic_property_id
+
+        if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
+            for variant in _hotel_code_variants(hotel_code):
+                inst_payload = fetch_instance_by_code(variant)
+                inst_url = inst_payload.get("instance_url")
+                if inst_url:
+                    payload["instance_url"] = inst_url
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
+                        memory_manager.set_flag(chat_id, "property_name", variant)
+
+                prop_payload = fetch_property_by_code(DEFAULT_PROPERTY_TABLE, variant)
+                prop_id = prop_payload.get("property_id")
+                if prop_id is not None:
+                    pms_property_id = prop_id
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "property_id", prop_id)
+                        memory_manager.set_flag(chat_id, "property_name", variant)
+
+                if payload.get("instance_url") and pms_property_id is not None:
+                    break
+
+        if (not payload.get("instance_url")) and pms_property_id is not None:
+            prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)
+            prop_code = prop_payload.get("hotel_code")
+            if prop_code:
+                inst_payload = fetch_instance_by_code(prop_code)
+                inst_url = inst_payload.get("instance_url")
+                if inst_url:
+                    payload["instance_url"] = inst_url
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
+                        memory_manager.set_flag(chat_id, "property_name", prop_code)
         if pms_property_id is not None:
+            payload["property_id"] = pms_property_id
             payload["pmsPropertyId"] = pms_property_id
+        if "instance_url" not in payload or "property_id" not in payload:
+            return (
+                "Necesito el contexto de la instancia (instance_url y property_id) "
+                "para consultar reservas. Indica el hotel o la instancia."
+            )
 
         try:
             raw_response = await consulta_tool.ainvoke(payload)
@@ -971,10 +1071,13 @@ def create_consulta_reserva_general_tool():
     )
 
 
-def create_consulta_reserva_persona_tool():
+def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = ""):
     async def _consulta_reserva_persona(
         folio_id: str,
+        property_id: Optional[int] = None,
         pms_property_id: int = 38,
+        instance_url: Optional[str] = None,
+        hotel_code: Optional[str] = None,
     ) -> str:
         """
         Consulta los detalles de un folio específico vía MCP → n8n.
@@ -997,8 +1100,64 @@ def create_consulta_reserva_persona_tool():
             "folio_id": folio_id.strip(),
             "key": token,
         }
+        if property_id is not None:
+            pms_property_id = property_id
+        if instance_url:
+            payload["instance_url"] = instance_url
+        if memory_manager and chat_id:
+            try:
+                if hotel_code:
+                    memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                dynamic_instance_url = memory_manager.get_flag(chat_id, "instance_url")
+                dynamic_property_id = memory_manager.get_flag(chat_id, "property_id")
+            except Exception:
+                dynamic_instance_url = None
+                dynamic_property_id = None
+            if dynamic_instance_url:
+                payload["instance_url"] = dynamic_instance_url
+            if dynamic_property_id is not None and pms_property_id is None:
+                pms_property_id = dynamic_property_id
+
+        if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
+            for variant in _hotel_code_variants(hotel_code):
+                inst_payload = fetch_instance_by_code(variant)
+                inst_url = inst_payload.get("instance_url")
+                if inst_url:
+                    payload["instance_url"] = inst_url
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
+                        memory_manager.set_flag(chat_id, "property_name", variant)
+
+                prop_payload = fetch_property_by_code(DEFAULT_PROPERTY_TABLE, variant)
+                prop_id = prop_payload.get("property_id")
+                if prop_id is not None:
+                    pms_property_id = prop_id
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "property_id", prop_id)
+                        memory_manager.set_flag(chat_id, "property_name", variant)
+
+                if payload.get("instance_url") and pms_property_id is not None:
+                    break
+
+        if (not payload.get("instance_url")) and pms_property_id is not None:
+            prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)
+            prop_code = prop_payload.get("hotel_code")
+            if prop_code:
+                inst_payload = fetch_instance_by_code(prop_code)
+                inst_url = inst_payload.get("instance_url")
+                if inst_url:
+                    payload["instance_url"] = inst_url
+                    if memory_manager and chat_id:
+                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
+                        memory_manager.set_flag(chat_id, "property_name", prop_code)
         if pms_property_id is not None:
+            payload["property_id"] = pms_property_id
             payload["pmsPropertyId"] = pms_property_id
+        if "instance_url" not in payload or "property_id" not in payload:
+            return (
+                "Necesito el contexto de la instancia (instance_url y property_id) "
+                "para consultar reservas. Indica el hotel o la instancia."
+            )
 
         try:
             raw_response = await consulta_tool.ainvoke(payload)

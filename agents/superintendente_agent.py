@@ -250,8 +250,14 @@ class SuperintendenteAgent:
                 hotel_name=hotel_name,
                 memory_manager=self.memory_manager,
             ),
-            create_consulta_reserva_general_tool(),
-            create_consulta_reserva_persona_tool(),
+            create_consulta_reserva_general_tool(
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
+            ),
+            create_consulta_reserva_persona_tool(
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
+            ),
             create_list_templates_tool(
                 hotel_name=hotel_name,
                 template_registry=self.template_registry,

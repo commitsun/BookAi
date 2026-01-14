@@ -21,9 +21,11 @@ from core.mcp_client import mcp_client
 from core.utils.normalize_reply import normalize_reply
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
+from core.utils.dynamic_context import build_dynamic_context_from_memory
 from core.config import ModelConfig, ModelTier  # ✅ nuevo import
 
 log = logging.getLogger("DispoPreciosAgent")
+log.setLevel(logging.INFO)
 
 
 class DispoPreciosAgent:
@@ -42,6 +44,7 @@ class DispoPreciosAgent:
         self._last_rooms = []
         self._last_dates = None
         self._last_occupancy = None
+        self._current_chat_id = None
         # ✅ Modelo centralizado + posibilidad de override
         if model_name is not None or temperature is not None:
             default_name, default_temp = ModelConfig.get_model(ModelTier.SUBAGENT)
@@ -105,8 +108,16 @@ class DispoPreciosAgent:
                     log.warning("⚠️ No se encontraron las tools necesarias en MCP.")
                     return "No dispongo de disponibilidad en este momento."
 
+                instance_url = None
+                if self.memory_manager and self._current_chat_id:
+                    try:
+                        instance_url = self.memory_manager.get_flag(self._current_chat_id, "instance_url")
+                    except Exception:
+                        instance_url = None
+
                 # Obtener token de acceso
-                token_raw = await token_tool.ainvoke({})
+                token_payload = {"instance_url": instance_url} if instance_url else {}
+                token_raw = await token_tool.ainvoke(token_payload)
                 token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
                 token = (
                     token_data[0].get("key") if isinstance(token_data, list)
@@ -141,6 +152,38 @@ class DispoPreciosAgent:
                 if not occupancy or occupancy == 1:
                     occupancy = self._occupancy_from_history(self._last_chat_history) or occupancy
                 params["occupancy"] = occupancy or 2
+
+                property_id = None
+                if self.memory_manager and self._current_chat_id:
+                    try:
+                        instance_url = instance_url or self.memory_manager.get_flag(
+                            self._current_chat_id, "instance_url"
+                        )
+                        property_id = self.memory_manager.get_flag(self._current_chat_id, "property_id")
+                    except Exception:
+                        instance_url = instance_url or None
+                        property_id = None
+
+                if instance_url:
+                    params["instance_url"] = instance_url
+                if property_id is not None:
+                    try:
+                        params["property_id"] = int(property_id)
+                    except Exception:
+                        params["property_id"] = property_id
+
+                log.info(
+                    "📦 Disponibilidad params extra (chat_id=%s): instance_url=%s property_id=%s",
+                    self._current_chat_id,
+                    instance_url,
+                    property_id,
+                )
+
+                if "instance_url" not in params or "property_id" not in params:
+                    return (
+                        "Ahora mismo no tengo el contexto de la instancia para consultar disponibilidad. "
+                        "En cuanto lo reciba, continúo."
+                    )
 
                 # Reutiliza la última respuesta si coincide fechas/occupancy.
                 if self._last_rooms and self._last_dates and self._last_occupancy:
@@ -476,6 +519,7 @@ class DispoPreciosAgent:
         log.info(f"📩 [DispoPreciosAgent] Recibida pregunta: {pregunta}")
 
         try:
+            self._current_chat_id = chat_id
             if not chat_history and self.memory_manager and chat_id:
                 try:
                     chat_history = self.memory_manager.get_memory_as_messages(
@@ -491,7 +535,11 @@ class DispoPreciosAgent:
 
             # 🔁 Refrescar contexto temporal antes de cada ejecución
             base_prompt = load_prompt("dispo_precios_prompt.txt") or self._get_default_prompt()
-            self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
+            dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
+            if dynamic_context:
+                self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}\n\n{dynamic_context}"
+            else:
+                self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
             result = await self.agent_executor.ainvoke({
                 "input": pregunta.strip(),

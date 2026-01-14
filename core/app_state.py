@@ -39,7 +39,7 @@ class AppState:
 
         self.supervisor_input = SupervisorInputAgent(memory_manager=self.memory_manager)
         self.supervisor_output = SupervisorOutputAgent(memory_manager=self.memory_manager)
-        self.channel_manager = ChannelManager()
+        self.channel_manager = ChannelManager(memory_manager=self.memory_manager)
         self.buffer_manager = MessageBufferManager(idle_seconds=idle_seconds)
         self.interno_agent = InternoAgent(memory_manager=self.memory_manager)
         self.superintendente_agent = SuperintendenteAgent(

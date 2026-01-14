@@ -23,6 +23,7 @@ from core.mcp_client import mcp_client
 from core.utils.normalize_reply import normalize_reply
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
+from core.utils.dynamic_context import build_dynamic_context_from_memory
 
 log = logging.getLogger("InfoAgent")
 
@@ -116,6 +117,8 @@ class KBSearchTool(BaseTool):
         "Úsalo siempre antes de intentar otras opciones."
     )
     args_schema: ClassVar[type[BaseModel]] = KBSearchInput
+    memory_manager: Optional[object] = None
+    chat_id: str = ""
 
     async def _arun(self, query: str) -> Optional[str]:
         question = (query or "").strip()
@@ -142,7 +145,32 @@ class KBSearchTool(BaseTool):
                 log.warning("KBSearchTool: no se encontró la herramienta de conocimientos.")
                 return None
 
-            raw_reply = await kb_tool.ainvoke({"input": question})
+            payload = {"input": question}
+            if self.memory_manager and self.chat_id:
+                try:
+                    instance_url = self.memory_manager.get_flag(self.chat_id, "instance_url")
+                    property_id = self.memory_manager.get_flag(self.chat_id, "property_id")
+                    kb_name = self.memory_manager.get_flag(self.chat_id, "kb")
+                    if not kb_name:
+                        kb_name = self.memory_manager.get_flag(self.chat_id, "knowledge_base")
+                except Exception:
+                    instance_url = None
+                    property_id = None
+                    kb_name = None
+
+                if instance_url:
+                    payload["instance_url"] = instance_url
+                if property_id is not None:
+                    payload["property_id"] = property_id
+                if kb_name:
+                    payload["kb"] = kb_name
+                    payload["knowledge_base"] = kb_name
+
+                if "instance_url" not in payload or "property_id" not in payload:
+                    log.warning("KBSearchTool: falta contexto dinamico (instance_url/property_id).")
+                    return None
+
+            raw_reply = await kb_tool.ainvoke(payload)
             def _is_invalid(text: str) -> bool:
                 if not text or len(text) < 10:
                     return True
@@ -229,6 +257,7 @@ class InfoAgent:
                 log.warning("No se pudo recuperar historial para InfoAgent: %s", exc)
                 chat_history = []
 
+        dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
         system_prompt = (
             f"{get_time_context()}\n\n{self.base_prompt}\n\n"
             "ORDEN ESTRICTO DE HERRAMIENTAS:\n"
@@ -240,7 +269,13 @@ class InfoAgent:
             "- Aclara la fuente (KB vs Google).\n"
             "- Si sigues sin datos tras ambos intentos, di que necesitas escalar."
         )
+        if dynamic_context:
+            system_prompt = f"{system_prompt}\n\n{dynamic_context}"
 
+        tools = [
+            KBSearchTool(memory_manager=self.memory_manager, chat_id=chat_id),
+            GoogleSearchTool(),
+        ]
         prompt_template = ChatPromptTemplate.from_messages(
             [
                 ("system", system_prompt),
@@ -252,13 +287,13 @@ class InfoAgent:
 
         agent = create_openai_tools_agent(
             llm=self.llm,
-            tools=self.tools,
+            tools=tools,
             prompt=prompt_template,
         )
 
         executor = AgentExecutor(
             agent=agent,
-            tools=self.tools,
+            tools=tools,
             verbose=True,
             max_iterations=15,
             handle_parsing_errors=True,

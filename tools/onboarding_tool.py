@@ -25,6 +25,19 @@ def _find_tool(tools: list[Any], candidates: list[str]) -> Optional[Any]:
     return None
 
 
+def _resolve_property_id(memory_manager, chat_id: str, fallback: int) -> int:
+    if not memory_manager or not chat_id:
+        return fallback
+    try:
+        raw = memory_manager.get_flag(chat_id, "property_id") or memory_manager.get_flag(chat_id, "pms_property_id")
+        if raw is None:
+            return fallback
+        value = int(raw)
+        return value if value > 0 else fallback
+    except Exception:
+        return fallback
+
+
 def _safe_parse_json(raw: Any, context: str) -> Optional[Any]:
     """
     Intenta parsear JSON de forma tolerante:
@@ -86,14 +99,22 @@ async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any
         return [], f"❌ No se pudo acceder al servidor MCP ({server_name})."
 
 
-async def _obtener_token(tools: list[Any]) -> Tuple[Optional[str], Optional[str]]:
+async def _obtener_token(
+    tools: list[Any],
+    *,
+    instance_url: Optional[str] = None,
+) -> Tuple[Optional[str], Optional[str]]:
     """Reutiliza la tool 'buscar_token' expuesta por MCP."""
     try:
         token_tool = _find_tool(tools, ["buscar_token"])
         if not token_tool:
             return None, "No se encontro la tool 'buscar_token' en MCP."
 
-        token_raw = await token_tool.ainvoke({})
+        payload: dict[str, Any] = {}
+        if instance_url:
+            payload["instance_url"] = instance_url
+
+        token_raw = await token_tool.ainvoke(payload)
         token_data = json.loads(token_raw) if isinstance(token_raw, str) else token_raw
         token = (
             token_data[0].get("key") if isinstance(token_data, list) else token_data.get("key")
@@ -108,11 +129,15 @@ async def _obtener_token(tools: list[Any]) -> Tuple[Optional[str], Optional[str]
         return None, f"Error obteniendo token desde MCP: {exc}"
 
 
-def create_room_type_tool():
+def create_room_type_tool(memory_manager=None, chat_id: str = ""):
     class RoomTypeInput(BaseModel):
+        property_id: Optional[int] = Field(
+            default=None,
+            description="ID de propiedad (property_id).",
+        )
         pms_property_id: int = Field(
             default=38,
-            description="ID de propiedad PMS (ej. 38).",
+            description="ID de propiedad PMS (compatibilidad).",
         )
         room_type_name: Optional[str] = Field(
             default=None,
@@ -120,6 +145,7 @@ def create_room_type_tool():
         )
 
     async def _room_type_lookup(
+        property_id: Optional[int] = None,
         pms_property_id: int = 38,
         room_type_name: Optional[str] = None,
     ) -> str:
@@ -127,7 +153,17 @@ def create_room_type_tool():
         if err:
             return err
 
-        token, token_err = await _obtener_token(tools)
+        if property_id is not None:
+            pms_property_id = property_id
+        pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
+        instance_url = None
+        if memory_manager and chat_id:
+            try:
+                instance_url = memory_manager.get_flag(chat_id, "instance_url")
+            except Exception:
+                instance_url = None
+
+        token, token_err = await _obtener_token(tools, instance_url=instance_url)
         if not token:
             return token_err or "No se pudo obtener el token de acceso."
 
@@ -140,6 +176,9 @@ def create_room_type_tool():
             "pmsPropertyId": pms_property_id,
             "key": token,
         }
+        if instance_url:
+            payload["instance_url"] = instance_url
+            payload["property_id"] = pms_property_id
 
         try:
             raw = await type_tool.ainvoke(payload)
@@ -196,7 +235,8 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         partner_email: str = Field(..., description="Email del huesped")
         partner_phone: str = Field(..., description="Telefono del huesped (con prefijo)")
         partner_requests: Optional[str] = Field(default=None, description="Peticiones especiales")
-        pms_property_id: int = Field(default=38, description="Propiedad PMS (siempre 38)")
+        property_id: Optional[int] = Field(default=None, description="Propiedad (property_id)")
+        pms_property_id: int = Field(default=38, description="Propiedad PMS (compatibilidad)")
         pricelist_id: int = Field(default=3, description="Lista de precios (siempre 3)")
 
     async def _resolve_room_type_id(
@@ -205,6 +245,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         pms_property_id: int,
         room_type_id: Optional[int],
         room_type_name: Optional[str],
+        instance_url: Optional[str] = None,
     ) -> Tuple[Optional[int], Optional[str]]:
         if room_type_id:
             return room_type_id, None
@@ -220,6 +261,9 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
             "pmsPropertyId": pms_property_id,
             "key": token,
         }
+        if instance_url:
+            payload["instance_url"] = instance_url
+            payload["property_id"] = pms_property_id
         raw = await type_tool.ainvoke(payload)
         parsed = _safe_parse_json(raw, "resolver roomTypeId")
         items = parsed if isinstance(parsed, list) else []
@@ -248,6 +292,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         partner_email: str = "",
         partner_phone: str = "",
         partner_requests: Optional[str] = None,
+        property_id: Optional[int] = None,
         pms_property_id: int = 38,
         pricelist_id: int = 3,
     ) -> str:
@@ -255,7 +300,17 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         if err:
             return err
 
-        token, token_err = await _obtener_token(tools)
+        if property_id is not None:
+            pms_property_id = property_id
+        pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
+        instance_url = None
+        if memory_manager and chat_id:
+            try:
+                instance_url = memory_manager.get_flag(chat_id, "instance_url")
+            except Exception:
+                instance_url = None
+
+        token, token_err = await _obtener_token(tools, instance_url=instance_url)
         if not token:
             return token_err or "No se pudo obtener el token de acceso."
 
@@ -269,6 +324,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
             pms_property_id,
             room_type_id,
             room_type_name,
+            instance_url=instance_url,
         )
         if not resolved_room_type_id:
             return rt_err or "No se pudo determinar el roomTypeId."
@@ -289,6 +345,9 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
             "partnerEmail": partner_email.strip(),
             "partnerPhone": partner_phone.strip(),
         }
+        if instance_url:
+            reservation_payload["instance_url"] = instance_url
+            reservation_payload["property_id"] = pms_property_id
         if partner_requests:
             reservation_payload["reservations"][0]["partnerRequests"] = partner_requests.strip()
 
@@ -439,7 +498,8 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
             default=None,
             description="Teléfono del huésped para filtrar.",
         )
-        pms_property_id: int = Field(default=38, description="Propiedad PMS (siempre 38).")
+        property_id: Optional[int] = Field(default=None, description="Propiedad (property_id)")
+        pms_property_id: int = Field(default=38, description="Propiedad PMS (compatibilidad)")
 
     def _normalize_phone(val: Optional[str]) -> str:
         return re.sub(r"\D+", "", val or "")
@@ -451,8 +511,13 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
         partner_name: Optional[str] = None,
         partner_email: Optional[str] = None,
         partner_phone: Optional[str] = None,
+        property_id: Optional[int] = None,
         pms_property_id: int = 38,
     ) -> str:
+        if property_id is not None:
+            pms_property_id = property_id
+        pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
+
         last_flag = None
         if memory_manager and chat_id:
             try:
@@ -467,9 +532,9 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
             resolved_folio = _extract_folio_id(last_flag.get("response"))
 
         if resolved_folio:
-            tool = create_consulta_reserva_persona_tool()
+            tool = create_consulta_reserva_persona_tool(memory_manager=memory_manager, chat_id=chat_id)
             return await tool.ainvoke(
-                {"folio_id": str(resolved_folio), "pms_property_id": pms_property_id}
+                {"folio_id": str(resolved_folio), "property_id": pms_property_id}
             )
 
         fecha_inicio = fecha_inicio or meta.get("checkin")
@@ -488,12 +553,12 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
                 "Para filtrar tu reserva necesito tu nombre, email o teléfono."
             )
 
-        tool = create_consulta_reserva_general_tool()
+        tool = create_consulta_reserva_general_tool(memory_manager=memory_manager, chat_id=chat_id)
         raw = await tool.ainvoke(
             {
                 "fecha_inicio": fecha_inicio,
                 "fecha_fin": fecha_fin,
-                "pms_property_id": pms_property_id,
+                "property_id": pms_property_id,
             }
         )
 

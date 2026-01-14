@@ -15,10 +15,10 @@ from core.pipeline import process_user_message
 log = logging.getLogger("WhatsAppWebhook")
 
 
-def _mark_as_read(message_id: str):
+def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | None = None):
     """Envía el status 'read' para reflejar doble check azul en el cliente."""
-    phone_id = os.getenv("WHATSAPP_PHONE_ID")
-    token = os.getenv("WHATSAPP_TOKEN")
+    phone_id = phone_id or os.getenv("WHATSAPP_PHONE_ID")
+    token = token or os.getenv("WHATSAPP_TOKEN")
     if not (phone_id and token and message_id):
         log.debug("No se pudo marcar como leído: faltan credenciales o message_id")
         return
@@ -65,6 +65,7 @@ def register_whatsapp_routes(app, state):
             data = await request.json()
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
             msg = value.get("messages", [{}])[0]
+            metadata = value.get("metadata", {}) or {}
             contacts = value.get("contacts", [])
             profile = contacts[0].get("profile", {}) if contacts else {}
             client_name = profile.get("name")
@@ -73,9 +74,25 @@ def register_whatsapp_routes(app, state):
             msg_id = msg.get("id")
 
             text = ""
+            instance_number = metadata.get("display_phone_number") or ""
+            instance_phone_id = None
+            instance_token = None
+            if sender and instance_number:
+                try:
+                    from core.instance_context import hydrate_dynamic_context
+
+                    hydrate_dynamic_context(
+                        state=state,
+                        chat_id=sender,
+                        instance_number=instance_number,
+                    )
+                    instance_phone_id = state.memory_manager.get_flag(sender, "whatsapp_phone_id")
+                    instance_token = state.memory_manager.get_flag(sender, "whatsapp_token")
+                except Exception as exc:
+                    log.warning("No se pudo hidratar contexto en webhook: %s", exc)
 
             if msg_id:
-                _mark_as_read(msg_id)  # Marca leído para reflejar el doble check azul
+                _mark_as_read(msg_id, phone_id=instance_phone_id, token=instance_token)
                 if msg_id in state.processed_whatsapp_ids:
                     log.info("↩️ WhatsApp duplicado ignorado (msg_id=%s)", msg_id)
                     return JSONResponse({"status": "duplicate"})
@@ -93,7 +110,7 @@ def register_whatsapp_routes(app, state):
                 media_id = msg.get("audio", {}).get("id")
                 if media_id:
                     log.info("🎧 Audio recibido (media_id=%s), iniciando transcripción...", media_id)
-                    whatsapp_token = os.getenv("WHATSAPP_TOKEN", "")
+                    whatsapp_token = instance_token or os.getenv("WHATSAPP_TOKEN", "")
                     openai_key = os.getenv("OPENAI_API_KEY", "")
                     text = transcribe_audio(media_id, whatsapp_token, openai_key)
                     log.info("📝 Transcripción completada: %s", text)
@@ -104,6 +121,7 @@ def register_whatsapp_routes(app, state):
             log.info("💬 WhatsApp %s: %s", sender, text)
             if client_name:
                 state.memory_manager.set_flag(sender, "client_name", client_name)
+            state.memory_manager.set_flag(sender, "guest_number", sender)
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(
@@ -112,7 +130,13 @@ def register_whatsapp_routes(app, state):
                     cid,
                     combined_text,
                 )
-                resp = await process_user_message(combined_text, cid, state=state, channel="whatsapp")
+                resp = await process_user_message(
+                    combined_text,
+                    cid,
+                    state=state,
+                    channel="whatsapp",
+                    instance_number=instance_number,
+                )
 
                 if not resp:
                     log.info("🔇 Escalación silenciosa %s", cid)

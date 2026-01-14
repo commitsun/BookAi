@@ -28,6 +28,7 @@ from agents.onboarding_agent import OnboardingAgent
 # Utilidades
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
+from core.utils.dynamic_context import build_dynamic_context_from_memory
 from core.memory_manager import MemoryManager
 from core.config import ModelConfig, ModelTier
 from core.utils.escalation_messages import EscalationMessages
@@ -54,7 +55,7 @@ class MainAgent:
         self.locks = {}
 
         base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
-        self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
+        self.system_prompt = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
         log.info("✅ MainAgent inicializado (GPT-4.1 + arquitectura modular + flags persistentes)")
 
@@ -267,7 +268,13 @@ class MainAgent:
                     return pending
 
                 base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
-                self.system_prompt = f"{get_time_context()}\n\n{base_prompt}"
+                dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
+                if dynamic_context:
+                    self.system_prompt = (
+                        f"{get_time_context()}\n\n{base_prompt.strip()}\n\n{dynamic_context}"
+                    )
+                else:
+                    self.system_prompt = f"{get_time_context()}\n\n{base_prompt.strip()}"
 
                 if chat_history is None:
                     chat_history = self.memory_manager.get_memory_as_messages(chat_id, limit=30)
