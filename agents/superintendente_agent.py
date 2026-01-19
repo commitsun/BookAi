@@ -208,6 +208,7 @@ class SuperintendenteAgent:
                 conversation_id=encargado_id,
                 role="user",
                 content=user_input,
+                channel="telegram",
             )
 
             await self._safe_call(
@@ -215,6 +216,7 @@ class SuperintendenteAgent:
                 conversation_id=encargado_id,
                 role="assistant",
                 content=f"[Superintendente] {output}",
+                channel="telegram",
             )
 
             log.info("SuperintendenteAgent completado: %s chars", len(output))

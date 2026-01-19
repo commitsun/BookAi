@@ -855,6 +855,7 @@ def register_telegram_routes(app, state):
                                         gid,
                                         "assistant",
                                         f"[TPL_SENT]|{template_id}|{payload_preview}",
+                                        channel="whatsapp",
                                     )
                             except Exception as mem_exc:
                                 log.warning("[TPL_CONFIRM] No se pudo guardar plantilla en memoria (%s): %s", gid, mem_exc)
@@ -916,7 +917,7 @@ def register_telegram_routes(app, state):
                         )
                         try:
                             if state.memory_manager:
-                                state.memory_manager.save(gid, "assistant", final_msg)
+                                state.memory_manager.save(gid, "assistant", final_msg, channel="whatsapp")
                         except Exception as mem_exc:
                             log.warning("[WA_CONFIRM] No se pudo guardar memoria para %s: %s", gid, mem_exc)
                         sent += 1
@@ -999,7 +1000,7 @@ def register_telegram_routes(app, state):
                             )
                             try:
                                 if state.memory_manager:
-                                    state.memory_manager.save(guest_id, "assistant", msg_to_send)
+                                    state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
                             except Exception as mem_exc:
                                 log.warning("[WA_CONFIRM_RECOVERY] No se pudo guardar memoria para %s: %s", guest_id, mem_exc)
                             if state.memory_manager:
@@ -1007,6 +1008,7 @@ def register_telegram_routes(app, state):
                                     chat_id,
                                     "system",
                                     f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                    channel="telegram",
                                 )
                             sent += 1
 
@@ -1113,6 +1115,7 @@ def register_telegram_routes(app, state):
                                     gid,
                                     "assistant",
                                     f"[TPL_SENT]|{template}|{payload_preview}",
+                                    channel="whatsapp",
                                 )
                         except Exception as mem_exc:
                             log.warning("[TPL_SEND] No se pudo guardar plantilla en memoria (%s): %s", gid, mem_exc)
@@ -1180,6 +1183,7 @@ def register_telegram_routes(app, state):
                                             conversation_id=chat_id,
                                             role="system",
                                             content=f"[WA_BULK]|{json.dumps(wa_drafts, ensure_ascii=False)}",
+                                            channel="telegram",
                                         )
                                     else:
                                         draft = wa_drafts[0]
@@ -1187,6 +1191,7 @@ def register_telegram_routes(app, state):
                                             conversation_id=chat_id,
                                             role="system",
                                             content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                            channel="telegram",
                                         )
                             except Exception as exc:
                                 log.warning("[WA_DRAFT] No se pudo guardar borrador en memoria: %s", exc)
@@ -1222,6 +1227,7 @@ def register_telegram_routes(app, state):
                                         conversation_id=chat_id,
                                         role="system",
                                         content=f"{tpl_marker}{raw_payload}",
+                                        channel="telegram",
                                     )
                             except Exception as exc:
                                 log.warning("[TPL_DRAFT] No se pudo guardar en memoria: %s", exc)
@@ -1291,6 +1297,7 @@ def register_telegram_routes(app, state):
                                     conversation_id=chat_id,
                                     role="system",
                                     content=draft_payload,
+                                    channel="telegram",
                                 )
                         except Exception:
                             pass

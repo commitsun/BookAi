@@ -18,6 +18,7 @@ async def process_user_message(
     hotel_name: str = "Hotel",
     channel: str = "whatsapp",
     instance_number: str | None = None,
+    memory_id: str | None = None,
 ) -> str | None:
     """
     Flujo principal:
@@ -27,13 +28,14 @@ async def process_user_message(
       4. Escalación → InternoAgent
     """
     try:
+        mem_id = memory_id or chat_id
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
         if isinstance(bookai_flags, dict) and bookai_flags.get(clean_id) is False:
             try:
-                state.memory_manager.save(clean_id, "user", user_message)
+                state.memory_manager.save(mem_id, "user", user_message)
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje con BookAI apagado: %s", exc)
             log.info("🤫 BookAI desactivado para %s; se omite respuesta automática.", clean_id)
@@ -55,7 +57,7 @@ async def process_user_message(
             return None
 
         try:
-            history = state.memory_manager.get_memory_as_messages(chat_id)
+            history = state.memory_manager.get_memory_as_messages(mem_id)
         except Exception as exc:
             log.warning("⚠️ No se pudo obtener memoria: %s", exc)
             history = []
@@ -69,7 +71,7 @@ async def process_user_message(
         try:
             hydrate_dynamic_context(
                 state=state,
-                chat_id=chat_id,
+                chat_id=mem_id,
                 instance_number=instance_number,
             )
         except Exception as exc:
@@ -83,7 +85,7 @@ async def process_user_message(
 
         response_raw = await main_agent.ainvoke(
             user_input=user_message,
-            chat_id=chat_id,
+            chat_id=mem_id,
             hotel_name=hotel_name,
             chat_history=history,
         )
@@ -113,7 +115,7 @@ async def process_user_message(
 
             hist_text = ""
             try:
-                raw_hist = state.memory_manager.get_memory(chat_id, limit=6)
+                raw_hist = state.memory_manager.get_memory(mem_id, limit=6)
                 if raw_hist:
                     lines = []
                     for m in raw_hist:

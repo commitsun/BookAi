@@ -122,8 +122,13 @@ def register_chatter_routes(app, state) -> None:
     async def list_chats(
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
+        channel: str = Query(default="whatsapp"),
         _: None = Depends(_verify_bearer),
     ):
+        channel = (channel or "whatsapp").strip().lower()
+        if channel not in {"whatsapp", "telegram"}:
+            raise HTTPException(status_code=422, detail="Canal no soportado")
+
         target = page * page_size
         batch_size = max(200, page_size * 10)
         offset = 0
@@ -133,7 +138,8 @@ def register_chatter_routes(app, state) -> None:
         while len(ordered_ids) < target:
             resp = (
                 supabase.table("chat_history")
-                .select("conversation_id, content, created_at, client_name")
+                .select("conversation_id, content, created_at, client_name, channel")
+                .eq("channel", channel)
                 .order("created_at", desc=True)
                 .range(offset, offset + batch_size - 1)
                 .execute()
@@ -143,7 +149,12 @@ def register_chatter_routes(app, state) -> None:
                 break
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
-                if not cid or cid in summaries:
+                content = (row.get("content") or "").strip()
+                if (
+                    not cid
+                    or cid in summaries
+                    or content.startswith("[Superintendente]")
+                ):
                     continue
                 ordered_ids.append(cid)
                 summaries[cid] = row
@@ -163,6 +174,7 @@ def register_chatter_routes(app, state) -> None:
                     supabase.table("chat_history")
                     .select("conversation_id, client_name, created_at")
                     .in_("conversation_id", page_ids)
+                    .eq("channel", channel)
                     .eq("role", "user")
                     .order("created_at", desc=True)
                     .limit(500)
@@ -188,7 +200,7 @@ def register_chatter_routes(app, state) -> None:
                     "room_number": None,
                     "checkin": None,
                     "checkout": None,
-                    "channel": "whatsapp",
+                    "channel": last.get("channel") or "whatsapp",
                     "last_message": last.get("content"),
                     "last_message_at": last.get("created_at"),
                     "avatar": None,
@@ -215,11 +227,12 @@ def register_chatter_routes(app, state) -> None:
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         offset = (page - 1) * page_size
+        like_pattern = f"%:{clean_id}"
 
         resp = (
             supabase.table("chat_history")
             .select("role, content, created_at, read_status, original_chat_id")
-            .eq("conversation_id", clean_id)
+            .or_(f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}")
             .order("created_at", desc=True)
             .range(offset, offset + page_size - 1)
             .execute()
@@ -294,9 +307,12 @@ def register_chatter_routes(app, state) -> None:
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        like_pattern = f"%:{clean_id}"
         supabase.table("chat_history").update(
             {"read_status": True}
-        ).eq("conversation_id", clean_id).eq("read_status", False).execute()
+        ).eq("read_status", False).or_(
+            f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
+        ).execute()
 
         return {
             "chat_id": clean_id,
@@ -399,11 +415,13 @@ def register_chatter_routes(app, state) -> None:
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        # Also consider compound conversation ids like "prefix:<chat_id>".
+        like_pattern = f"%:{clean_id}"
         resp = (
             supabase.table("chat_history")
             .select("created_at")
-            .eq("conversation_id", clean_id)
             .eq("role", "user")
+            .or_(f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}")
             .order("created_at", desc=True)
             .limit(1)
             .execute()

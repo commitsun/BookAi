@@ -24,6 +24,7 @@ def save_message(
     content: str,
     escalation_id: str | None = None,
     client_name: str | None = None,
+    channel: str | None = None,
 ) -> None:
     """
     Guarda un mensaje en la base de datos relacional de Supabase.
@@ -45,6 +46,8 @@ def save_message(
             data["escalation_id"] = escalation_id
         if client_name:
             data["client_name"] = client_name
+        if channel:
+            data["channel"] = channel
 
         try:
             supabase.table("chat_history").insert(data).execute()

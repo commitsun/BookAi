@@ -81,6 +81,7 @@ class MemoryManager:
         content: str,
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
+        channel: Optional[str] = None,
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
@@ -103,6 +104,8 @@ class MemoryManager:
             entry["escalation_id"] = escalation_id
         if client_name and normalized_role == "user":
             entry["client_name"] = client_name
+        if channel:
+            entry["channel"] = channel
 
         # Guardar en RAM
         self.runtime_memory.setdefault(cid, []).append(entry)
@@ -117,6 +120,7 @@ class MemoryManager:
                 entry["content"],
                 escalation_id=escalation_id,
                 client_name=client_name if normalized_role == "user" else None,
+                channel=channel,
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:

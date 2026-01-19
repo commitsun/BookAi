@@ -75,6 +75,7 @@ def register_whatsapp_routes(app, state):
 
             text = ""
             instance_number = metadata.get("display_phone_number") or ""
+            memory_id = f"{instance_number}:{sender}" if instance_number and sender else sender
             instance_phone_id = None
             instance_token = None
             if sender and instance_number:
@@ -83,11 +84,15 @@ def register_whatsapp_routes(app, state):
 
                     hydrate_dynamic_context(
                         state=state,
-                        chat_id=sender,
+                        chat_id=memory_id,
                         instance_number=instance_number,
                     )
-                    instance_phone_id = state.memory_manager.get_flag(sender, "whatsapp_phone_id")
-                    instance_token = state.memory_manager.get_flag(sender, "whatsapp_token")
+                    instance_phone_id = state.memory_manager.get_flag(memory_id, "whatsapp_phone_id")
+                    instance_token = state.memory_manager.get_flag(memory_id, "whatsapp_token")
+                    if instance_phone_id:
+                        state.memory_manager.set_flag(sender, "whatsapp_phone_id", instance_phone_id)
+                    if instance_token:
+                        state.memory_manager.set_flag(sender, "whatsapp_token", instance_token)
                 except Exception as exc:
                     log.warning("No se pudo hidratar contexto en webhook: %s", exc)
 
@@ -120,8 +125,8 @@ def register_whatsapp_routes(app, state):
 
             log.info("💬 WhatsApp %s: %s", sender, text)
             if client_name:
-                state.memory_manager.set_flag(sender, "client_name", client_name)
-            state.memory_manager.set_flag(sender, "guest_number", sender)
+                state.memory_manager.set_flag(memory_id, "client_name", client_name)
+            state.memory_manager.set_flag(memory_id, "guest_number", sender)
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(
@@ -132,10 +137,11 @@ def register_whatsapp_routes(app, state):
                 )
                 resp = await process_user_message(
                     combined_text,
-                    cid,
+                    sender,
                     state=state,
                     channel="whatsapp",
                     instance_number=instance_number,
+                    memory_id=cid,
                 )
 
                 if not resp:
@@ -145,9 +151,9 @@ def register_whatsapp_routes(app, state):
                 async def send_to_channel(uid: str, txt: str):
                     await state.channel_manager.send_message(uid, txt, channel="whatsapp")
 
-                await send_fragmented_async(send_to_channel, cid, resp)
+                await send_fragmented_async(send_to_channel, sender, resp)
 
-            await state.buffer_manager.add_message(sender, text, _process_buffered)
+            await state.buffer_manager.add_message(memory_id, text, _process_buffered)
 
             return JSONResponse({"status": "queued"})
 
