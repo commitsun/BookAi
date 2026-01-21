@@ -129,3 +129,46 @@ jobs:
 
       - name: "🚀 Step 3: Run full vectorization pipeline"
         run: python -m pipeline.run_pipeline
+
+  # 🧹 4️⃣ Limpia cache temporal (depende del anterior)
+  clear-daily-cache:
+    name: "🧹 4️⃣ Clear kb_daily_cache"
+    needs: [vectorize]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
+          echo "TEMP_KB_TABLE=kb_daily_cache" >> $GITHUB_ENV
+
+      - name: "🧹 Step 4: Clear kb_daily_cache"
+        run: |
+          python - <<'PY'
+          import os
+          from supabase import create_client
+
+          url = os.getenv("SUPABASE_URL")
+          key = os.getenv("SUPABASE_KEY")
+          table = os.getenv("TEMP_KB_TABLE", "kb_daily_cache")
+          if not url or not key:
+              raise SystemExit("Missing SUPABASE_URL or SUPABASE_KEY")
+
+          supabase = create_client(url, key)
+          supabase.table(table).delete().neq("id", None).execute()
+          print(f"Cleared {table}")
+          PY
