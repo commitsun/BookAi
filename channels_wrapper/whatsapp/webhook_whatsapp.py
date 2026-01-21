@@ -149,7 +149,12 @@ def register_whatsapp_routes(app, state):
                     return
 
                 async def send_to_channel(uid: str, txt: str):
-                    await state.channel_manager.send_message(uid, txt, channel="whatsapp")
+                    await state.channel_manager.send_message(
+                        uid,
+                        txt,
+                        channel="whatsapp",
+                        context_id=cid,
+                    )
 
                 await send_fragmented_async(send_to_channel, sender, resp)
 

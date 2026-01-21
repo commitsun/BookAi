@@ -64,7 +64,12 @@ async def process_user_message(
 
         async def send_inciso_callback(msg: str):
             try:
-                await state.channel_manager.send_message(chat_id, msg, channel=channel)
+                await state.channel_manager.send_message(
+                    chat_id,
+                    msg,
+                    channel=channel,
+                    context_id=mem_id,
+                )
             except Exception as exc:
                 log.error("❌ Error enviando inciso: %s", exc)
 

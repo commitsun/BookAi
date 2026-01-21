@@ -91,7 +91,13 @@ class ChannelManager:
     # ------------------------------------------------------------------
     # 💬 Envío de mensajes
     # ------------------------------------------------------------------
-    async def send_message(self, chat_id: str, message: str, channel: str = "whatsapp"):
+    async def send_message(
+        self,
+        chat_id: str,
+        message: str,
+        channel: str = "whatsapp",
+        context_id: str | None = None,
+    ):
         """
         Envía un mensaje al canal especificado (WhatsApp, Telegram, etc.).
         Soporta métodos síncronos y asíncronos.
@@ -125,8 +131,16 @@ class ChannelManager:
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
-                    phone_id = self.memory_manager.get_flag(chat_id, "whatsapp_phone_id")
-                    token = self.memory_manager.get_flag(chat_id, "whatsapp_token")
+                    lookup_id = context_id or chat_id
+                    phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
+                    log.info(
+                        "📡 WA creds lookup: chat_id=%s context_id=%s phone_id=%s token=%s",
+                        chat_id,
+                        lookup_id,
+                        phone_id or "missing",
+                        "set" if token else "missing",
+                    )
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)
@@ -155,6 +169,7 @@ class ChannelManager:
         *,
         language: str = "es",
         channel: str = "whatsapp",
+        context_id: str | None = None,
     ):
         """
         Envía una plantilla preaprobada (ej: WhatsApp).
@@ -171,8 +186,16 @@ class ChannelManager:
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
-                    phone_id = self.memory_manager.get_flag(chat_id, "whatsapp_phone_id")
-                    token = self.memory_manager.get_flag(chat_id, "whatsapp_token")
+                    lookup_id = context_id or chat_id
+                    phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
+                    log.info(
+                        "📡 WA template creds lookup: chat_id=%s context_id=%s phone_id=%s token=%s",
+                        chat_id,
+                        lookup_id,
+                        phone_id or "missing",
+                        "set" if token else "missing",
+                    )
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)

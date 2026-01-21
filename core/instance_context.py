@@ -44,6 +44,14 @@ def _normalize_phone_number(value: Optional[str]) -> str:
     return re.sub(r"\D", "", value or "").strip()
 
 
+def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
+    if not value:
+        return None
+    cleaned = str(value).strip()
+    cleaned = cleaned.replace("ponferrrada", "ponferrada")
+    return cleaned or None
+
+
 def _extract_payload(data: Any) -> Dict[str, Any]:
     if isinstance(data, dict):
         inner = data.get("data")
@@ -291,7 +299,9 @@ def hydrate_dynamic_context(
 
     if property_id and property_table and not memory_manager.get_flag(chat_id, "kb"):
         prop_details = fetch_property_by_id(property_table, property_id)
-        kb_name = prop_details.get("kb") or prop_details.get("kb_name") or prop_details.get("knowledge_base")
+        kb_name = _normalize_kb_name(
+            prop_details.get("kb") or prop_details.get("kb_name") or prop_details.get("knowledge_base")
+        )
         if kb_name:
             memory_manager.set_flag(chat_id, "kb", kb_name)
             memory_manager.set_flag(chat_id, "knowledge_base", kb_name)

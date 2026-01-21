@@ -125,6 +125,13 @@ class KBSearchTool(BaseTool):
         if not question:
             return "Por favor, formula una pregunta concreta."
 
+        def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
+            if not value:
+                return None
+            cleaned = str(value).strip()
+            cleaned = cleaned.replace("ponferrrada", "ponferrada")
+            return cleaned or None
+
         def _extract_focus_term(text: str) -> Optional[str]:
             words = re.findall(r"[a-záéíóúüñ]+", text.lower())
             if not words:
@@ -150,9 +157,9 @@ class KBSearchTool(BaseTool):
                 try:
                     instance_url = self.memory_manager.get_flag(self.chat_id, "instance_url")
                     property_id = self.memory_manager.get_flag(self.chat_id, "property_id")
-                    kb_name = self.memory_manager.get_flag(self.chat_id, "kb")
+                    kb_name = _normalize_kb_name(self.memory_manager.get_flag(self.chat_id, "kb"))
                     if not kb_name:
-                        kb_name = self.memory_manager.get_flag(self.chat_id, "knowledge_base")
+                        kb_name = _normalize_kb_name(self.memory_manager.get_flag(self.chat_id, "knowledge_base"))
                 except Exception:
                     instance_url = None
                     property_id = None
@@ -165,12 +172,16 @@ class KBSearchTool(BaseTool):
                 if kb_name:
                     payload["kb"] = kb_name
                     payload["knowledge_base"] = kb_name
+                else:
+                    log.warning("KBSearchTool: falta kb/knowledge_base en memoria.")
+                    return None
 
                 if "instance_url" not in payload or "property_id" not in payload:
                     log.warning("KBSearchTool: falta contexto dinamico (instance_url/property_id).")
                     return None
 
             raw_reply = await kb_tool.ainvoke(payload)
+            base_payload = payload.copy()
             def _is_invalid(text: str) -> bool:
                 if not text or len(text) < 10:
                     return True
@@ -196,7 +207,9 @@ class KBSearchTool(BaseTool):
                 focus = _extract_focus_term(question)
                 if focus and focus != question.strip().lower():
                     log.info("KBSearchTool: reintentando KB con término focal '%s'", focus)
-                    raw_retry = await kb_tool.ainvoke({"input": focus})
+                    retry_payload = base_payload.copy()
+                    retry_payload["input"] = focus
+                    raw_retry = await kb_tool.ainvoke(retry_payload)
                     cleaned_retry = normalize_reply(raw_retry, focus, "InfoAgent").strip()
                     if not _is_invalid(cleaned_retry):
                         log.info("KBSearchTool: información obtenida correctamente (reintento).")
