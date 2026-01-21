@@ -39,6 +39,7 @@ class Settings:
     # Supabase / almacenamiento
     SUPABASE_URL = os.getenv("SUPABASE_URL")
     SUPABASE_KEY = os.getenv("SUPABASE_KEY")
+    TEMP_KB_TABLE = os.getenv("TEMP_KB_TABLE", "kb_daily_cache")
 
     # AWS / S3
     S3_BUCKET = os.getenv("S3_BUCKET")

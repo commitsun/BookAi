@@ -1,5 +1,11 @@
 import os
 import logging
+from datetime import datetime
+
+import pytz
+
+from core.config import Settings
+from core.utils.time_context import DEFAULT_TZ
 from supabase import create_client, Client
 
 # ======================================================
@@ -13,6 +19,83 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.info("✅ Conexión con Supabase inicializada correctamente.")
+
+
+def _get_day_key(timezone: str = DEFAULT_TZ) -> str:
+    tz = pytz.timezone(timezone)
+    now = datetime.now(tz)
+    return now.strftime("%Y-%m-%d")
+
+
+def add_kb_daily_cache(
+    *,
+    property_id: str | int | None = None,
+    kb_name: str | None = None,
+    property_name: str | None = None,
+    topic: str | None = None,
+    category: str | None = None,
+    content: str | None = None,
+    source_type: str | None = None,
+    day_key: str | None = None,
+    timezone: str = DEFAULT_TZ,
+) -> None:
+    """Guarda una entrada temporal de KB para el dia actual."""
+    if not (content and str(content).strip()):
+        return
+
+    payload = {
+        "day_key": day_key or _get_day_key(timezone),
+        "content": str(content).strip(),
+    }
+    if property_id is not None:
+        payload["property_id"] = property_id
+    if kb_name:
+        payload["kb_name"] = str(kb_name).strip()
+    if property_name:
+        payload["property_name"] = str(property_name).strip()
+    if topic:
+        payload["topic"] = str(topic).strip()
+    if category:
+        payload["category"] = str(category).strip()
+    if source_type:
+        payload["source_type"] = str(source_type).strip()
+
+    try:
+        supabase.table(Settings.TEMP_KB_TABLE).insert(payload).execute()
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo guardar cache temporal KB: %s", exc)
+
+
+def fetch_kb_daily_cache(
+    *,
+    property_id: str | int | None = None,
+    kb_name: str | None = None,
+    property_name: str | None = None,
+    day_key: str | None = None,
+    timezone: str = DEFAULT_TZ,
+    limit: int = 25,
+) -> list[dict]:
+    """Recupera entradas temporales de KB para el dia actual."""
+    if property_id is None and not kb_name and not property_name:
+        return []
+
+    key = day_key or _get_day_key(timezone)
+    try:
+        query = supabase.table(Settings.TEMP_KB_TABLE).select(
+            "topic, category, content, created_at, property_id, kb_name, property_name"
+        )
+        query = query.eq("day_key", key)
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        elif kb_name:
+            query = query.eq("kb_name", kb_name)
+        else:
+            query = query.eq("property_name", property_name)
+        response = query.order("created_at", desc=False).limit(limit).execute()
+        return response.data or []
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo leer cache temporal KB: %s", exc)
+        return []
 
 
 # ======================================================

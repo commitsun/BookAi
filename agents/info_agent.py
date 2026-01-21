@@ -309,7 +309,6 @@ class InfoAgent:
             )
             output = (result.get("output") or "").strip()
 
-
         except Exception as exc:
             log.error("Error ejecutando InfoAgent: %s", exc, exc_info=True)
             return f"Error consultando la información del hotel: {exc}"

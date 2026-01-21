@@ -40,6 +40,17 @@ def register_telegram_routes(app, state):
         match = re.search(r"\+?\d{6,15}", text.replace(" ", ""))
         return match.group(0) if match else None
 
+    def _extract_property_id(text: str) -> int | None:
+        if not text:
+            return None
+        match = re.search(r"\b(?:property|propiedad)\s*(?:id\s*)?(\d+)\b", text, flags=re.IGNORECASE)
+        if not match:
+            return None
+        try:
+            return int(match.group(1))
+        except ValueError:
+            return None
+
     def _is_short_confirmation(text: str) -> bool:
         """
         Confirma solo respuestas cortas (ej. 'ok', 'sí') y evita frases largas
@@ -1140,6 +1151,12 @@ def register_telegram_routes(app, state):
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
                 hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME)
                 if payload:
+                    prop_id = _extract_property_id(payload)
+                    if prop_id is not None and state.memory_manager:
+                        try:
+                            state.memory_manager.set_flag(chat_id, "property_id", prop_id)
+                        except Exception:
+                            pass
                     payload_lower = payload.lower()
                     if "alda" in payload_lower and ("hotel" in payload_lower or "hostal" in payload_lower):
                         match = re.search(

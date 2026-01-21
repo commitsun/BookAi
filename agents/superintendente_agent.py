@@ -373,6 +373,18 @@ class SuperintendenteAgent:
             return cleaned, False
         return hotel_name, False
 
+    def _extract_property_id(self, *texts: str) -> int | None:
+        for text in texts:
+            if not text:
+                continue
+            match = re.search(r"\b(?:property|propiedad)\s*(\d+)\b", text, flags=re.IGNORECASE)
+            if match:
+                try:
+                    return int(match.group(1))
+                except ValueError:
+                    continue
+        return None
+
     async def handle_kb_addition(
         self,
         topic: str,
@@ -400,6 +412,32 @@ class SuperintendenteAgent:
                 source_type=source,
                 use_env=False,
             )
+
+            try:
+                from core.db import add_kb_daily_cache
+
+                property_id = None
+                kb_name = None
+                if self.memory_manager and encargado_id:
+                    property_id = self.memory_manager.get_flag(encargado_id, "property_id")
+                    kb_name = self.memory_manager.get_flag(encargado_id, "kb") or self.memory_manager.get_flag(
+                        encargado_id,
+                        "knowledge_base",
+                    )
+                if property_id is None:
+                    property_id = self._extract_property_id(topic, clean_content, hotel_name, resolved_name)
+
+                add_kb_daily_cache(
+                    property_id=property_id,
+                    kb_name=kb_name,
+                    property_name=resolved_name,
+                    topic=topic,
+                    category=None,
+                    content=clean_content,
+                    source_type=source,
+                )
+            except Exception as exc:
+                log.warning("No se pudo guardar cache temporal KB: %s", exc)
 
             confirmation = (
                 "✅ Información agregada a la base de conocimientos:\n\n"
