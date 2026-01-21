@@ -19,23 +19,23 @@ log.setLevel(logging.INFO)
 
 INSTANCE_LOOKUP_WEBHOOK = os.getenv(
     "INSTANCE_LOOKUP_WEBHOOK",
-    "https://n8n-n8n.d6aq21.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
+    "https://n8n-n8n.x9cffc.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
 )
 INSTANCE_BY_CODE_WEBHOOK = os.getenv(
     "INSTANCE_BY_CODE_WEBHOOK",
-    "https://n8n-n8n.d6aq21.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
+    "https://n8n-n8n.x9cffc.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
 )
 PROPERTY_BY_NAME_WEBHOOK = os.getenv(
     "PROPERTY_BY_NAME_WEBHOOK",
-    "https://n8n-n8n.d6aq21.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
+    "https://n8n-n8n.x9cffc.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
 )
 PROPERTY_BY_CODE_WEBHOOK = os.getenv(
     "PROPERTY_BY_CODE_WEBHOOK",
-    "https://n8n-n8n.d6aq21.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
+    "https://n8n-n8n.x9cffc.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
 )
 PROPERTY_BY_ID_WEBHOOK = os.getenv(
     "PROPERTY_BY_ID_WEBHOOK",
-    "https://n8n-n8n.d6aq21.easypanel.host/webhook/bbd715b6-2a23-4cdb-9107-8e73849bb6ce",
+    "https://n8n-n8n.x9cffc.easypanel.host/webhook/bbd715b6-2a23-4cdb-9107-8e73849bb6ce",
 )
 DEFAULT_PROPERTY_TABLE = os.getenv("DEFAULT_PROPERTY_TABLE", "alda_hotels")
 

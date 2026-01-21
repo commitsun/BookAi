@@ -331,6 +331,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
 
         reservation_payload = {
             "pricelistId": pricelist_id,
+            "property_id": pms_property_id,
             "pmsPropertyId": pms_property_id,
             "reservations": [
                 {
@@ -347,7 +348,6 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         }
         if instance_url:
             reservation_payload["instance_url"] = instance_url
-            reservation_payload["property_id"] = pms_property_id
         if partner_requests:
             reservation_payload["reservations"][0]["partnerRequests"] = partner_requests.strip()
 
