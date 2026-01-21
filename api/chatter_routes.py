@@ -27,6 +27,7 @@ class SendMessageRequest(BaseModel):
     message: str = Field(..., description="Texto del mensaje a enviar")
     channel: str = Field(default="whatsapp", description="Canal de salida")
     sender: Optional[str] = Field(default="bookai", description="Emisor (cliente, bookai, user)")
+    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
 
 class ToggleBookAiRequest(BaseModel):
@@ -40,6 +41,7 @@ class SendTemplateRequest(BaseModel):
     language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
     channel: str = Field(default="whatsapp", description="Canal de salida")
+    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
 
 # ---------------------------------------------------------------------------
@@ -62,6 +64,15 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
 
 def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
+
+
+def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if text.isdigit():
+        return int(text)
+    return text or None
 
 
 def _map_sender(role: str) -> str:
@@ -132,13 +143,13 @@ def register_chatter_routes(app, state) -> None:
         target = page * page_size
         batch_size = max(200, page_size * 10)
         offset = 0
-        ordered_ids: List[str] = []
+        ordered_keys: List[str] = []
         summaries: Dict[str, Dict[str, Any]] = {}
 
-        while len(ordered_ids) < target:
+        while len(ordered_keys) < target:
             resp = (
                 supabase.table("chat_history")
-                .select("conversation_id, content, created_at, client_name, channel")
+                .select("conversation_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
                 .order("created_at", desc=True)
                 .range(offset, offset + batch_size - 1)
@@ -149,52 +160,63 @@ def register_chatter_routes(app, state) -> None:
                 break
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
+                prop_id = row.get("property_id")
+                key = f"{cid}::{prop_id}" if prop_id is not None else f"{cid}::"
                 content = (row.get("content") or "").strip()
                 if (
                     not cid
-                    or cid in summaries
+                    or key in summaries
                     or content.startswith("[Superintendente]")
                 ):
                     continue
-                ordered_ids.append(cid)
-                summaries[cid] = row
-                if len(ordered_ids) >= target:
+                ordered_keys.append(key)
+                summaries[key] = row
+                if len(ordered_keys) >= target:
                     break
             if len(rows) < batch_size:
                 break
             offset += batch_size
 
-        page_ids = ordered_ids[(page - 1) * page_size:page * page_size]
+        page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
         pending_map = _pending_actions()
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
-        if page_ids:
-            try:
-                resp_names = (
-                    supabase.table("chat_history")
-                    .select("conversation_id, client_name, created_at")
-                    .in_("conversation_id", page_ids)
-                    .eq("channel", channel)
-                    .eq("role", "user")
-                    .order("created_at", desc=True)
-                    .limit(500)
-                    .execute()
-                )
-                for row in resp_names.data or []:
-                    cid = str(row.get("conversation_id") or "").strip()
-                    name = row.get("client_name")
-                    if cid and name and cid not in client_names:
-                        client_names[cid] = name
-            except Exception as exc:
-                log.warning("No se pudo cargar client_name: %s", exc)
+        if page_keys:
+            conv_ids = [
+                summaries[key].get("conversation_id")
+                for key in page_keys
+                if summaries.get(key) and summaries[key].get("conversation_id")
+            ]
+            if conv_ids:
+                try:
+                    resp_names = (
+                        supabase.table("chat_history")
+                        .select("conversation_id, client_name, created_at")
+                        .in_("conversation_id", conv_ids)
+                        .eq("channel", channel)
+                        .eq("role", "user")
+                        .order("created_at", desc=True)
+                        .limit(500)
+                        .execute()
+                    )
+                    for row in resp_names.data or []:
+                        cid = str(row.get("conversation_id") or "").strip()
+                        name = row.get("client_name")
+                        if cid and name and cid not in client_names:
+                            client_names[cid] = name
+                except Exception as exc:
+                    log.warning("No se pudo cargar client_name: %s", exc)
 
         items = []
-        for cid in page_ids:
-            last = summaries.get(cid, {})
+        for key in page_keys:
+            last = summaries.get(key, {})
+            cid = str(last.get("conversation_id") or "").strip()
+            prop_id = last.get("property_id")
             phone = _clean_chat_id(cid)
             items.append(
                 {
                     "chat_id": cid,
+                    "property_id": prop_id,
                     "reservation_id": None,
                     "reservation_status": None,
                     "room_number": None,
@@ -223,20 +245,27 @@ def register_chatter_routes(app, state) -> None:
         chat_id: str,
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
         offset = (page - 1) * page_size
         like_pattern = f"%:{clean_id}"
 
-        resp = (
-            supabase.table("chat_history")
-            .select("role, content, created_at, read_status, original_chat_id")
-            .or_(f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}")
-            .order("created_at", desc=True)
-            .range(offset, offset + page_size - 1)
-            .execute()
+        query = supabase.table("chat_history").select(
+            "role, content, created_at, read_status, original_chat_id, property_id"
         )
+        if property_id is not None:
+            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+        else:
+            query = query.or_(
+                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
+            )
+        resp = query.order("created_at", desc=True).range(
+            offset,
+            offset + page_size - 1,
+        ).execute()
 
         rows = resp.data or []
         rows.reverse()
@@ -251,6 +280,7 @@ def register_chatter_routes(app, state) -> None:
                     "message": row.get("content"),
                     "sender": _map_sender(row.get("role")),
                     "original_chat_id": row.get("original_chat_id"),
+                    "property_id": row.get("property_id"),
                 }
             )
 
@@ -264,6 +294,7 @@ def register_chatter_routes(app, state) -> None:
     @router.post("/messages")
     async def send_message(payload: SendMessageRequest, _: None = Depends(_verify_bearer)):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
+        property_id = _normalize_property_id(payload.property_id)
         if payload.channel.lower() != "whatsapp":
             raise HTTPException(status_code=422, detail="Canal no soportado")
         if not payload.message.strip():
@@ -275,6 +306,8 @@ def register_chatter_routes(app, state) -> None:
             role = "assistant"
             if sender in {"cliente", "user", "usuario", "guest"}:
                 role = "user"
+            if property_id is not None:
+                state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.save(chat_id, role, payload.message)
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
@@ -304,15 +337,23 @@ def register_chatter_routes(app, state) -> None:
     @router.patch("/chats/{chat_id}/read")
     async def mark_chat_read(
         chat_id: str,
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
         like_pattern = f"%:{clean_id}"
-        supabase.table("chat_history").update(
-            {"read_status": True}
-        ).eq("read_status", False).or_(
-            f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
-        ).execute()
+        query = supabase.table("chat_history").update({"read_status": True}).eq(
+            "read_status",
+            False,
+        )
+        if property_id is not None:
+            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+        else:
+            query = query.or_(
+                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
+            )
+        query.execute()
 
         return {
             "chat_id": clean_id,
@@ -355,6 +396,7 @@ def register_chatter_routes(app, state) -> None:
     @router.post("/templates/send")
     async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
+        property_id = _normalize_property_id(payload.property_id)
         if payload.channel.lower() != "whatsapp":
             raise HTTPException(status_code=422, detail="Canal no soportado")
 
@@ -393,7 +435,11 @@ def register_chatter_routes(app, state) -> None:
         try:
             rendered = template_def.render_content(payload.parameters) if template_def else None
             if rendered:
+                if property_id is not None:
+                    state.memory_manager.set_flag(chat_id, "property_id", property_id)
                 state.memory_manager.save(chat_id, role="assistant", content=rendered)
+            if property_id is not None:
+                state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.save(
                 chat_id,
                 role="system",
@@ -412,20 +458,21 @@ def register_chatter_routes(app, state) -> None:
     @router.get("/chats/{chat_id}/window")
     async def check_window(
         chat_id: str,
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
         # Also consider compound conversation ids like "prefix:<chat_id>".
         like_pattern = f"%:{clean_id}"
-        resp = (
-            supabase.table("chat_history")
-            .select("created_at")
-            .eq("role", "user")
-            .or_(f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}")
-            .order("created_at", desc=True)
-            .limit(1)
-            .execute()
-        )
+        query = supabase.table("chat_history").select("created_at").eq("role", "user")
+        if property_id is not None:
+            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+        else:
+            query = query.or_(
+                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
+            )
+        resp = query.order("created_at", desc=True).limit(1).execute()
         rows = resp.data or []
         last_ts = rows[0].get("created_at") if rows else None
         last_dt = _parse_ts(last_ts)

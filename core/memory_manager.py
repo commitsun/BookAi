@@ -1,4 +1,5 @@
 import time
+import re
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
@@ -28,6 +29,27 @@ class MemoryManager:
         """Normaliza el ID (quita '+' y espacios)."""
         return str(conversation_id).replace("+", "").strip()
 
+    def _normalize_phone(self, value: str) -> str:
+        digits = re.sub(r"\D", "", value or "")
+        if digits:
+            return digits
+        return str(value or "").replace("+", "").strip()
+
+    def _resolve_db_conversation_id(self, conversation_id: str) -> str:
+        guest_number = self.get_flag(conversation_id, "guest_number")
+        if guest_number:
+            return self._normalize_phone(str(guest_number))
+        if ":" in str(conversation_id):
+            tail = str(conversation_id).split(":")[-1]
+            return self._normalize_phone(tail)
+        return self._normalize_phone(str(conversation_id))
+
+    def _resolve_property_id(self, conversation_id: str):
+        return self.get_flag(conversation_id, "property_id") or self.get_flag(
+            conversation_id,
+            "pms_property_id",
+        )
+
     # ----------------------------------------------------------------------
     def get_memory(self, conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:
         """
@@ -42,7 +64,17 @@ class MemoryManager:
 
             # Mensajes en DB (últimos X días)
             since = datetime.utcnow() - timedelta(days=self.db_history_days)
-            db_msgs = get_conversation_history(cid, limit=limit, since=since) or []
+            db_conversation_id = self._resolve_db_conversation_id(conversation_id)
+            property_id = self._resolve_property_id(conversation_id)
+            db_msgs = (
+                get_conversation_history(
+                    db_conversation_id,
+                    limit=limit,
+                    since=since,
+                    property_id=property_id,
+                )
+                or []
+            )
 
             # Fusionar ambos
             combined = db_msgs + local_msgs
@@ -114,13 +146,17 @@ class MemoryManager:
 
         # Guardar en Supabase
         try:
+            db_conversation_id = self._resolve_db_conversation_id(conversation_id)
+            property_id = self._resolve_property_id(conversation_id)
             save_message(
-                cid,
+                db_conversation_id,
                 normalized_role,
                 entry["content"],
                 escalation_id=escalation_id,
                 client_name=client_name if normalized_role == "user" else None,
                 channel=channel,
+                property_id=property_id,
+                original_chat_id=cid,
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:
