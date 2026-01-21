@@ -130,7 +130,7 @@ jobs:
       - name: "🚀 Step 3: Run full vectorization pipeline"
         run: python -m pipeline.run_pipeline
 
-  # 🧹 4️⃣ Limpia cache temporal (depende del anterior)
+  # 🧹 4️⃣ Limpia cache temporal  (depende del anterior)
   clear-daily-cache:
     name: "🧹 4️⃣ Clear kb_daily_cache"
     needs: [vectorize]
@@ -169,6 +169,6 @@ jobs:
               raise SystemExit("Missing SUPABASE_URL or SUPABASE_KEY")
 
           supabase = create_client(url, key)
-          supabase.table(table).delete().neq("id", None).execute()
+          supabase.table(table).delete().not_.is_("id", "null").execute()
           print(f"Cleared {table}")
           PY
