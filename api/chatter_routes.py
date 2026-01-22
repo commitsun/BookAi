@@ -335,6 +335,7 @@ def register_chatter_routes(app, state) -> None:
             "status": "sent",
             "chat_id": chat_id,
             "user_id": payload.user_id,
+            "sender": role,
         }
 
     @router.patch("/chats/{chat_id}/bookai")
