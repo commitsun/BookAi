@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from urllib.parse import unquote
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
 
@@ -248,10 +249,18 @@ def register_chatter_routes(app, state) -> None:
         property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
-        clean_id = _clean_chat_id(chat_id) or chat_id
+        decoded_id = unquote(chat_id or "").strip()
+        clean_id = _clean_chat_id(decoded_id) or decoded_id
+        id_candidates = {clean_id}
+        if decoded_id and decoded_id != clean_id:
+            id_candidates.add(decoded_id)
+        tail = decoded_id.split(":")[-1] if ":" in decoded_id else ""
+        tail_clean = _clean_chat_id(tail) or tail
+        if tail_clean:
+            id_candidates.add(tail_clean)
         property_id = _normalize_property_id(property_id)
         offset = (page - 1) * page_size
-        like_pattern = f"%:{clean_id}"
+        like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
         query = supabase.table("chat_history").select(
             "role, content, created_at, read_status, original_chat_id, property_id"
@@ -259,9 +268,9 @@ def register_chatter_routes(app, state) -> None:
         if property_id is not None:
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:
-            query = query.or_(
-                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
-            )
+            or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+            or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+            query = query.or_(",".join(or_filters))
         resp = query.order("created_at", desc=True).range(
             offset,
             offset + page_size - 1,
