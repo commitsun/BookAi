@@ -71,6 +71,10 @@ class Settings:
     SUPERINTENDENTE_MODEL = os.getenv("SUPERINTENDENTE_MODEL", MODEL_INTERNAL)
     SUPERINTENDENTE_S3_PREFIX = os.getenv("SUPERINTENDENTE_S3_PREFIX", "")
     SUPERINTENDENTE_S3_DOC = os.getenv("SUPERINTENDENTE_S3_DOC", "")
+    SUPERINTENDENTE_HISTORY_TABLE = os.getenv(
+        "SUPERINTENDENTE_HISTORY_TABLE",
+        "superintendente_history",
+    )
 
     # Plantillas WhatsApp
     TEMPLATE_SUPABASE_TABLE = os.getenv("TEMPLATE_SUPABASE_TABLE", "whatsapp_templates")

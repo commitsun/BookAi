@@ -135,8 +135,9 @@ class ChannelManager:
                     phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
                     log.info(
-                        "📡 WA creds lookup: chat_id=%s context_id=%s phone_id=%s token=%s",
+                        "📡 WA creds lookup: chat_id=%s context_id=%s lookup_id=%s phone_id=%s token=%s",
                         chat_id,
+                        context_id,
                         lookup_id,
                         phone_id or "missing",
                         "set" if token else "missing",
@@ -144,6 +145,12 @@ class ChannelManager:
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                    else:
+                        # Evita que queden credenciales "pegadas" de envíos anteriores.
+                        if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
+                            delattr(channel_obj, "_dynamic_whatsapp_phone_id")
+                        if hasattr(channel_obj, "_dynamic_whatsapp_token"):
+                            delattr(channel_obj, "_dynamic_whatsapp_token")
                 except Exception as exc:
                     log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 
@@ -190,8 +197,9 @@ class ChannelManager:
                     phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
                     log.info(
-                        "📡 WA template creds lookup: chat_id=%s context_id=%s phone_id=%s token=%s",
+                        "📡 WA template creds lookup: chat_id=%s context_id=%s lookup_id=%s phone_id=%s token=%s",
                         chat_id,
+                        context_id,
                         lookup_id,
                         phone_id or "missing",
                         "set" if token else "missing",
@@ -199,6 +207,12 @@ class ChannelManager:
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                    else:
+                        # Evita que queden credenciales "pegadas" de envíos anteriores.
+                        if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
+                            delattr(channel_obj, "_dynamic_whatsapp_phone_id")
+                        if hasattr(channel_obj, "_dynamic_whatsapp_token"):
+                            delattr(channel_obj, "_dynamic_whatsapp_token")
                 except Exception as exc:
                     log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 

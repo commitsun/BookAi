@@ -91,7 +91,7 @@ class SuperintendenteAgent:
         user_input: str,
         encargado_id: str,
         hotel_name: str,
-        context_window: int = 20,
+        context_window: int = 50,
         chat_history: Optional[List[Any]] = None,
     ) -> str:
         """
@@ -112,6 +112,14 @@ class SuperintendenteAgent:
             if self.memory_manager and encargado_id:
                 try:
                     self.memory_manager.set_flag(encargado_id, "property_name", resolved_hotel_name)
+                    self.memory_manager.set_flag(
+                        encargado_id,
+                        "history_table",
+                        Settings.SUPERINTENDENTE_HISTORY_TABLE,
+                    )
+                    inferred_property_id = self._extract_property_id(user_input, hotel_name, resolved_hotel_name)
+                    if inferred_property_id is not None:
+                        self.memory_manager.set_flag(encargado_id, "property_id", inferred_property_id)
                 except Exception:
                     pass
 
@@ -168,6 +176,7 @@ class SuperintendenteAgent:
             tpl_marker = None
             kb_marker = None
             kb_rm_marker = None
+            broadcast_marker = None
             for _action, observation in intermediates:
                 if isinstance(observation, str) and "[WA_DRAFT]|" in observation:
                     wa_markers.append(
@@ -185,7 +194,11 @@ class SuperintendenteAgent:
                     kb_rm_marker = observation[
                         observation.index("[KB_REMOVE_DRAFT]|") :
                     ].strip()
-                if wa_markers and tpl_marker and kb_marker and kb_rm_marker:
+                if isinstance(observation, str) and "[BROADCAST_DRAFT]|" in observation:
+                    broadcast_marker = observation[
+                        observation.index("[BROADCAST_DRAFT]|") :
+                    ].strip()
+                if wa_markers and tpl_marker and kb_marker and kb_rm_marker and broadcast_marker:
                     break
             if wa_markers:
                 markers_block = "\n".join(wa_markers)
@@ -202,6 +215,8 @@ class SuperintendenteAgent:
                 output = f"{kb_marker}\n{output}"
             if kb_rm_marker and "[KB_REMOVE_DRAFT]|" not in output:
                 output = f"{kb_rm_marker}\n{output}"
+            if broadcast_marker:
+                output = broadcast_marker
 
             await self._safe_call(
                 getattr(self.memory_manager, "save", None),
@@ -215,7 +230,7 @@ class SuperintendenteAgent:
                 getattr(self.memory_manager, "save", None),
                 conversation_id=encargado_id,
                 role="assistant",
-                content=f"[Superintendente] {output}",
+                content=output,
                 channel="telegram",
             )
 
@@ -237,6 +252,7 @@ class SuperintendenteAgent:
             create_review_conversations_tool,
             create_remove_from_kb_tool,
             create_send_broadcast_tool,
+            create_send_broadcast_checkin_tool,
             create_send_message_main_tool,
             create_send_template_tool,
             create_send_whatsapp_tool,
@@ -260,6 +276,7 @@ class SuperintendenteAgent:
             create_review_conversations_tool(
                 hotel_name=hotel_name,
                 memory_manager=self.memory_manager,
+                chat_id=encargado_id,
             ),
             create_consulta_reserva_general_tool(
                 memory_manager=self.memory_manager,
@@ -279,12 +296,24 @@ class SuperintendenteAgent:
                 channel_manager=self.channel_manager,
                 supabase_client=self.supabase_client,
                 template_registry=self.template_registry,
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
+            ),
+            create_send_broadcast_checkin_tool(
+                hotel_name=hotel_name,
+                channel_manager=self.channel_manager,
+                supabase_client=self.supabase_client,
+                template_registry=self.template_registry,
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
             ),
             create_send_template_tool(
                 hotel_name=hotel_name,
                 channel_manager=self.channel_manager,
                 template_registry=self.template_registry,
                 supabase_client=self.supabase_client,
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
             ),
             create_send_message_main_tool(
                 encargado_id=encargado_id,
@@ -292,6 +321,8 @@ class SuperintendenteAgent:
             ),
             create_send_whatsapp_tool(
                 channel_manager=self.channel_manager,
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
             ),
         ]
 

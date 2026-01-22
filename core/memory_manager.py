@@ -50,6 +50,10 @@ class MemoryManager:
             "pms_property_id",
         )
 
+    def _resolve_history_table(self, conversation_id: str) -> str:
+        table = self.get_flag(conversation_id, "history_table")
+        return str(table).strip() if table else "chat_history"
+
     # ----------------------------------------------------------------------
     def get_memory(self, conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:
         """
@@ -66,12 +70,14 @@ class MemoryManager:
             since = datetime.utcnow() - timedelta(days=self.db_history_days)
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             property_id = self._resolve_property_id(conversation_id)
+            history_table = self._resolve_history_table(conversation_id)
             db_msgs = (
                 get_conversation_history(
                     db_conversation_id,
                     limit=limit,
                     since=since,
                     property_id=property_id,
+                    table=history_table,
                 )
                 or []
             )
@@ -157,6 +163,7 @@ class MemoryManager:
                 channel=channel,
                 property_id=property_id,
                 original_chat_id=cid,
+                table=self._resolve_history_table(conversation_id),
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:

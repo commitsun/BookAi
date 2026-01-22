@@ -113,6 +113,7 @@ def fetch_instance_by_code(hotel_code: str) -> Dict[str, Any]:
     data = _post_json(INSTANCE_BY_CODE_WEBHOOK, payload)
     if data:
         return data
+    log.info("🔎 Instance fallback by code via Supabase: hotel_code=%s", hotel_code)
     if supabase:
         try:
             resp = (
@@ -123,6 +124,8 @@ def fetch_instance_by_code(hotel_code: str) -> Dict[str, Any]:
                 .execute()
             )
             rows = resp.data or []
+            if rows:
+                log.info("✅ Instance found in Supabase: hotel_code=%s", hotel_code)
             return rows[0] if rows else {}
         except Exception as exc:
             log.warning("Fallback supabase instances fallo: %s", exc)
@@ -155,6 +158,7 @@ def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
     data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
     if data:
         return data
+    log.info("🔎 Property fallback by code via Supabase: table=%s hotel_code=%s", table, hotel_code)
     if supabase:
         try:
             resp = (
@@ -165,6 +169,8 @@ def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
                 .execute()
             )
             rows = resp.data or []
+            if rows:
+                log.info("✅ Property found in Supabase: table=%s hotel_code=%s", table, hotel_code)
             return rows[0] if rows else {}
         except Exception as exc:
             log.warning("Fallback supabase property_by_code fallo: %s", exc)
@@ -176,6 +182,7 @@ def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
     data = _post_json(PROPERTY_BY_ID_WEBHOOK, payload)
     if data:
         return data
+    log.info("🔎 Property fallback by id via Supabase: table=%s property_id=%s", table, property_id)
     if supabase:
         try:
             resp = (
@@ -186,10 +193,80 @@ def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
                 .execute()
             )
             rows = resp.data or []
+            if rows:
+                log.info("✅ Property found in Supabase: table=%s property_id=%s", table, property_id)
             return rows[0] if rows else {}
         except Exception as exc:
             log.warning("Fallback supabase property_by_id fallo: %s", exc)
     return {}
+
+
+def ensure_instance_credentials(
+    memory_manager: Any,
+    chat_id: str,
+) -> None:
+    """
+    Asegura credenciales de WhatsApp en memoria usando property_id/hotel_code.
+    Útil en flujos donde no se invocó la tool de envío.
+    """
+    if not memory_manager or not chat_id:
+        return
+
+    try:
+        property_table = memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+        property_id = memory_manager.get_flag(chat_id, "property_id")
+        hotel_code = memory_manager.get_flag(chat_id, "property_name")
+        last_property_id = memory_manager.get_flag(chat_id, "wa_context_property_id")
+        last_hotel_code = memory_manager.get_flag(chat_id, "wa_context_hotel_code")
+
+        existing_phone = memory_manager.get_flag(chat_id, "whatsapp_phone_id")
+        existing_token = memory_manager.get_flag(chat_id, "whatsapp_token")
+        if (
+            existing_phone
+            and existing_token
+            and property_id is not None
+            and last_property_id == property_id
+        ):
+            return
+        if (
+            existing_phone
+            and existing_token
+            and hotel_code
+            and last_hotel_code
+            and str(last_hotel_code).strip().lower() == str(hotel_code).strip().lower()
+        ):
+            return
+
+        if property_id:
+            prop_payload = fetch_property_by_id(property_table, property_id)
+            hotel_code = prop_payload.get("hotel_code") or prop_payload.get("name") or hotel_code
+
+        if not hotel_code:
+            log.info("🏨 [WA_CTX] no hotel_code/property_id for chat_id=%s", chat_id)
+            return
+
+        inst_payload = fetch_instance_by_code(str(hotel_code))
+        if not inst_payload:
+            log.info("🏨 [WA_CTX] no instance for hotel_code=%s (chat_id=%s)", hotel_code, chat_id)
+            return
+
+        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+            val = inst_payload.get(key)
+            if val:
+                memory_manager.set_flag(chat_id, key, val)
+
+        memory_manager.set_flag(chat_id, "wa_context_property_id", property_id)
+        if hotel_code:
+            memory_manager.set_flag(chat_id, "wa_context_hotel_code", str(hotel_code))
+
+        log.info(
+            "🏨 [WA_CTX] creds set via ensure_instance_credentials chat_id=%s hotel_code=%s phone_id=%s",
+            chat_id,
+            hotel_code,
+            memory_manager.get_flag(chat_id, "whatsapp_phone_id"),
+        )
+    except Exception as exc:
+        log.warning("🏨 [WA_CTX] error ensuring WA creds: %s", exc)
 
 
 def _resolve_property_table(instance_payload: Dict[str, Any]) -> Optional[str]:

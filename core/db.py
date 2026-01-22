@@ -110,6 +110,7 @@ def save_message(
     channel: str | None = None,
     property_id: str | int | None = None,
     original_chat_id: str | None = None,
+    table: str = "chat_history",
 ) -> None:
     """
     Guarda un mensaje en la base de datos relacional de Supabase.
@@ -118,6 +119,7 @@ def save_message(
     - original_chat_id: id original usado en memoria (opcional)
     - role: 'user' o 'assistant'
     - content: texto del mensaje
+    - table: tabla destino en Supabase
     """
     try:
         clean_id = str(conversation_id).replace("+", "").strip()
@@ -140,7 +142,7 @@ def save_message(
             data["property_id"] = property_id
 
         try:
-            supabase.table("chat_history").insert(data).execute()
+            supabase.table(table).insert(data).execute()
         except Exception:
             retry = False
             if "escalation_id" in data:
@@ -156,7 +158,7 @@ def save_message(
                 data.pop("original_chat_id", None)
                 retry = True
             if retry:
-                supabase.table("chat_history").insert(data).execute()
+                supabase.table(table).insert(data).execute()
             else:
                 raise
         logging.info(f"💾 Mensaje guardado correctamente en conversación {clean_id}")
@@ -173,6 +175,8 @@ def get_conversation_history(
     limit: int = 10,
     since=None,
     property_id: str | int | None = None,
+    table: str = "chat_history",
+    channel: str | None = None,
 ):
     """
     Recupera los últimos mensajes de una conversación, ordenados por fecha.
@@ -180,15 +184,18 @@ def get_conversation_history(
     - property_id: id de property (opcional)
     - limit: cantidad máxima de mensajes a devolver
     - since: datetime opcional (solo mensajes posteriores a esa fecha)
+    - table: tabla origen en Supabase
     """
     try:
         clean_id = str(conversation_id).replace("+", "").strip()
 
-        query = supabase.table("chat_history").select("role, content, created_at")
+        query = supabase.table(table).select("role, content, created_at")
         if property_id is not None:
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:
             query = query.eq("conversation_id", clean_id)
+        if channel:
+            query = query.eq("channel", channel)
 
         # Si se pasa una fecha 'since', filtramos por created_at
         if since is not None:
@@ -213,13 +220,18 @@ def get_conversation_history(
 # ======================================================
 # 🧹 Borrar historial (útil para pruebas o depuración)
 # ======================================================
-def clear_conversation(conversation_id: str, property_id: str | int | None = None) -> None:
+def clear_conversation(
+    conversation_id: str,
+    property_id: str | int | None = None,
+    table: str = "chat_history",
+) -> None:
     """
     Elimina todos los mensajes de una conversación.
+    - table: tabla destino en Supabase
     """
     try:
         clean_id = str(conversation_id).replace("+", "").strip()
-        query = supabase.table("chat_history").delete().eq("conversation_id", clean_id)
+        query = supabase.table(table).delete().eq("conversation_id", clean_id)
         if property_id is not None:
             query = query.eq("property_id", property_id)
         query.execute()

@@ -42,9 +42,10 @@ class AppState:
         self.channel_manager = ChannelManager(memory_manager=self.memory_manager)
         self.buffer_manager = MessageBufferManager(idle_seconds=idle_seconds)
         self.interno_agent = InternoAgent(memory_manager=self.memory_manager)
+        self.supabase_client = supabase
         self.superintendente_agent = SuperintendenteAgent(
             memory_manager=self.memory_manager,
-            supabase_client=supabase,
+            supabase_client=self.supabase_client,
             channel_manager=self.channel_manager,
             template_registry=self.template_registry,
         )
@@ -58,6 +59,7 @@ class AppState:
         self.superintendente_pending_wa: dict = {}
         self.superintendente_pending_tpl: dict = {}
         self.superintendente_pending_review: dict = {}
+        self.superintendente_pending_broadcast: dict = {}
         self.processed_whatsapp_ids: set[str] = set()
         self.processed_whatsapp_queue: deque[str] = deque(maxlen=5000)
         self.processed_template_keys: set[str] = set()

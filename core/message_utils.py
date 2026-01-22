@@ -116,11 +116,8 @@ def sanitize_wa_message(msg: str) -> str:
 
 
 def format_superintendente_message(text: str) -> str:
-    """Aplica un formato ligero y consistente a las respuestas del Superintendente."""
+    """Aplica un formato ligero y conversacional a las respuestas del Superintendente."""
     if not text:
-        return text
-
-    if text.strip().startswith("╭─ Superintendente"):
         return text
 
     lines = [ln.rstrip() for ln in text.strip().splitlines()]
@@ -137,22 +134,9 @@ def format_superintendente_message(text: str) -> str:
         stripped = ln.strip()
         if stripped.lower().startswith("[superintendente]"):
             stripped = stripped.split("]", 1)[-1].strip()
-        if stripped.startswith("- "):
-            stripped = f"• {stripped[2:].strip()}"
         compact.append(stripped)
 
-    body_lines = []
-    for ln in compact:
-        if not ln:
-            body_lines.append("┆")
-        else:
-            body_lines.append(f"┆ {ln}")
-
-    body = "\n".join(body_lines).strip()
-
-    header = "✨ Panel del Superintendente"
-    footer = "━━━━━━━━━━━━━━━━━━━━"
-    return f"╭ {header}\n{body}\n╰ {footer}"
+    return "\n".join(compact).strip()
 
 
 def build_kb_preview(topic: str, category: str, content: str) -> str:

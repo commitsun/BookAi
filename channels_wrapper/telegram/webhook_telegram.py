@@ -24,6 +24,7 @@ from core.message_utils import (
     sanitize_wa_message,
 )
 from core.db import get_conversation_history
+from core.instance_context import DEFAULT_PROPERTY_TABLE, ensure_instance_credentials, fetch_property_by_id
 
 log = logging.getLogger("TelegramWebhook")
 log.setLevel(logging.INFO)
@@ -147,7 +148,12 @@ def register_telegram_routes(app, state):
         }
         return any(term in text for term in action_terms) or bool(_extract_phone(text))
 
-    async def _collect_conversations(guest_id: str, limit: int = 10):
+    async def _collect_conversations(
+        guest_id: str,
+        limit: int = 10,
+        property_id: int | None = None,
+        channel: str | None = "whatsapp",
+    ):
         """Recupera y deduplica mensajes del huésped desde DB + runtime."""
         if not state.memory_manager:
             return []
@@ -159,11 +165,10 @@ def register_telegram_routes(app, state):
             clean_id,
             limit * 3,  # pedir más por ruido/system
             None,
+            property_id,
+            "chat_history",
+            channel,
         )
-        try:
-            runtime_msgs = state.memory_manager.runtime_memory.get(clean_id, [])
-        except Exception:
-            runtime_msgs = []
 
         def _parse_ts(ts: Any) -> float:
             try:
@@ -174,7 +179,7 @@ def register_telegram_routes(app, state):
             except Exception:
                 return 0.0
 
-        combined_sorted = sorted((db_msgs or []) + (runtime_msgs or []), key=lambda m: _parse_ts(m.get("created_at")))
+        combined_sorted = sorted((db_msgs or []), key=lambda m: _parse_ts(m.get("created_at")))
         convos = combined_sorted[-limit:] if combined_sorted else []
 
         seen = set()
@@ -192,9 +197,20 @@ def register_telegram_routes(app, state):
 
         return deduped
 
-    async def _render_history(guest_id: str, mode: str, limit: int = 10) -> str:
+    async def _render_history(
+        guest_id: str,
+        mode: str,
+        limit: int = 10,
+        property_id: int | None = None,
+        channel: str | None = "whatsapp",
+    ) -> str:
         """Devuelve texto listo para enviar (raw o resumen IA)."""
-        convos = await _collect_conversations(guest_id, limit=limit)
+        convos = await _collect_conversations(
+            guest_id,
+            limit=limit,
+            property_id=property_id,
+            channel=channel,
+        )
         if not convos:
             return f"🧠 Historial ({guest_id})\nNo hay mensajes recientes."
 
@@ -477,6 +493,35 @@ def register_telegram_routes(app, state):
         lines.append("❌ Responde 'no' para descartar.")
         return "\n".join(lines)
 
+    def _extract_wa_preview(raw_text: str) -> tuple[str | None, str | None]:
+        """
+        Extrae guest_id y mensaje desde respuestas tipo "Borrador preparado..." sin marcador [WA_DRAFT].
+        """
+        if not raw_text or "Borrador preparado para enviar por WhatsApp" not in raw_text:
+            return None, None
+
+        guest_id = _extract_phone(raw_text)
+        lines = raw_text.splitlines()
+        start_idx = None
+        for idx, line in enumerate(lines):
+            if "Borrador preparado para enviar por WhatsApp" in line:
+                start_idx = idx
+                break
+        if start_idx is None:
+            return guest_id, None
+
+        msg_lines: list[str] = []
+        for line in lines[start_idx + 1:]:
+            stripped = line.strip()
+            if not stripped and not msg_lines:
+                continue
+            if stripped.lower().startswith("¿quieres enviarlo") or stripped.lower().startswith("quieres enviarlo"):
+                break
+            msg_lines.append(line)
+
+        message = "\n".join([ln.strip() for ln in msg_lines]).strip()
+        return guest_id, message or None
+
     @app.post("/webhook/telegram")
     async def telegram_webhook_handler(request: Request):
         """
@@ -501,6 +546,91 @@ def register_telegram_routes(app, state):
             log.info("💬 Telegram (%s): %s", chat_id, text)
             text_lower = text.lower()
             phone_hint = _extract_phone(text)
+            property_id_hint = _extract_property_id(text)
+            if property_id_hint is not None and state.memory_manager:
+                state.memory_manager.set_flag(chat_id, "property_id", property_id_hint)
+                try:
+                    property_table = (
+                        state.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                    )
+                    prop_payload = fetch_property_by_id(property_table, property_id_hint)
+                    prop_name = prop_payload.get("hotel_code") or prop_payload.get("name")
+                    if prop_name:
+                        state.memory_manager.set_flag(chat_id, "property_name", prop_name)
+                except Exception:
+                    pass
+
+            # --------------------------------------------------------
+            # 1️⃣ bis - Completar borrador de broadcast check-in
+            # --------------------------------------------------------
+            if chat_id in state.superintendente_pending_broadcast:
+                pending = state.superintendente_pending_broadcast.get(chat_id) or {}
+                missing_fields = pending.get("missing_fields") or []
+                parameters: dict = {}
+                parsed = None
+                try:
+                    parsed = json.loads(text)
+                    if isinstance(parsed, dict):
+                        parameters = parsed
+                except Exception:
+                    parsed = None
+
+                if not parameters:
+                    if len(missing_fields) == 1:
+                        parameters[missing_fields[0]] = text.strip()
+                    else:
+                        parsed_text = text.replace("\n", " ").strip()
+                        for field in missing_fields:
+                            pattern = re.compile(
+                                rf"{re.escape(field)}\s*[:=]\s*([^,;]+)",
+                                flags=re.IGNORECASE,
+                            )
+                            match = pattern.search(parsed_text)
+                            if match:
+                                parameters[field] = match.group(1).strip()
+
+                    if not parameters:
+                        await state.channel_manager.send_message(
+                            chat_id,
+                            "Pásame los valores en formato `campo: valor`, uno por línea. "
+                            "Ejemplo:\n"
+                            "host_name: Alda Ponferrada\n"
+                            "parking_info: Parking Ponferrada\n"
+                            "reservation_url: http://hotel.ponferrada.es",
+                            channel="telegram",
+                        )
+                        return JSONResponse({"status": "broadcast_missing_params"})
+
+                try:
+                    from tools.superintendente_tool import create_send_broadcast_checkin_tool
+
+                    tool = create_send_broadcast_checkin_tool(
+                        hotel_name=state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME),
+                        channel_manager=state.channel_manager,
+                        supabase_client=state.supabase_client,
+                        template_registry=state.template_registry,
+                        memory_manager=state.memory_manager,
+                        chat_id=chat_id,
+                    )
+                    payload = {
+                        "template_id": pending.get("template_id"),
+                        "date": pending.get("date"),
+                        "parameters": parameters,
+                        "language": pending.get("language") or "es",
+                        "hotel_code": pending.get("hotel_code"),
+                        "property_id": pending.get("property_id"),
+                    }
+                    result = await tool.ainvoke(payload)
+                    state.superintendente_pending_broadcast.pop(chat_id, None)
+                    await state.channel_manager.send_message(chat_id, str(result), channel="telegram")
+                    return JSONResponse({"status": "broadcast_sent"})
+                except Exception as exc:
+                    await state.channel_manager.send_message(
+                        chat_id,
+                        f"❌ No pude enviar el broadcast: {exc}",
+                        channel="telegram",
+                    )
+                    return JSONResponse({"status": "broadcast_error"})
 
             # --------------------------------------------------------
             # 1️⃣ Confirmación o ajustes de un borrador pendiente
@@ -858,6 +988,7 @@ def register_telegram_routes(app, state):
                                 parameters=parameters,
                                 language=language_code,
                                 channel="whatsapp",
+                                context_id=chat_id,
                             )
                             try:
                                 if state.memory_manager:
@@ -916,15 +1047,32 @@ def register_telegram_routes(app, state):
 
                 if _is_short_wa_confirmation(text_lower):
                     log.info("[WA_CONFIRM] Enviando %s borrador(es) desde %s", len(drafts), chat_id)
+                    if state.memory_manager:
+                        first = drafts[0] if drafts else {}
+                        ctx_prop = first.get("property_id")
+                        ctx_hotel = first.get("hotel_code")
+                        if ctx_prop is not None:
+                            state.memory_manager.set_flag(chat_id, "property_id", ctx_prop)
+                        if ctx_hotel:
+                            state.memory_manager.set_flag(chat_id, "property_name", ctx_hotel)
+                        ensure_instance_credentials(state.memory_manager, chat_id)
                     sent = 0
                     for draft in drafts:
                         gid = draft.get("guest_id")
                         msg_raw = draft.get("message", "")
+                        if state.memory_manager and gid:
+                            ctx_prop = draft.get("property_id")
+                            ctx_hotel = draft.get("hotel_code")
+                            if ctx_prop is not None:
+                                state.memory_manager.set_flag(gid, "property_id", ctx_prop)
+                            if ctx_hotel:
+                                state.memory_manager.set_flag(gid, "property_name", ctx_hotel)
                         final_msg = _ensure_guest_language(msg_raw, gid)
                         await state.channel_manager.send_message(
                             gid,
                             final_msg,
                             channel="whatsapp",
+                            context_id=chat_id,
                         )
                         try:
                             if state.memory_manager:
@@ -998,16 +1146,33 @@ def register_telegram_routes(app, state):
                                 break
 
                     if drafts:
+                        if state.memory_manager:
+                            first = drafts[0] if drafts else {}
+                            ctx_prop = first.get("property_id")
+                            ctx_hotel = first.get("hotel_code")
+                            if ctx_prop is not None:
+                                state.memory_manager.set_flag(chat_id, "property_id", ctx_prop)
+                            if ctx_hotel:
+                                state.memory_manager.set_flag(chat_id, "property_name", ctx_hotel)
+                            ensure_instance_credentials(state.memory_manager, chat_id)
                         sent = 0
                         for draft in drafts:
                             guest_id = draft.get("guest_id")
                             msg_raw = draft.get("message", "")
+                            if state.memory_manager and guest_id:
+                                ctx_prop = draft.get("property_id")
+                                ctx_hotel = draft.get("hotel_code")
+                                if ctx_prop is not None:
+                                    state.memory_manager.set_flag(guest_id, "property_id", ctx_prop)
+                                if ctx_hotel:
+                                    state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel)
                             msg_to_send = _clean_wa_payload(msg_raw)
                             msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
                             await state.channel_manager.send_message(
                                 guest_id,
                                 msg_to_send,
                                 channel="whatsapp",
+                                context_id=chat_id,
                             )
                             try:
                                 if state.memory_manager:
@@ -1049,12 +1214,22 @@ def register_telegram_routes(app, state):
                 return any(term in text_l for term in {"historial", "convers", "mensajes", "chat"})
 
             if _is_review_intent(text_lower) and phone_hint:
-                state.superintendente_pending_review[chat_id] = phone_hint
+                property_id_ctx = None
+                if state.memory_manager:
+                    property_id_ctx = state.memory_manager.get_flag(chat_id, "property_id")
+                state.superintendente_pending_review[chat_id] = {
+                    "guest_id": phone_hint,
+                    "property_id": property_id_ctx,
+                }
                 mode_hint = _detect_mode(text_lower)
                 if mode_hint:
-                    history_text = await _render_history(phone_hint, mode_hint)
+                    history_text = await _render_history(phone_hint, mode_hint, property_id=property_id_ctx)
                     await state.channel_manager.send_message(chat_id, history_text, channel="telegram")
                     state.superintendente_pending_review.pop(chat_id, None)
+                    if state.memory_manager:
+                        state.memory_manager.set_flag(chat_id, "last_review_guest_id", phone_hint)
+                        if property_id_ctx is not None:
+                            state.memory_manager.set_flag(chat_id, "last_review_property_id", property_id_ctx)
                     return JSONResponse({"status": "history_served"})
                 await state.channel_manager.send_message(
                     chat_id,
@@ -1064,12 +1239,39 @@ def register_telegram_routes(app, state):
                 return JSONResponse({"status": "history_mode_requested"})
 
             if chat_id in state.superintendente_pending_review:
-                pending_guest = state.superintendente_pending_review[chat_id]
+                pending_payload = state.superintendente_pending_review[chat_id]
+                if isinstance(pending_payload, dict):
+                    pending_guest = pending_payload.get("guest_id")
+                    pending_property_id = pending_payload.get("property_id")
+                else:
+                    pending_guest = pending_payload
+                    pending_property_id = None
                 mode = _detect_mode(text_lower)
-                if mode:
-                    history_text = await _render_history(pending_guest, mode)
+                if mode and pending_guest:
+                    property_id_ctx = pending_property_id
+                    if state.memory_manager and property_id_ctx is None:
+                        property_id_ctx = state.memory_manager.get_flag(chat_id, "property_id")
+                    history_text = await _render_history(pending_guest, mode, property_id=property_id_ctx)
                     await state.channel_manager.send_message(chat_id, history_text, channel="telegram")
                     state.superintendente_pending_review.pop(chat_id, None)
+                    if state.memory_manager:
+                        state.memory_manager.set_flag(chat_id, "last_review_guest_id", pending_guest)
+                        if property_id_ctx is not None:
+                            state.memory_manager.set_flag(chat_id, "last_review_property_id", property_id_ctx)
+                    return JSONResponse({"status": "history_served"})
+
+            # Resumen/original sin guest_id: reusar el ultimo historial solicitado
+            mode = _detect_mode(text_lower)
+            if mode and not phone_hint and state.memory_manager:
+                last_guest = state.memory_manager.get_flag(chat_id, "last_review_guest_id")
+                if last_guest:
+                    last_property = state.memory_manager.get_flag(chat_id, "last_review_property_id")
+                    history_text = await _render_history(
+                        last_guest,
+                        mode,
+                        property_id=last_property,
+                    )
+                    await state.channel_manager.send_message(chat_id, history_text, channel="telegram")
                     return JSONResponse({"status": "history_served"})
 
             # ✅ Confirmaciones rápidas de borradores de plantilla
@@ -1182,6 +1384,11 @@ def register_telegram_routes(app, state):
                     )
 
                     wa_drafts = _parse_wa_drafts(response)
+                    if not wa_drafts:
+                        fallback_guest, fallback_msg = _extract_wa_preview(response)
+                        if fallback_guest and fallback_msg:
+                            fallback_msg = _ensure_guest_language(fallback_msg, fallback_guest)
+                            wa_drafts = [{"guest_id": fallback_guest, "message": fallback_msg}]
                     if wa_drafts:
                         wa_intent = phone_hint or any(
                             term in text_lower for term in {"dile", "enviale", "envíale", "mandale", "mándale", "manda", "enviar"}
@@ -1190,6 +1397,23 @@ def register_telegram_routes(app, state):
                             log.info("[WA_DRAFT] Ignorado por falta de intención explícita (%s)", chat_id)
                             response = re.sub(r"\[WA_DRAFT\]\|.*", "", response, flags=re.S).strip()
                         else:
+                            if state.memory_manager:
+                                try:
+                                    ctx_property_id = state.memory_manager.get_flag(chat_id, "property_id")
+                                    ctx_hotel_code = state.memory_manager.get_flag(chat_id, "property_name")
+                                    for draft in wa_drafts:
+                                        if ctx_property_id is not None:
+                                            draft["property_id"] = ctx_property_id
+                                        if ctx_hotel_code:
+                                            draft["hotel_code"] = ctx_hotel_code
+                                        guest_id = draft.get("guest_id")
+                                        if guest_id:
+                                            if ctx_property_id is not None:
+                                                state.memory_manager.set_flag(guest_id, "property_id", ctx_property_id)
+                                            if ctx_hotel_code:
+                                                state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel_code)
+                                except Exception:
+                                    pass
                             pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]
                             state.superintendente_pending_wa[chat_id] = pending_payload
                             log.info("[WA_DRAFT] Registrado %s borrador(es) desde %s", len(wa_drafts), chat_id)
@@ -1220,6 +1444,29 @@ def register_telegram_routes(app, state):
                                 channel="telegram",
                             )
                             return JSONResponse({"status": "wa_draft"})
+
+                    broadcast_marker = "[BROADCAST_DRAFT]|"
+                    if broadcast_marker in response:
+                        marker_line = next((ln for ln in response.splitlines() if broadcast_marker in ln), "")
+                        raw_payload = marker_line[len(broadcast_marker):] if marker_line else response.split(broadcast_marker, 1)[1]
+                        raw_payload = raw_payload.split("\n", 1)[0].strip()
+                        try:
+                            bc_payload = json.loads(raw_payload)
+                        except Exception as exc:
+                            log.error("[BROADCAST_DRAFT] No se pudo parsear el payload: %s", exc, exc_info=True)
+                            bc_payload = None
+
+                        if bc_payload:
+                            state.superintendente_pending_broadcast[chat_id] = bc_payload
+                            preview = response.replace(marker_line, "").replace(f"{broadcast_marker}{raw_payload}", "").strip()
+                            await state.channel_manager.send_message(
+                                chat_id,
+                                format_superintendente_message(preview or "Indica los parámetros faltantes para continuar."),
+                                channel="telegram",
+                            )
+                            return JSONResponse({"status": "broadcast_draft"})
+                        else:
+                            response = response.replace(marker_line, "").replace(f"{broadcast_marker}{raw_payload}", "").strip()
 
                     tpl_marker = "[TPL_DRAFT]|"
                     if tpl_marker in response:
