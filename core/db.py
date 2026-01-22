@@ -123,9 +123,7 @@ def save_message(
     """
     try:
         normalized_role = (role or "").strip().lower()
-        if normalized_role == "user":
-            normalized_role = "guest"
-        elif normalized_role == "assistant":
+        if normalized_role == "assistant":
             normalized_role = "bookai"
 
         clean_id = str(conversation_id).replace("+", "").strip()

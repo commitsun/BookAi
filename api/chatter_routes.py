@@ -316,9 +316,14 @@ def register_chatter_routes(app, state) -> None:
         await state.channel_manager.send_message(chat_id, payload.message, channel="whatsapp")
         try:
             sender = (payload.sender or "bookai").strip().lower()
-            role = "bookai"
-            if sender in {"cliente", "user", "usuario", "guest"}:
+            if sender in {"user", "guest", "bookai", "system", "tool"}:
+                role = sender
+            elif sender in {"assistant", "ai"}:
+                role = "bookai"
+            elif sender in {"cliente", "usuario"}:
                 role = "guest"
+            else:
+                role = "bookai"
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.set_flag(chat_id, "default_channel", payload.channel.lower())

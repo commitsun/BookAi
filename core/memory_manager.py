@@ -131,9 +131,7 @@ class MemoryManager:
         normalized_role = role if role in valid_roles else "assistant"
         resolved_channel = channel or self.get_flag(conversation_id, "default_channel")
         channel_to_store = resolved_channel or channel
-        if normalized_role == "user":
-            normalized_role = "guest"
-        elif normalized_role == "assistant":
+        if normalized_role == "assistant":
             normalized_role = "bookai"
 
         is_guest = normalized_role in {"user", "guest"}
