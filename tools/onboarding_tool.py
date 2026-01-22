@@ -10,7 +10,7 @@ import re
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from core.mcp_client import mcp_client
+from core.mcp_client import get_tools
 
 log = logging.getLogger("OnboardingTools")
 
@@ -92,7 +92,7 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
 
 async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any], Optional[str]]:
     try:
-        tools = await mcp_client.get_tools(server_name=server_name)
+        tools = await get_tools(server_name=server_name)
         return tools or [], None
     except Exception as exc:  # pragma: no cover - fallbacks de red
         log.error("No se pudieron obtener tools MCP (%s): %s", server_name, exc, exc_info=True)

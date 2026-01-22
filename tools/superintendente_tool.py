@@ -13,7 +13,7 @@ from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from core.db import get_conversation_history
-from core.mcp_client import mcp_client
+from core.mcp_client import get_tools
 from core.instance_context import (
     fetch_instance_by_code,
     fetch_property_by_code,
@@ -1286,7 +1286,7 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
         Consulta folios/reservas en un rango de fechas vía MCP → n8n.
         """
         try:
-            tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+            tools = await get_tools(server_name="DispoPreciosAgent")
         except Exception as exc:
             log.error("No se pudo acceder al MCP para consulta general: %s", exc, exc_info=True)
             return "❌ No se pudo acceder al servidor MCP para consultar reservas."
@@ -1480,7 +1480,7 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
         Consulta los detalles de un folio específico vía MCP → n8n.
         """
         try:
-            tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+            tools = await get_tools(server_name="DispoPreciosAgent")
         except Exception as exc:
             log.error("No se pudo acceder al MCP para consulta de folio: %s", exc, exc_info=True)
             return "❌ No se pudo acceder al servidor MCP para consultar el folio."

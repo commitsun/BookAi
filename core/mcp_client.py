@@ -1,3 +1,4 @@
+import asyncio
 import os
 import logging
 from langchain_mcp_adapters.client import MultiServerMCPClient
@@ -23,12 +24,41 @@ mcp_connections = {
     # InternoAgent NO usa MCP — es local (Telegram + Supabase)
 }
 
+def _build_client() -> MultiServerMCPClient:
+    return MultiServerMCPClient(mcp_connections)
+
+
 # Inicializar el cliente multi-servidor
-mcp_client = MultiServerMCPClient(mcp_connections)
+mcp_client = _build_client()
 
 # =====================================================
 # 🧩 FUNCIONES AUXILIARES
 # =====================================================
+async def get_tools(server_name: str, retries: int = 1, retry_delay: float = 0.4):
+    """
+    Wrapper resiliente para obtener tools desde MCP.
+    Reintenta y recrea el cliente si la sesión se cierra inesperadamente.
+    """
+    global mcp_client
+    last_exc = None
+    for attempt in range(retries + 1):
+        try:
+            return await mcp_client.get_tools(server_name=server_name)
+        except Exception as exc:
+            last_exc = exc
+            msg = str(exc)
+            if "Session terminated" in msg or "session terminated" in msg:
+                logger.warning("⚠️ MCP sesión terminada (%s). Reiniciando cliente (intento %s/%s).", server_name, attempt + 1, retries + 1)
+                mcp_client = _build_client()
+                await asyncio.sleep(retry_delay)
+                continue
+            logger.error("❌ Error obteniendo tools de %s: %s", server_name, exc, exc_info=True)
+            break
+    if last_exc:
+        logger.error("❌ Fallo definitivo obteniendo tools de %s: %s", server_name, last_exc, exc_info=True)
+    return []
+
+
 async def get_filtered_tools(server_name: str):
     """
     Devuelve las tools relevantes para un servidor MCP concreto.
@@ -41,7 +71,7 @@ async def get_filtered_tools(server_name: str):
         return []
 
     try:
-        tools = await mcp_client.get_tools(server_name=server_name)
+        tools = await get_tools(server_name=server_name)
         if not tools:
             logger.warning(f"⚠️ No se encontraron tools para {server_name}")
             return []

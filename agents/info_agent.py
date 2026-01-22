@@ -19,7 +19,7 @@ from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from core.config import ModelConfig, ModelTier
-from core.mcp_client import mcp_client
+from core.mcp_client import get_tools
 from core.utils.normalize_reply import normalize_reply
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
@@ -40,7 +40,7 @@ async def _invoke_google_search(query: str) -> Optional[str]:
         return None
 
     try:
-        tools = await mcp_client.get_tools(server_name="InfoAgent")
+        tools = await get_tools(server_name="InfoAgent")
         google_tool = next((t for t in tools if "google" in t.name.lower()), None)
         if not google_tool:
             log.warning("GoogleSearchTool: no se encontró la tool 'google' en el MCP.")
@@ -142,7 +142,7 @@ class KBSearchTool(BaseTool):
             return focus[-1] if focus else words[-1]
 
         try:
-            tools = await mcp_client.get_tools(server_name="InfoAgent")
+            tools = await get_tools(server_name="InfoAgent")
             if not tools:
                 log.warning("KBSearchTool: no hay herramientas MCP disponibles.")
                 return None

@@ -17,7 +17,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 from langchain.tools import Tool
 
 # Core imports
-from core.mcp_client import mcp_client
+from core.mcp_client import get_tools
 from core.utils.normalize_reply import normalize_reply
 from core.utils.utils_prompt import load_prompt
 from core.utils.time_context import get_time_context
@@ -93,7 +93,7 @@ class DispoPreciosAgent:
         async def _availability_tool(query: str):
             try:
                 try:
-                    tools = await mcp_client.get_tools(server_name="DispoPreciosAgent")
+                    tools = await get_tools(server_name="DispoPreciosAgent")
                 except Exception as mcp_err:
                     log.error("❌ MCP no accesible para DispoPreciosAgent: %s", mcp_err, exc_info=True)
                     return (
