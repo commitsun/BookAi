@@ -133,6 +133,8 @@ class MemoryManager:
         channel_to_store = resolved_channel or channel
         if normalized_role == "assistant":
             normalized_role = "bookai"
+        if normalized_role == "user" and self.get_flag(conversation_id, "force_guest_role"):
+            normalized_role = "guest"
 
         is_guest = normalized_role in {"user", "guest"}
         if not client_name and is_guest:

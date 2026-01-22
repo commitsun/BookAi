@@ -127,6 +127,9 @@ def register_whatsapp_routes(app, state):
             if client_name:
                 state.memory_manager.set_flag(memory_id, "client_name", client_name)
             state.memory_manager.set_flag(memory_id, "guest_number", sender)
+            state.memory_manager.set_flag(memory_id, "force_guest_role", True)
+            if sender and sender != memory_id:
+                state.memory_manager.set_flag(sender, "force_guest_role", True)
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(
