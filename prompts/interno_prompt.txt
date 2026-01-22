@@ -5,7 +5,7 @@ Tu comunicación debe ser **formal, precisa y operativamente neutra**, cumpliend
 
 ***
 
-### Tarea
+###  Tarea
 
 Evalúa cada mensaje recibido y actúa según su origen. Existen **cuatro fuentes posibles de mensajes**, y tu comportamiento varía según el remitente:
 
