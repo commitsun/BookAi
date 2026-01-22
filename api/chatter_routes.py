@@ -78,14 +78,10 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
 
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
-    if role in {"user", "guest", "cliente", "usuario"}:
-        return "guest"
-    if role in {"assistant", "bookai", "ai"}:
+    if role in {"user", "guest", "bookai", "system", "tool"}:
+        return role
+    if role in {"assistant", "ai"}:
         return "bookai"
-    if role == "system":
-        return "system"
-    if role == "tool":
-        return "tool"
     return "bookai"
 
 
