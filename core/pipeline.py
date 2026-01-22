@@ -30,6 +30,8 @@ async def process_user_message(
     try:
         mem_id = memory_id or chat_id
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
+        if state.memory_manager:
+            state.memory_manager.set_flag(mem_id, "default_channel", channel)
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
@@ -125,7 +127,12 @@ async def process_user_message(
                     lines = []
                     for m in raw_hist:
                         role = m.get("role")
-                        prefix = "Huésped" if role == "user" else "Asistente"
+                        if role in {"user", "guest"}:
+                            prefix = "Huésped"
+                        elif role in {"assistant", "bookai"}:
+                            prefix = "Asistente"
+                        else:
+                            prefix = "Asistente"
                         lines.append(f"{prefix}: {m.get('content','')}")
                     hist_text = "\n".join(lines)
             except Exception as exc:

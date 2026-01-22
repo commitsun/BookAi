@@ -123,14 +123,21 @@ class MemoryManager:
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
-        Cumple con la restricción de Supabase (role ∈ {'user','assistant','system','tool'}).
+        Roles base: user/assistant/system/tool. Se mapean a guest/bookai para persistencia.
         No añade etiquetas ni prefijos en el contenido.
         """
         cid = self._clean_id(conversation_id)
-        valid_roles = {"user", "assistant", "system", "tool"}
+        valid_roles = {"user", "assistant", "system", "tool", "guest", "bookai"}
         normalized_role = role if role in valid_roles else "assistant"
+        resolved_channel = channel or self.get_flag(conversation_id, "default_channel")
+        channel_to_store = resolved_channel or channel
+        if normalized_role == "user":
+            normalized_role = "guest"
+        elif normalized_role == "assistant":
+            normalized_role = "bookai"
 
-        if not client_name and normalized_role == "user":
+        is_guest = normalized_role in {"user", "guest"}
+        if not client_name and is_guest:
             client_name = self.get_flag(cid, "client_name")
 
         entry = {
@@ -140,10 +147,10 @@ class MemoryManager:
         }
         if escalation_id:
             entry["escalation_id"] = escalation_id
-        if client_name and normalized_role == "user":
+        if client_name and is_guest:
             entry["client_name"] = client_name
-        if channel:
-            entry["channel"] = channel
+        if channel_to_store:
+            entry["channel"] = channel_to_store
 
         # Guardar en RAM
         self.runtime_memory.setdefault(cid, []).append(entry)
@@ -159,8 +166,8 @@ class MemoryManager:
                 normalized_role,
                 entry["content"],
                 escalation_id=escalation_id,
-                client_name=client_name if normalized_role == "user" else None,
-                channel=channel,
+                client_name=client_name if is_guest else None,
+                channel=channel_to_store,
                 property_id=property_id,
                 original_chat_id=cid,
                 table=self._resolve_history_table(conversation_id),
@@ -205,7 +212,7 @@ class MemoryManager:
                 if not content:
                     continue
 
-                if role == "user":
+                if role in {"user", "guest"}:
                     messages.append(HumanMessage(content=content))
                 elif role == "system":
                     messages.append(SystemMessage(content=content))

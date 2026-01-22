@@ -226,9 +226,14 @@ def register_telegram_routes(app, state):
         lines = []
         for msg in convos:
             role = msg.get("role", "assistant")
-            prefix = {"user": "Huésped", "assistant": "Asistente", "system": "Sistema", "tool": "Tool"}.get(
-                role, "Asistente"
-            )
+            prefix = {
+                "user": "Huésped",
+                "guest": "Huésped",
+                "assistant": "Asistente",
+                "bookai": "BookAI",
+                "system": "Sistema",
+                "tool": "Tool",
+            }.get(role, "Asistente")
             ts = _fmt_ts(msg.get("created_at"))
             ts_suffix = f" · {ts}" if ts else ""
             content = msg.get("content", "").strip()

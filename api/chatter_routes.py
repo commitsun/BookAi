@@ -27,7 +27,7 @@ class SendMessageRequest(BaseModel):
     chat_id: str = Field(..., description="ID del chat (telefono)")
     message: str = Field(..., description="Texto del mensaje a enviar")
     channel: str = Field(default="whatsapp", description="Canal de salida")
-    sender: Optional[str] = Field(default="bookai", description="Emisor (cliente, bookai, user)")
+    sender: Optional[str] = Field(default="bookai", description="Emisor (guest/cliente, bookai)")
     property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
 
@@ -78,10 +78,14 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
 
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
-    if role == "user":
-        return "user"
-    if role == "assistant":
+    if role in {"user", "guest", "cliente", "usuario"}:
+        return "guest"
+    if role in {"assistant", "bookai", "ai"}:
         return "bookai"
+    if role == "system":
+        return "system"
+    if role == "tool":
+        return "tool"
     return "bookai"
 
 
@@ -195,7 +199,7 @@ def register_chatter_routes(app, state) -> None:
                         .select("conversation_id, client_name, created_at")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
-                        .eq("role", "user")
+                        .in_("role", ["guest", "user"])
                         .order("created_at", desc=True)
                         .limit(500)
                         .execute()
@@ -312,12 +316,13 @@ def register_chatter_routes(app, state) -> None:
         await state.channel_manager.send_message(chat_id, payload.message, channel="whatsapp")
         try:
             sender = (payload.sender or "bookai").strip().lower()
-            role = "assistant"
+            role = "bookai"
             if sender in {"cliente", "user", "usuario", "guest"}:
-                role = "user"
+                role = "guest"
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
-            state.memory_manager.save(chat_id, role, payload.message)
+            state.memory_manager.set_flag(chat_id, "default_channel", payload.channel.lower())
+            state.memory_manager.save(chat_id, role, payload.message, channel=payload.channel.lower())
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
@@ -443,16 +448,18 @@ def register_chatter_routes(app, state) -> None:
 
         try:
             rendered = template_def.render_content(payload.parameters) if template_def else None
+            state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
             if rendered:
                 if property_id is not None:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
-                state.memory_manager.save(chat_id, role="assistant", content=rendered)
+                state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.save(
                 chat_id,
                 role="system",
                 content=f"[TEMPLATE_SENT] plantilla={template_name} lang={language}",
+                channel="whatsapp",
             )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)
@@ -474,7 +481,7 @@ def register_chatter_routes(app, state) -> None:
         property_id = _normalize_property_id(property_id)
         # Also consider compound conversation ids like "prefix:<chat_id>".
         like_pattern = f"%:{clean_id}"
-        query = supabase.table("chat_history").select("created_at").eq("role", "user")
+        query = supabase.table("chat_history").select("created_at").in_("role", ["guest", "user"])
         if property_id is not None:
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:

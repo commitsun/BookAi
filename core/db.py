@@ -117,17 +117,23 @@ def save_message(
     - conversation_id: número del usuario sin '+'
     - property_id: id de property (opcional)
     - original_chat_id: id original usado en memoria (opcional)
-    - role: 'user' o 'assistant'
+    - role: 'user'/'assistant' o alias (ej. 'guest'/'bookai')
     - content: texto del mensaje
     - table: tabla destino en Supabase
     """
     try:
+        normalized_role = (role or "").strip().lower()
+        if normalized_role == "user":
+            normalized_role = "guest"
+        elif normalized_role == "assistant":
+            normalized_role = "bookai"
+
         clean_id = str(conversation_id).replace("+", "").strip()
         original_clean = str(original_chat_id).replace("+", "").strip() if original_chat_id else clean_id
 
         data = {
             "conversation_id": clean_id,
-            "role": role,
+            "role": normalized_role or "bookai",
             "content": content,
             "read_status": False,
             "original_chat_id": original_clean,

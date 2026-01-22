@@ -156,7 +156,8 @@ def register_template_routes(app, state) -> None:
             try:
                 rendered = template_def.render_content(payload.template.parameters) if template_def else None
                 if rendered:
-                    state.memory_manager.save(chat_id, role="assistant", content=rendered)
+                    state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
+                    state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = payload.source.instance_id or payload.source.instance_url
                 state.memory_manager.save(
@@ -166,6 +167,7 @@ def register_template_routes(app, state) -> None:
                         f"[TEMPLATE_SENT] plantilla={wa_template} lang={language} hotel={hotel_code} "
                         f"origen={source_tag} {meta_excerpt}"
                     ).strip(),
+                    channel="whatsapp",
                 )
             except Exception as exc:
                 log.warning("No se pudo registrar el envío en memoria: %s", exc)
