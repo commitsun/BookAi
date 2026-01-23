@@ -120,6 +120,7 @@ class MemoryManager:
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
         channel: Optional[str] = None,
+        bypass_force_guest_role: bool = False,
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
@@ -134,7 +135,7 @@ class MemoryManager:
         if normalized_role in {"assistant", "system", "tool"}:
             normalized_role = "bookai"
         elif normalized_role == "user":
-            if self.get_flag(conversation_id, "force_guest_role"):
+            if not bypass_force_guest_role and self.get_flag(conversation_id, "force_guest_role"):
                 normalized_role = "guest"
             else:
                 normalized_role = "user"

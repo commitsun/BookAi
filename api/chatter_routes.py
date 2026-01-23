@@ -404,7 +404,13 @@ def register_chatter_routes(app, state) -> None:
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.set_flag(chat_id, "default_channel", payload.channel.lower())
-            state.memory_manager.save(chat_id, role, payload.message, channel=payload.channel.lower())
+            state.memory_manager.save(
+                chat_id,
+                role,
+                payload.message,
+                channel=payload.channel.lower(),
+                bypass_force_guest_role=role == "user",
+            )
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
