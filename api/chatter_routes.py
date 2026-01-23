@@ -493,6 +493,7 @@ def register_chatter_routes(app, state) -> None:
                 "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
                 "Se ha generado el siguiente borrador",
                 "Se ha generado el siguiente borrador según tus indicaciones:",
+                "el texto, escribe tus ajustes directamente.",
                 "✏️ Si deseas modificar",
                 "✏️ Si deseas más cambios",
                 "✅ Si estás conforme",

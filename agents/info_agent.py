@@ -326,14 +326,6 @@ class InfoAgent:
             log.error("Error ejecutando InfoAgent: %s", exc, exc_info=True)
             return f"Error consultando la información del hotel: {exc}"
 
-        if self.memory_manager and chat_id:
-            try:
-                self.memory_manager.save(chat_id, "user", user_input)
-                if output:
-                    self.memory_manager.save(chat_id, "assistant", f"[InfoAgent] {output}")
-            except Exception as exc:
-                log.warning("No se pudo guardar memoria en InfoAgent: %s", exc)
-
         if not output or self._needs_escalation(output):
             return ESCALATION_TOKEN
 
