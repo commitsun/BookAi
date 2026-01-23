@@ -109,17 +109,6 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
         )
         ESCALATIONS_STORE[escalation_id] = esc
         save_escalation(vars(esc))
-        if _MEMORY_MANAGER:
-            try:
-                _MEMORY_MANAGER.save(
-                    guest_chat_id,
-                    "system",
-                    f"[ESCALATION] escalation_id={escalation_id} type={escalation_type}",
-                    escalation_id=escalation_id,
-                )
-            except Exception as exc:
-                log.warning("No se pudo registrar escalacion en chat_history: %s", exc)
-
         tipo_map = {
             "info_not_found": "ℹ️ Información No Disponible",
             "inappropriate": "🚨 Contenido Inapropiado",
@@ -283,7 +272,6 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                         esc.guest_chat_id,
                         "assistant",
                         final_text,
-                        escalation_id=escalation_id,
                     )
             except Exception as mem_exc:
                 log.warning("⚠️ No se pudo guardar en memoria el envío final: %s", mem_exc)
