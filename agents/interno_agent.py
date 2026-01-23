@@ -112,15 +112,6 @@ class InternoAgent:
             if not output:
                 output = "No se pudo procesar la solicitud."
 
-            # --- Persistir en memoria ---
-            await self._persist_interaction(
-                chat_id=chat_id,
-                user_input=user_input,
-                output=output,
-                escalation_id=escalation_id,
-                notify_result=notify_result,
-            )
-
             # --- Actualizar DB ---
             if self.escalation_db and escalation_id:
                 await self._safe_call(
@@ -137,14 +128,6 @@ class InternoAgent:
 
         except Exception as exc:
             log.error("Error en InternoAgent.ainvoke: %s", exc, exc_info=True)
-
-            await self._safe_call(
-                getattr(self.memory_manager, "save", None),
-                conversation_id=chat_id,
-                role="system",
-                content=f"[InternoAgent-Error] {exc}",
-                escalation_id=escalation_id,
-            )
             raise
 
     async def _persist_interaction(
