@@ -477,10 +477,11 @@ def register_chatter_routes(app, state) -> None:
             ESCALATIONS_STORE[escalation_id].draft_response = base_response
             update_escalation(escalation_id, {"draft_response": base_response})
 
-        result = await interno_agent.send_confirmed_response(
+        from tools.interno_tool import generar_borrador
+        result = generar_borrador(
             escalation_id=escalation_id,
-            confirmed=False,
-            adjustments=instruction,
+            manager_response=base_response,
+            adjustment=instruction,
         )
 
         from core.message_utils import extract_clean_draft
