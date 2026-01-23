@@ -128,8 +128,6 @@ def save_message(
 
         clean_id = str(conversation_id).replace("+", "").strip()
         original_clean = str(original_chat_id).replace("+", "").strip() if original_chat_id else clean_id
-        if normalized_role == "user" and channel == "whatsapp" and ":" in original_clean:
-            normalized_role = "guest"
 
         data = {
             "conversation_id": clean_id,
