@@ -127,12 +127,14 @@ async def process_user_message(
                     lines = []
                     for m in raw_hist:
                         role = m.get("role")
-                        if role in {"user", "guest"}:
+                        if role == "guest":
                             prefix = "Huésped"
+                        elif role == "user":
+                            prefix = "Hotel"
                         elif role in {"assistant", "bookai"}:
-                            prefix = "Asistente"
+                            prefix = "BookAI"
                         else:
-                            prefix = "Asistente"
+                            prefix = "BookAI"
                         lines.append(f"{prefix}: {m.get('content','')}")
                     hist_text = "\n".join(lines)
             except Exception as exc:

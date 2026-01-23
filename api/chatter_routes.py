@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field
 
 from core.config import Settings
 from core.db import supabase
-from core.escalation_db import list_pending_escalations
+from core.escalation_db import list_pending_escalations, resolve_latest_pending_escalation
 from core.template_registry import TemplateRegistry, TemplateDefinition
 
 log = logging.getLogger("ChatterRoutes")
@@ -43,6 +43,18 @@ class SendTemplateRequest(BaseModel):
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
     channel: str = Field(default="whatsapp", description="Canal de salida")
     property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
+
+
+class ProposedResponseRequest(BaseModel):
+    instruction: str = Field(..., description="Instrucciones para ajustar la respuesta")
+    original_response: Optional[str] = Field(
+        default=None,
+        description="Respuesta base a refinar (opcional)",
+    )
+    original_response_id: Optional[str] = Field(
+        default=None,
+        description="ID de la respuesta original (opcional, no usado por ahora)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -85,18 +97,76 @@ def _map_sender(role: str) -> str:
     return "bookai"
 
 
+def _normalize_pending_key(guest_id: str) -> str:
+    raw = str(guest_id or "").strip()
+    if not raw:
+        return ""
+    if ":" in raw:
+        tail = raw.split(":")[-1]
+        return _clean_chat_id(tail) or tail.strip()
+    clean = _clean_chat_id(raw)
+    if clean:
+        return clean
+    return raw
+
+
 def _pending_actions(limit: int = 200) -> Dict[str, str]:
     """Devuelve un mapa guest_chat_id -> texto pendiente."""
     pending = list_pending_escalations(limit=limit) or []
     result: Dict[str, str] = {}
     for esc in pending:
-        guest_id = str(esc.get("guest_chat_id") or "").strip()
+        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
             continue
         question = (esc.get("guest_message") or "").strip()
         if not question:
             continue
         result[guest_id] = question
+    return result
+
+
+def _pending_reasons(limit: int = 200) -> Dict[str, str]:
+    """Devuelve un mapa guest_chat_id -> razón de escalación (texto humano)."""
+    pending = list_pending_escalations(limit=limit) or []
+    result: Dict[str, str] = {}
+    for esc in pending:
+        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
+        if not guest_id:
+            continue
+        reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
+        if not reason:
+            continue
+        result[guest_id] = reason
+    return result
+
+
+def _pending_types(limit: int = 200) -> Dict[str, str]:
+    """Devuelve un mapa guest_chat_id -> tipo de escalación (ej. info_not_found)."""
+    pending = list_pending_escalations(limit=limit) or []
+    result: Dict[str, str] = {}
+    for esc in pending:
+        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
+        if not guest_id:
+            continue
+        esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
+        if not esc_type:
+            continue
+        result[guest_id] = esc_type
+    return result
+
+
+def _pending_responses(limit: int = 200) -> Dict[str, str]:
+    """Devuelve un mapa guest_chat_id -> respuesta propuesta."""
+    pending = list_pending_escalations(limit=limit) or []
+    result: Dict[str, str] = {}
+    for esc in pending:
+        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
+        if not guest_id:
+            continue
+        proposed = (esc.get("draft_response") or "").strip()
+        if not proposed:
+            continue
+        result[guest_id] = proposed
     return result
 
 
@@ -162,13 +232,18 @@ def register_chatter_routes(app, state) -> None:
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
                 prop_id = row.get("property_id")
-                key = f"{cid}::{prop_id}" if prop_id is not None else f"{cid}::"
+                key = cid
                 content = (row.get("content") or "").strip()
                 if (
                     not cid
                     or key in summaries
                     or content.startswith("[Superintendente]")
                 ):
+                    if key in summaries:
+                        existing = summaries[key]
+                        existing_prop = existing.get("property_id")
+                        if existing_prop is None and prop_id is not None:
+                            summaries[key] = row
                     continue
                 ordered_keys.append(key)
                 summaries[key] = row
@@ -180,6 +255,9 @@ def register_chatter_routes(app, state) -> None:
 
         page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
         pending_map = _pending_actions()
+        pending_reason_map = _pending_reasons()
+        pending_type_map = _pending_types()
+        proposed_map = _pending_responses()
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
         if page_keys:
@@ -195,7 +273,7 @@ def register_chatter_routes(app, state) -> None:
                         .select("conversation_id, client_name, created_at")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
-                        .in_("role", ["guest", "user"])
+                        .in_("role", ["guest"])
                         .order("created_at", desc=True)
                         .limit(500)
                         .execute()
@@ -232,6 +310,9 @@ def register_chatter_routes(app, state) -> None:
                     "bookai_enabled": bool(bookai_flags.get(cid, True)),
                     "unread_count": 0,
                     "needs_action": pending_map.get(cid),
+                    "needs_action_type": pending_type_map.get(cid),
+                    "needs_action_reason": pending_reason_map.get(cid),
+                    "proposed_response": proposed_map.get(cid),
                 }
             )
 
@@ -312,12 +393,12 @@ def register_chatter_routes(app, state) -> None:
         await state.channel_manager.send_message(chat_id, payload.message, channel="whatsapp")
         try:
             sender = (payload.sender or "bookai").strip().lower()
-            if sender in {"user", "guest", "bookai", "system", "tool"}:
-                role = sender
-            elif sender in {"assistant", "ai"}:
-                role = "bookai"
-            elif sender in {"cliente", "usuario"}:
+            if sender in {"user", "hotel", "staff"}:
+                role = "user"
+            elif sender in {"guest", "cliente"}:
                 role = "guest"
+            elif sender in {"bookai", "assistant", "ai", "system", "tool"}:
+                role = "bookai"
             else:
                 role = "bookai"
             if property_id is not None:
@@ -327,11 +408,129 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
+        try:
+            resolved_id = resolve_latest_pending_escalation(chat_id, final_response=payload.message)
+            if resolved_id:
+                log.info("Escalación %s resuelta automáticamente tras enviar mensaje.", resolved_id)
+        except Exception as exc:
+            log.warning("No se pudo auto-resolver escalación para %s: %s", chat_id, exc)
+
         return {
             "status": "sent",
             "chat_id": chat_id,
             "user_id": payload.user_id,
             "sender": role,
+        }
+
+    @router.post("/chats/{chat_id}/proposed-response")
+    async def refine_proposed_response(
+        chat_id: str,
+        payload: "ProposedResponseRequest",
+        _: None = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+        instruction = (payload.instruction or "").strip()
+        if not instruction:
+            raise HTTPException(status_code=422, detail="instruction requerida")
+
+        from core.escalation_db import get_latest_pending_escalation, update_escalation
+
+        esc = get_latest_pending_escalation(clean_id)
+        if not esc:
+            raise HTTPException(status_code=404, detail="No hay escalación pendiente")
+
+        escalation_id = str(esc.get("escalation_id") or "").strip()
+        if not escalation_id:
+            raise HTTPException(status_code=404, detail="Escalación inválida")
+
+        from agents.interno_agent import InternoAgent
+        from tools.interno_tool import ESCALATIONS_STORE, Escalation
+        interno_agent = getattr(state, "interno_agent", None)
+        if not interno_agent or not isinstance(interno_agent, InternoAgent):
+            interno_agent = InternoAgent(memory_manager=state.memory_manager)
+
+        if escalation_id not in ESCALATIONS_STORE:
+            ESCALATIONS_STORE[escalation_id] = Escalation(
+                escalation_id=escalation_id,
+                guest_chat_id=clean_id,
+                guest_message=(esc.get("guest_message") or "").strip(),
+                escalation_type=(esc.get("escalation_type") or "manual"),
+                escalation_reason=(esc.get("escalation_reason") or esc.get("reason") or "").strip(),
+                context=(esc.get("context") or "").strip(),
+                timestamp=str(esc.get("timestamp") or ""),
+                draft_response=(esc.get("draft_response") or "").strip() or None,
+                manager_confirmed=bool(esc.get("manager_confirmed") or False),
+                final_response=(esc.get("final_response") or None),
+                sent_to_guest=bool(esc.get("sent_to_guest") or False),
+            )
+
+        base_response = (payload.original_response or esc.get("draft_response") or "").strip()
+        if not base_response:
+            base_response = (esc.get("guest_message") or "").strip()
+        if base_response:
+            ESCALATIONS_STORE[escalation_id].draft_response = base_response
+            update_escalation(escalation_id, {"draft_response": base_response})
+
+        result = await interno_agent.send_confirmed_response(
+            escalation_id=escalation_id,
+            confirmed=False,
+            adjustments=instruction,
+        )
+
+        from core.message_utils import extract_clean_draft
+
+        def _strip_instruction_block(text: str) -> str:
+            if not text:
+                return text
+            cut_markers = [
+                "📝 *Nuevo borrador generado según tus ajustes:*",
+                "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
+                "Se ha generado el siguiente borrador",
+                "Se ha generado el siguiente borrador según tus indicaciones:",
+                "✏️ Si deseas modificar",
+                "✏️ Si deseas más cambios",
+                "✅ Si estás conforme",
+                "Si deseas modificar el texto",
+                "Si deseas más cambios",
+                "responde con 'OK' para enviarlo al huésped",
+            ]
+            for marker in cut_markers:
+                if marker in text:
+                    parts = text.split(marker, 1)
+                    # Si el marcador es encabezado, nos quedamos con lo que viene después.
+                    if marker.startswith("📝"):
+                        text = parts[1].strip() if len(parts) > 1 else ""
+                    elif marker.startswith("Se ha generado"):
+                        text = parts[1].strip() if len(parts) > 1 else ""
+                    else:
+                        text = parts[0].strip()
+            # Limpia líneas vacías o restos de instrucciones.
+            lines = []
+            for ln in text.splitlines():
+                stripped = ln.strip()
+                if not stripped:
+                    continue
+                if stripped.startswith("- Para la escalación"):
+                    continue
+                if stripped.startswith("- La escalación"):
+                    continue
+                if stripped.lower().startswith("la escalación"):
+                    continue
+                if stripped.lower().startswith("si deseas"):
+                    continue
+                if stripped.lower().startswith("si estás conforme"):
+                    continue
+                lines.append(stripped)
+            return "\n".join(lines).strip()
+
+        refined = extract_clean_draft(result or "").strip() or result.strip()
+        refined = _strip_instruction_block(refined)
+        update_escalation(escalation_id, {"draft_response": refined})
+
+        return {
+            "chat_id": clean_id,
+            "escalation_id": escalation_id,
+            "proposed_response": refined,
         }
 
     @router.patch("/chats/{chat_id}/bookai")
@@ -483,7 +682,7 @@ def register_chatter_routes(app, state) -> None:
         property_id = _normalize_property_id(property_id)
         # Also consider compound conversation ids like "prefix:<chat_id>".
         like_pattern = f"%:{clean_id}"
-        query = supabase.table("chat_history").select("created_at").in_("role", ["guest", "user"])
+        query = supabase.table("chat_history").select("created_at").in_("role", ["guest"])
         if property_id is not None:
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:

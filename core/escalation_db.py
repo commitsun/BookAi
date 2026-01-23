@@ -83,6 +83,68 @@ def list_pending_escalations(limit: int = 20):
 
 
 # ======================================================
+# 🔎 Última escalación pendiente por chat
+# ======================================================
+def get_latest_pending_escalation(guest_chat_id: str) -> dict | None:
+    """Devuelve la escalación pendiente más reciente para un chat específico."""
+    if not guest_chat_id:
+        return None
+    try:
+        raw = str(guest_chat_id).strip()
+        clean = "".join(ch for ch in raw if ch.isdigit())
+        tail = raw.split(":")[-1].strip() if ":" in raw else ""
+        candidates = {raw, clean, tail}
+        candidates.discard("")
+        like_clause = ""
+        if clean:
+            like_clause = f"guest_chat_id.like.%:{clean}"
+        or_filters = [f"guest_chat_id.eq.{cand}" for cand in candidates]
+        if like_clause:
+            or_filters.append(like_clause)
+
+        res = (
+            supabase.table("escalations")
+            .select("*")
+            .eq("manager_confirmed", False)
+            .or_(",".join(or_filters))
+            .order("timestamp", desc=True)
+            .limit(1)
+            .execute()
+        )
+        data = res.data or []
+        return data[0] if data else None
+    except Exception as e:
+        log.error(
+            "⚠️ Error obteniendo escalación pendiente para %s: %s",
+            guest_chat_id,
+            e,
+            exc_info=True,
+        )
+        return None
+
+
+# ======================================================
+# ✅ Resolver escalación pendiente por chat
+# ======================================================
+def resolve_latest_pending_escalation(guest_chat_id: str, final_response: str | None = None) -> str | None:
+    """Marca como resuelta la escalación pendiente más reciente para un chat."""
+    esc = get_latest_pending_escalation(guest_chat_id)
+    if not esc:
+        return None
+    escalation_id = esc.get("escalation_id")
+    if not escalation_id:
+        return None
+    updates = {
+        "manager_confirmed": True,
+        "sent_to_guest": True,
+    }
+    if final_response:
+        updates["final_response"] = final_response
+    update_escalation(str(escalation_id), updates)
+    return str(escalation_id)
+
+
+# ======================================================
 # 🧹 Borrar una escalación (opcional, útil para debug)
 # ======================================================
 def delete_escalation(escalation_id: str):

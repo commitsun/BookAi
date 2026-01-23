@@ -7,6 +7,7 @@ import logging
 import warnings
 
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 
 from core.app_state import AppState
 from core.pipeline import process_user_message  # re-export para compatibilidad
@@ -14,6 +15,7 @@ from channels_wrapper.telegram.webhook_telegram import register_telegram_routes
 from channels_wrapper.whatsapp.webhook_whatsapp import register_whatsapp_routes
 from api.template_routes import register_template_routes
 from api.chatter_routes import register_chatter_routes
+from core.config import Settings
 
 # =============================================================
 # CONFIG GLOBAL / LOGGING
@@ -37,6 +39,33 @@ log = logging.getLogger("Main")
 # =============================================================
 
 app = FastAPI(title="HotelAI - Sistema de Agentes ReAct v4")
+
+# =============================================================
+# CORS
+# =============================================================
+
+def _parse_cors_origins(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if raw == "*" or raw.lower() == "all":
+        return ["*"]
+    parts = [item.strip() for item in raw.split(",")]
+    return [item for item in parts if item]
+
+
+cors_origins = _parse_cors_origins(Settings.CORS_ORIGINS)
+if not cors_origins:
+    log.warning("CORS_ORIGINS vacío. Se permite cualquier origen por defecto.")
+    cors_origins = ["*"]
+
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=cors_origins,
+    allow_credentials="*" not in cors_origins,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # =============================================================
 # ESTADO COMPARTIDO

@@ -166,12 +166,14 @@ class SupervisorOutputAgent:
                             formatted = []
                             for m in conv:
                                 role_val = m.get("role")
-                                if role_val in {"user", "guest"}:
+                                if role_val == "guest":
                                     role = "Huésped"
+                                elif role_val == "user":
+                                    role = "Hotel"
                                 elif role_val in {"assistant", "bookai"}:
-                                    role = "Asistente"
+                                    role = "BookAI"
                                 else:
-                                    role = "Asistente"
+                                    role = "BookAI"
                                 content = m.get("content", "").strip()
                                 formatted.append(f"{role}: {content}")
                             historial = "\n".join(formatted)

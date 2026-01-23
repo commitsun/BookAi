@@ -77,6 +77,9 @@ jobs:
           echo "S3_BUCKET=${{ secrets.S3_BUCKET }}" >> .env
           echo "AWS_DEFAULT_REGION=${{ secrets.AWS_DEFAULT_REGION }}" >> .env
 
+          # CORS / Frontend
+          echo "CORS_ORIGINS=${{ secrets.CORS_ORIGINS }}" >> .env
+
           # Models
           echo "MODEL_MAIN=${{ secrets.MODEL_MAIN }}" >> .env
           echo "TEMP_MAIN=${{ secrets.TEMP_MAIN }}" >> .env

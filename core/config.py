@@ -56,6 +56,10 @@ class Settings:
     # MCP / Infraestructura
     ENDPOINT_MCP = os.getenv("ENDPOINT_MCP")
 
+    # CORS / Frontend
+    # Comma-separated list, "*" for all. Example: "https://app.example.com,http://localhost:3000"
+    CORS_ORIGINS = os.getenv("CORS_ORIGINS", "")
+
     # Control de modelos (usado por ModelConfig)
     MODEL_MAIN = os.getenv("MODEL_MAIN", "gpt-4.1")
     MODEL_SUBAGENT = os.getenv("MODEL_SUBAGENT", "gpt-4.1")
