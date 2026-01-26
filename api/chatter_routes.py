@@ -512,7 +512,7 @@ def register_chatter_routes(app, state) -> None:
                         text = parts[1].strip() if len(parts) > 1 else ""
                     else:
                         text = parts[0].strip()
-            # Limpia líneas vacías o restos de instrucciones.
+            # Limpia líneas vacías o restos  de instrucciones.
             lines = []
             for ln in text.splitlines():
                 stripped = ln.strip()
