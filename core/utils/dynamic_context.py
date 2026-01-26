@@ -17,6 +17,11 @@ def build_dynamic_context_block(
     property_id: Optional[Any] = None,
     kb: Optional[str] = None,
     guest_number: Optional[str] = None,
+    guest_name: Optional[str] = None,
+    origin_folio_id: Optional[Any] = None,
+    origin_folio_code: Optional[str] = None,
+    origin_folio_min_checkin: Optional[str] = None,
+    origin_folio_max_checkout: Optional[str] = None,
 ) -> str:
     """Return formatted dynamic context block or empty string when unused."""
     return (
@@ -24,7 +29,12 @@ def build_dynamic_context_block(
         f"Instance_url: {_stringify(instance_url)},\n"
         f"Property_id: {_stringify(property_id)},\n"
         f"Kb: {_stringify(kb)},\n"
-        f"Guest_number: {_stringify(guest_number)}"
+        f"Guest_number: {_stringify(guest_number)},\n"
+        f"Guest_name: {_stringify(guest_name)},\n"
+        f"Origin_folio_id: {_stringify(origin_folio_id)},\n"
+        f"Origin_folio_code: {_stringify(origin_folio_code)},\n"
+        f"Origin_folio_min_checkin: {_stringify(origin_folio_min_checkin)},\n"
+        f"Origin_folio_max_checkout: {_stringify(origin_folio_max_checkout)}"
     )
 
 
@@ -42,12 +52,22 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
         or memory_manager.get_flag(chat_id, "whatsapp_number")
         or chat_id
     )
+    guest_name = memory_manager.get_flag(chat_id, "client_name")
+    origin_folio_id = memory_manager.get_flag(chat_id, "origin_folio_id")
+    origin_folio_code = memory_manager.get_flag(chat_id, "origin_folio_code")
+    origin_folio_min_checkin = memory_manager.get_flag(chat_id, "origin_folio_min_checkin")
+    origin_folio_max_checkout = memory_manager.get_flag(chat_id, "origin_folio_max_checkout")
 
     base_block = build_dynamic_context_block(
         instance_url=instance_url,
         property_id=property_id,
         kb=kb,
         guest_number=guest_number,
+        guest_name=guest_name,
+        origin_folio_id=origin_folio_id,
+        origin_folio_code=origin_folio_code,
+        origin_folio_min_checkin=origin_folio_min_checkin,
+        origin_folio_max_checkout=origin_folio_max_checkout,
     )
 
     temp_block = ""
