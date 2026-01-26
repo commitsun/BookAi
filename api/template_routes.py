@@ -25,16 +25,34 @@ class SourceHotel(BaseModel):
     name: Optional[str] = Field(default=None, description="Nombre descriptivo del hotel")
 
 
+class OriginFolio(BaseModel):
+    id: Optional[int] = Field(default=None, description="ID del folio en Roomdoo")
+    code: Optional[str] = Field(default=None, description="Código del folio (ej: F2600107)")
+    min_checkin: Optional[str] = Field(
+        default=None,
+        description="Primera fecha de entrada dentro del folio (ISO 8601)",
+    )
+    max_checkout: Optional[str] = Field(
+        default=None,
+        description="Última fecha de salida dentro del folio (ISO 8601)",
+    )
+
+
 class Source(BaseModel):
     instance_url: str = Field(..., description="URL de la instancia en Roomdoo")
     db: Optional[str] = Field(default=None, description="Nombre de la base de datos")
     instance_id: Optional[str] = Field(default=None, description="Identificador lógico de la instancia")
     hotel: SourceHotel
+    origin_folio: Optional[OriginFolio] = Field(
+        default=None,
+        description="Folio de origen (resumen de fechas y código)",
+    )
 
 
 class Recipient(BaseModel):
     phone: str = Field(..., description="Teléfono en formato E.164 (+34...)")
     country: Optional[str] = Field(default=None, description="Código de país ISO (opcional)")
+    display_name: Optional[str] = Field(default=None, description="Nombre para mostrar del huésped")
 
     @model_validator(mode="before")
     def _strip_phone(cls, data: Dict[str, Any]) -> Dict[str, Any]:
@@ -138,11 +156,39 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar instance_url en memoria: %s", exc)
 
+            if payload.recipient.display_name:
+                try:
+                    state.memory_manager.set_flag(chat_id, "client_name", payload.recipient.display_name)
+                except Exception as exc:
+                    log.warning("No se pudo guardar display_name en memoria: %s", exc)
+
             if payload.meta and payload.meta.property_id is not None:
                 try:
                     state.memory_manager.set_flag(chat_id, "property_id", payload.meta.property_id)
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
+
+            if payload.source.origin_folio:
+                try:
+                    folio = payload.source.origin_folio
+                    if folio.id is not None:
+                        state.memory_manager.set_flag(chat_id, "origin_folio_id", folio.id)
+                    if folio.code:
+                        state.memory_manager.set_flag(chat_id, "origin_folio_code", folio.code)
+                    if folio.min_checkin:
+                        state.memory_manager.set_flag(
+                            chat_id,
+                            "origin_folio_min_checkin",
+                            folio.min_checkin,
+                        )
+                    if folio.max_checkout:
+                        state.memory_manager.set_flag(
+                            chat_id,
+                            "origin_folio_max_checkout",
+                            folio.max_checkout,
+                        )
+                except Exception as exc:
+                    log.warning("No se pudo guardar origin_folio en memoria: %s", exc)
 
             await state.channel_manager.send_template_message(
                 chat_id,
