@@ -220,17 +220,23 @@ def _resolve_guest_id_by_name(
     if not name:
         return None, []
 
-    try:
+    def _run_query(filter_property: bool) -> list[dict]:
         query = (
             supabase.table("chat_history")
             .select("conversation_id, original_chat_id, client_name, created_at, property_id")
             .eq("role", "guest")
             .ilike("client_name", f"%{name}%")
         )
-        if property_id is not None:
+        if filter_property and property_id is not None:
             query = query.eq("property_id", property_id)
         resp = query.order("created_at", desc=True).limit(limit).execute()
-        rows = resp.data or []
+        return resp.data or []
+
+    try:
+        rows = _run_query(filter_property=True)
+        if not rows and property_id is not None:
+            # Fallback cuando los mensajes no tienen property_id guardado.
+            rows = _run_query(filter_property=False)
     except Exception as exc:
         log.warning("No se pudo resolver guest_id por nombre: %s", exc)
         return None, []
