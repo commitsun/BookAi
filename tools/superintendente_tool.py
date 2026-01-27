@@ -211,6 +211,68 @@ def _parse_ts(value: Any) -> float:
         return 0.0
 
 
+def _split_guest_tokens(raw: str) -> list[str]:
+    raw = (raw or "").strip()
+    if not raw:
+        return []
+    if "," in raw:
+        return [part.strip() for part in raw.split(",") if part.strip()]
+    if re.fullmatch(r"[0-9+()\s-]+", raw):
+        return [part.strip() for part in re.split(r"\s+", raw) if part.strip()]
+    return [raw]
+
+
+def _resolve_guest_ids(
+    raw: str,
+    property_id: Optional[int] = None,
+) -> tuple[list[str], list[str], list[dict]]:
+    display: list[str] = []
+    clean_ids: list[str] = []
+    unresolved: list[dict] = []
+    seen = set()
+
+    for token in _split_guest_tokens(raw):
+        if not token:
+            continue
+        if _looks_like_phone(token):
+            normalized = _clean_phone(token)
+            if not normalized or normalized in seen:
+                continue
+            seen.add(normalized)
+            display.append(token)
+            clean_ids.append(normalized)
+            continue
+
+        resolved, candidates = _resolve_guest_id_by_name(token, property_id=property_id)
+        if resolved:
+            if resolved in seen:
+                continue
+            seen.add(resolved)
+            display.append(token)
+            clean_ids.append(resolved)
+        else:
+            unresolved.append({"name": token, "candidates": candidates})
+
+    return display, clean_ids, unresolved
+
+
+def _format_unresolved_guests(unresolved: list[dict]) -> str:
+    if not unresolved:
+        return ""
+    lines = ["⚠️ Necesito el teléfono exacto para estos huéspedes:"]
+    for item in unresolved:
+        name = item.get("name") or "Sin nombre"
+        candidates = item.get("candidates") or []
+        if candidates:
+            lines.append(f"• {name} (posibles coincidencias):")
+            for cand in candidates[:5]:
+                label = cand.get("client_name") or "Sin nombre"
+                lines.append(f"  • {label} → {cand.get('phone')}")
+        else:
+            lines.append(f"• {name} (no encontrado)")
+    return "\n".join(lines)
+
+
 def _resolve_guest_id_by_name(
     name: str,
     property_id: Optional[int] = None,
@@ -539,27 +601,6 @@ def create_send_template_tool(
     def _normalize_lang(lang: str) -> str:
         return (lang or "es").split("-")[0].strip().lower() or "es"
 
-    def _parse_guest_ids(raw: str) -> tuple[list[str], list[str]]:
-        display: list[str] = []
-        clean_ids: list[str] = []
-        if not raw:
-            return display, clean_ids
-        parts = re.split(r"[,\n]+|\s+", raw)
-        seen = set()
-        for part in parts:
-            if not part:
-                continue
-            disp = part.strip()
-            normalized = re.sub(r"\D", "", disp)
-            if not normalized:
-                continue
-            if normalized in seen:
-                continue
-            seen.add(normalized)
-            display.append(disp)
-            clean_ids.append(normalized)
-        return display, clean_ids
-
     def _format_param_label(tpl: TemplateDefinition, name: str) -> str:
         label = tpl.get_param_label(name) if tpl else name
         return f"{name} ({label})" if label and label != name else name
@@ -651,7 +692,12 @@ def create_send_template_tool(
                 f"para {hotel_label}. Pide el listado para ver las disponibles."
             )
 
-        display_ids, normalized_ids = _parse_guest_ids(guest_ids)
+        display_ids, normalized_ids, unresolved = _resolve_guest_ids(
+            guest_ids,
+            property_id=property_id,
+        )
+        if unresolved:
+            return _format_unresolved_guests(unresolved)
         if not normalized_ids:
             return "⚠️ No encontré ningún huésped válido. Indica al menos un número con prefijo de país."
 
@@ -852,9 +898,16 @@ def create_send_broadcast_tool(
                     )
                 except Exception:
                     pass
-            ids = [gid.strip() for gid in guest_ids.split(",") if gid.strip()]
+            display_ids, ids, unresolved = _resolve_guest_ids(
+                guest_ids,
+                property_id=property_id,
+            )
+            if unresolved:
+                return _format_unresolved_guests(unresolved)
             if not channel_manager:
                 return "⚠️ Canal de envío no configurado."
+            if not ids:
+                return "⚠️ No encontré ningún huésped válido. Indica al menos un número con prefijo de país."
 
             target_hotel = hotel_code or hotel_name
             template_def = None
