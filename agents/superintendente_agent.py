@@ -29,6 +29,12 @@ from botocore.config import Config as BotoConfig
 from core.config import ModelConfig, ModelTier, Settings
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
+from tools.superintendente_tool import (
+    _clean_phone,
+    _looks_like_phone,
+    _resolve_guest_id_by_name,
+    _set_instance_context,
+)
 
 log = logging.getLogger("SuperintendenteAgent")
 log.setLevel(logging.INFO)
@@ -107,6 +113,25 @@ class SuperintendenteAgent:
 
         try:
             log.info("SuperintendenteAgent ainvoke: %s", encargado_id)
+
+            fast_draft = await self._try_direct_whatsapp_draft(user_input, encargado_id)
+            if fast_draft:
+                await self._safe_call(
+                    getattr(self.memory_manager, "save", None),
+                    conversation_id=encargado_id,
+                    role="user",
+                    content=user_input,
+                    channel="telegram",
+                )
+                await self._safe_call(
+                    getattr(self.memory_manager, "save", None),
+                    conversation_id=encargado_id,
+                    role="assistant",
+                    content=fast_draft,
+                    channel="telegram",
+                )
+                log.info("Superintendente fast draft enviado (%s chars)", len(fast_draft))
+                return fast_draft
 
             resolved_hotel_name = self._sanitize_hotel_name(hotel_name) or hotel_name
             if self.memory_manager and encargado_id:
@@ -240,6 +265,86 @@ class SuperintendenteAgent:
         except Exception as exc:
             log.error("Error en SuperintendenteAgent: %s", exc, exc_info=True)
             raise
+
+    async def _try_direct_whatsapp_draft(self, user_input: str, encargado_id: str) -> Optional[str]:
+        parsed = self._parse_direct_send_request(user_input)
+        if not parsed:
+            return None
+        guest_label, message = parsed
+        if not message:
+            return None
+
+        property_id = None
+        hotel_code = None
+        if self.memory_manager and encargado_id:
+            try:
+                property_id = self.memory_manager.get_flag(encargado_id, "property_id")
+            except Exception:
+                property_id = None
+            try:
+                hotel_code = self.memory_manager.get_flag(encargado_id, "property_name")
+            except Exception:
+                hotel_code = None
+
+        if _looks_like_phone(guest_label):
+            guest_id = _clean_phone(guest_label)
+        else:
+            guest_id, candidates = _resolve_guest_id_by_name(
+                guest_label,
+                property_id=property_id,
+            )
+            if not guest_id:
+                if candidates:
+                    lines = []
+                    for cand in candidates[:5]:
+                        label = cand.get("client_name") or "Sin nombre"
+                        lines.append(f"• {label} → {cand.get('phone')}")
+                    suggestions = "\n".join(lines)
+                    return (
+                        "⚠️ Encontré varios huéspedes con ese nombre. "
+                        "Indícame el teléfono exacto:\n"
+                        f"{suggestions}"
+                    )
+                return (
+                    f"⚠️ No encontré un huésped con el nombre '{guest_label}'. "
+                    "Indícame el teléfono exacto."
+                )
+
+        if not guest_id:
+            return None
+
+        if self.memory_manager and encargado_id:
+            try:
+                _set_instance_context(
+                    self.memory_manager,
+                    encargado_id,
+                    property_id=property_id,
+                    hotel_code=hotel_code,
+                )
+            except Exception:
+                pass
+
+        return f"[WA_DRAFT]|{guest_id}|{message}"
+
+    def _parse_direct_send_request(self, text: str) -> Optional[tuple[str, str]]:
+        if not text:
+            return None
+        raw = text.strip()
+        if not re.search(r"\b(envia|envíale|enviale|manda|mándale|mandale|dile)\b", raw, flags=re.IGNORECASE):
+            return None
+
+        patterns = [
+            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+([^,]+?)\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+([^,]+?)\s+(?:un|una)?\s*mensaje\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+([^,]+?)\s+que\s+(.+)$",
+        ]
+        for pattern in patterns:
+            match = re.search(pattern, raw)
+            if match:
+                name = match.group(1).strip()
+                msg = match.group(2).strip()
+                return name, msg
+        return None
 
     async def _create_tools(self, hotel_name: str, encargado_id: str):
         """Crear tools del superintendente"""
