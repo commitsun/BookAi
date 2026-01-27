@@ -120,6 +120,7 @@ class MemoryManager:
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
         channel: Optional[str] = None,
+        original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
     ) -> None:
         """
@@ -176,7 +177,7 @@ class MemoryManager:
                 client_name=client_name if is_guest else None,
                 channel=channel_to_store,
                 property_id=property_id,
-                original_chat_id=cid,
+                original_chat_id=original_chat_id or cid,
                 table=self._resolve_history_table(conversation_id),
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")

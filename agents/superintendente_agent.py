@@ -100,6 +100,7 @@ class SuperintendenteAgent:
         hotel_name: str,
         context_window: int = 50,
         chat_history: Optional[List[Any]] = None,
+        session_id: Optional[str] = None,
     ) -> str:
         """
         Invocar agente superintendente (sesión con encargado)
@@ -113,54 +114,62 @@ class SuperintendenteAgent:
         """
 
         try:
-            log.info("SuperintendenteAgent ainvoke: %s", encargado_id)
+            active_session_id = (session_id or "").strip() or None
+            convo_id = active_session_id or encargado_id
+            original_owner_id = encargado_id
+
+            log.info("SuperintendenteAgent ainvoke: %s", convo_id)
 
             fast_draft = await self._try_direct_whatsapp_draft(user_input, encargado_id)
             if fast_draft:
                 await self._safe_call(
                     getattr(self.memory_manager, "save", None),
-                    conversation_id=encargado_id,
+                    conversation_id=convo_id,
                     role="user",
                     content=user_input,
                     channel="telegram",
+                    original_chat_id=original_owner_id,
                 )
                 await self._safe_call(
                     getattr(self.memory_manager, "save", None),
-                    conversation_id=encargado_id,
+                    conversation_id=convo_id,
                     role="assistant",
                     content=fast_draft,
                     channel="telegram",
+                    original_chat_id=original_owner_id,
                 )
                 log.info("Superintendente fast draft enviado (%s chars)", len(fast_draft))
                 return fast_draft
 
             resolved_hotel_name = self._sanitize_hotel_name(hotel_name) or hotel_name
-            if self.memory_manager and encargado_id:
+            if self.memory_manager and convo_id:
                 try:
-                    self.memory_manager.set_flag(encargado_id, "property_name", resolved_hotel_name)
+                    self.memory_manager.set_flag(convo_id, "property_name", resolved_hotel_name)
                     self.memory_manager.set_flag(
-                        encargado_id,
+                        convo_id,
                         "history_table",
                         Settings.SUPERINTENDENTE_HISTORY_TABLE,
                     )
                     inferred_property_id = self._extract_property_id(user_input, hotel_name, resolved_hotel_name)
                     if inferred_property_id is not None:
-                        self.memory_manager.set_flag(encargado_id, "property_id", inferred_property_id)
+                        self.memory_manager.set_flag(convo_id, "property_id", inferred_property_id)
+                    if active_session_id:
+                        self.memory_manager.set_flag(convo_id, "superintendente_owner_id", original_owner_id)
                 except Exception:
                     pass
 
             if chat_history is None:
                 chat_history = await self._safe_call(
                     getattr(self.memory_manager, "get_memory_as_messages", None),
-                    conversation_id=encargado_id,
+                    conversation_id=convo_id,
                     limit=context_window,
                 )
             chat_history = chat_history or []
 
-            tools = await self._create_tools(resolved_hotel_name, encargado_id)
+            tools = await self._create_tools(resolved_hotel_name, convo_id)
 
             system_prompt = self._build_system_prompt(resolved_hotel_name)
-            log.info("Superintendente hotel_name activo: %s (encargado_id=%s)", resolved_hotel_name, encargado_id)
+            log.info("Superintendente hotel_name activo: %s (encargado_id=%s)", resolved_hotel_name, convo_id)
 
             prompt_template = ChatPromptTemplate.from_messages(
                 [
@@ -246,18 +255,20 @@ class SuperintendenteAgent:
 
             await self._safe_call(
                 getattr(self.memory_manager, "save", None),
-                conversation_id=encargado_id,
+                conversation_id=convo_id,
                 role="user",
                 content=user_input,
                 channel="telegram",
+                original_chat_id=original_owner_id,
             )
 
             await self._safe_call(
                 getattr(self.memory_manager, "save", None),
-                conversation_id=encargado_id,
+                conversation_id=convo_id,
                 role="assistant",
                 content=output,
                 channel="telegram",
+                original_chat_id=original_owner_id,
             )
 
             log.info("SuperintendenteAgent completado: %s chars", len(output))

@@ -15,6 +15,7 @@ from channels_wrapper.telegram.webhook_telegram import register_telegram_routes
 from channels_wrapper.whatsapp.webhook_whatsapp import register_whatsapp_routes
 from api.template_routes import register_template_routes
 from api.chatter_routes import register_chatter_routes
+from api.superintendente_routes import register_superintendente_routes
 from core.config import Settings
 
 # =============================================================
@@ -82,6 +83,7 @@ register_whatsapp_routes(app, state)
 register_telegram_routes(app, state)
 register_template_routes(app, state)
 register_chatter_routes(app, state)
+register_superintendente_routes(app, state)
 
 # =============================================================
 # HEALTHCHECK
