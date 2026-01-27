@@ -20,11 +20,11 @@ from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 from core.utils.dynamic_context import build_dynamic_context_from_memory
 from tools.onboarding_tool import (
-    create_consulta_reserva_propia_tool,
     create_room_type_tool,
     create_reservation_tool,
     create_token_tool,
 )
+from tools.superintendente_tool import create_consulta_reserva_general_tool
 
 log = logging.getLogger("OnboardingAgent")
 
@@ -46,7 +46,7 @@ class OnboardingAgent:
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
-            "- Si el huesped pide consultar su reserva, usa consultar_reserva_propia (folio_id si lo tiene; si no, pide fechas y nombre/email/telefono).\n"
+            "- Si el huesped pide consultar reservas, usa consulta_reserva_general y pide fechas de entrada/salida.\n"
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
@@ -84,7 +84,7 @@ class OnboardingAgent:
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
-            "- Si el huesped pide consultar su reserva, usa consultar_reserva_propia (folio_id si lo tiene; si no, pide fechas y nombre/email/telefono).\n"
+            "- Si el huesped pide consultar reservas, usa consulta_reserva_general y pide fechas de entrada/salida.\n"
         )
         dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
         if dynamic_context:
@@ -95,7 +95,7 @@ class OnboardingAgent:
             create_token_tool(),
             create_room_type_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
-            create_consulta_reserva_propia_tool(
+            create_consulta_reserva_general_tool(
                 memory_manager=self.memory_manager,
                 chat_id=chat_id,
             ),
