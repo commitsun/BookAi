@@ -12,6 +12,7 @@ from __future__ import annotations
 import asyncio
 import inspect
 import logging
+import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import os
@@ -267,8 +268,15 @@ class SuperintendenteAgent:
             raise
 
     async def _try_direct_whatsapp_draft(self, user_input: str, encargado_id: str) -> Optional[str]:
-        parsed = self._parse_direct_send_request(user_input)
+        clean_input = user_input.strip()
+        if clean_input.lower().startswith("/super"):
+            clean_input = clean_input.split(" ", 1)[1].strip() if " " in clean_input else ""
+
+        parsed = self._parse_direct_send_request(clean_input)
         if not parsed:
+            parsed = await self._extract_send_intent_llm(clean_input)
+        if not parsed:
+            log.info("Superintendente fast draft: no match for direct-send pattern")
             return None
         guest_label, message = parsed
         if not message:
@@ -295,6 +303,7 @@ class SuperintendenteAgent:
             )
             if not guest_id:
                 if candidates:
+                    log.info("Superintendente fast draft: nombre ambiguo (%s)", guest_label)
                     lines = []
                     for cand in candidates[:5]:
                         label = cand.get("client_name") or "Sin nombre"
@@ -326,6 +335,48 @@ class SuperintendenteAgent:
 
         return f"[WA_DRAFT]|{guest_id}|{message}"
 
+    async def _extract_send_intent_llm(self, text: str) -> Optional[tuple[str, str]]:
+        if not text:
+            return None
+
+        try:
+            from langchain.schema import SystemMessage, HumanMessage
+        except Exception:
+            return None
+
+        system = (
+            "Extrae si el usuario pide ENVIAR un mensaje a un huésped. "
+            "Responde SOLO JSON con: "
+            "{\"intent\": true|false, \"guest\": \"nombre o telefono\", \"message\": \"texto\"}. "
+            "Si no hay intención clara de enviar, usa intent=false."
+        )
+        human = f"Texto:\n{text}\n\nJSON:"
+
+        try:
+            resp = await self.llm.ainvoke([SystemMessage(content=system), HumanMessage(content=human)])
+        except Exception as exc:
+            log.info("Superintendente fast draft: LLM parse failed (%s)", exc)
+            return None
+
+        content = getattr(resp, "content", None) or str(resp)
+        match = re.search(r"\{.*\}", content, flags=re.S)
+        if not match:
+            return None
+        try:
+            data = json.loads(match.group(0))
+        except Exception:
+            return None
+
+        if not isinstance(data, dict):
+            return None
+        if not data.get("intent"):
+            return None
+        guest = (data.get("guest") or "").strip()
+        message = (data.get("message") or "").strip()
+        if not guest or not message:
+            return None
+        return guest, message
+
     def _parse_direct_send_request(self, text: str) -> Optional[tuple[str, str]]:
         if not text:
             return None
@@ -334,11 +385,23 @@ class SuperintendenteAgent:
             return None
 
         patterns = [
-            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+([^,]+?)\s+que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+([^,]+?)\s+(?:un|una)?\s*mensaje\s+que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+([^,]+?)\s+que\s+(.+)$",
+            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:un|una)?\s*mensaje\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+(.+?)\s+que\s+(.+)$",
         ]
         for pattern in patterns:
+            match = re.search(pattern, raw)
+            if match:
+                name = match.group(1).strip()
+                msg = match.group(2).strip()
+                return name, msg
+        fallback_patterns = [
+            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s*:\s*(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(?:diciendo|diciéndole)?\s*[:\-]?\s*(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(.+)$",
+            r"(?i)\b(?:dile)\s+a\s+(.+?)\s+(.+)$",
+        ]
+        for pattern in fallback_patterns:
             match = re.search(pattern, raw)
             if match:
                 name = match.group(1).strip()
