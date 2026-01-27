@@ -13,6 +13,7 @@ from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from core.db import get_conversation_history
+from core.db import supabase
 from core.mcp_client import get_tools
 from core.instance_context import (
     fetch_instance_by_code,
@@ -185,6 +186,111 @@ def _resolve_property_table(memory_manager: Any, chat_id: str) -> str:
         except Exception:
             pass
     return DEFAULT_PROPERTY_TABLE
+
+
+def _clean_phone(value: str) -> str:
+    return re.sub(r"\D", "", str(value or "")).strip()
+
+
+def _looks_like_phone(value: str) -> bool:
+    digits = _clean_phone(value)
+    return len(digits) >= 6
+
+
+def _normalize_name(value: str) -> str:
+    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+
+
+def _parse_ts(value: Any) -> float:
+    try:
+        if isinstance(value, datetime):
+            return value.timestamp()
+        text = str(value).replace("Z", "+00:00")
+        return datetime.fromisoformat(text).timestamp()
+    except Exception:
+        return 0.0
+
+
+def _resolve_guest_id_by_name(
+    name: str,
+    property_id: Optional[int] = None,
+    limit: int = 50,
+) -> tuple[Optional[str], list[dict]]:
+    name = (name or "").strip()
+    if not name:
+        return None, []
+
+    try:
+        query = (
+            supabase.table("chat_history")
+            .select("conversation_id, original_chat_id, client_name, created_at, property_id")
+            .eq("role", "guest")
+            .ilike("client_name", f"%{name}%")
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        resp = query.order("created_at", desc=True).limit(limit).execute()
+        rows = resp.data or []
+    except Exception as exc:
+        log.warning("No se pudo resolver guest_id por nombre: %s", exc)
+        return None, []
+
+    candidates = []
+    for row in rows:
+        client_name = (row.get("client_name") or "").strip()
+        phone = _clean_phone(row.get("conversation_id") or "")
+        if not phone:
+            phone = _clean_phone(row.get("original_chat_id") or "")
+        if not phone:
+            continue
+        candidates.append(
+            {
+                "phone": phone,
+                "client_name": client_name,
+                "created_at": row.get("created_at"),
+                "property_id": row.get("property_id"),
+            }
+        )
+
+    if not candidates:
+        return None, []
+
+    query_name = _normalize_name(name)
+
+    def _score(candidate: dict) -> int:
+        candidate_name = _normalize_name(candidate.get("client_name"))
+        if candidate_name == query_name:
+            return 0
+        if candidate_name.startswith(query_name):
+            return 1
+        if query_name in candidate_name:
+            return 2
+        return 3
+
+    candidates.sort(
+        key=lambda c: (_score(c), -_parse_ts(c.get("created_at")))
+    )
+
+    # Deduplicar por phone, mantener el mejor match más reciente.
+    unique: list[dict] = []
+    seen = set()
+    for cand in candidates:
+        phone = cand.get("phone")
+        if not phone or phone in seen:
+            continue
+        seen.add(phone)
+        cand["score"] = _score(cand)
+        unique.append(cand)
+
+    if not unique:
+        return None, []
+
+    best_score = unique[0].get("score", 3)
+    best = [c for c in unique if c.get("score", 3) == best_score]
+    if len(best) == 1:
+        return best[0].get("phone"), unique
+
+    return None, unique
 
 
 def _set_instance_context(
@@ -993,12 +1099,6 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             if not memory_manager:
                 return "⚠️ No hay gestor de memoria configurado."
 
-            if not guest_id:
-                return (
-                    "⚠️ Para revisar una conversación necesito el ID del huésped "
-                    "(guest_id). Ejemplo: +34683527049"
-                )
-
             if property_id is None and memory_manager and chat_id:
                 try:
                     property_id = memory_manager.get_flag(chat_id, "property_id")
@@ -1009,6 +1109,36 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                     hotel_code = memory_manager.get_flag(chat_id, "property_name")
                 except Exception:
                     hotel_code = None
+
+            if not guest_id:
+                return (
+                    "⚠️ Para revisar una conversación necesito el ID del huésped "
+                    "(guest_id) o el nombre exacto. Ejemplo: +34683527049 o 'Rafa Perez'."
+                )
+
+            resolved_guest_id = None
+            if not _looks_like_phone(guest_id):
+                resolved_guest_id, candidates = _resolve_guest_id_by_name(
+                    guest_id,
+                    property_id=property_id,
+                )
+                if not resolved_guest_id:
+                    if candidates:
+                        lines = []
+                        for cand in candidates[:5]:
+                            label = cand.get("client_name") or "Sin nombre"
+                            lines.append(f"• {label} → {cand.get('phone')}")
+                        suggestions = "\n".join(lines)
+                        return (
+                            "⚠️ Encontré varios huéspedes con ese nombre. "
+                            "Indícame el teléfono exacto:\n"
+                            f"{suggestions}"
+                        )
+                    return (
+                        f"⚠️ No encontré un huésped con el nombre '{guest_id}'. "
+                        "Indícame el teléfono exacto."
+                    )
+                guest_id = resolved_guest_id
 
             normalized_mode = (mode or "").strip().lower()
             if not normalized_mode:
@@ -1024,7 +1154,9 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                     "⚠️ Modo no reconocido. Usa 'resumen' para síntesis o 'original' para ver los mensajes completos."
                 )
 
-            clean_id = str(guest_id).replace("+", "").strip()
+            clean_id = _clean_phone(guest_id)
+            if not clean_id:
+                return "⚠️ El guest_id no parece un teléfono válido. Indícame el número completo con prefijo."
 
             resolved_property_id = property_id
             if resolved_property_id is None and hotel_code:
@@ -1123,7 +1255,7 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
         description=(
             "Revisa conversaciones recientes de un huésped específico. "
             "Pregunta primero si el encargado quiere 'resumen' (síntesis IA) u 'original' (mensajes tal cual). "
-            "Debes indicar el guest_id (por ejemplo +34683527049)."
+            "Puedes indicar guest_id (por ejemplo +34683527049) o nombre exacto del huésped."
         ),
         coroutine=_review_conversations,
         args_schema=ReviewConversationsInput,
@@ -1182,14 +1314,43 @@ def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, 
                 )
             except Exception:
                 pass
-        return f"[WA_DRAFT]|{guest_id}|{message}"
+
+        resolved_guest_id = None
+        if _looks_like_phone(guest_id):
+            resolved_guest_id = _clean_phone(guest_id)
+        else:
+            resolved_guest_id, candidates = _resolve_guest_id_by_name(
+                guest_id,
+                property_id=property_id,
+            )
+            if not resolved_guest_id:
+                if candidates:
+                    lines = []
+                    for cand in candidates[:5]:
+                        label = cand.get("client_name") or "Sin nombre"
+                        lines.append(f"• {label} → {cand.get('phone')}")
+                    suggestions = "\n".join(lines)
+                    return (
+                        "⚠️ Encontré varios huéspedes con ese nombre. "
+                        "Indícame el teléfono exacto:\n"
+                        f"{suggestions}"
+                    )
+                return (
+                    f"⚠️ No encontré un huésped con el nombre '{guest_id}'. "
+                    "Indícame el teléfono exacto."
+                )
+
+        if not resolved_guest_id:
+            return "⚠️ El guest_id no parece un teléfono válido. Indícame el número completo con prefijo."
+
+        return f"[WA_DRAFT]|{resolved_guest_id}|{message}"
 
     return StructuredTool.from_function(
         name="enviar_mensaje_whatsapp",
         description=(
             "Genera un borrador de mensaje de texto directo por WhatsApp a un huésped, "
             "sin plantilla (proceso de confirmación requerido). "
-            "Requiere el ID/phone del huésped (con prefijo de país). "
+            "Requiere el ID/phone del huésped (con prefijo de país) o su nombre exacto. "
             "Úsala solo cuando el encargado pida explícitamente enviar un mensaje; no la uses para ajustes de KB ni para reinterpretar feedback."
         ),
         coroutine=_send_whatsapp,
