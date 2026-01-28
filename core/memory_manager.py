@@ -185,6 +185,57 @@ class MemoryManager:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
 
     # ----------------------------------------------------------------------
+    def add_runtime_message(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        escalation_id: Optional[str] = None,
+        client_name: Optional[str] = None,
+        channel: Optional[str] = None,
+        original_chat_id: Optional[str] = None,
+        bypass_force_guest_role: bool = False,
+    ) -> None:
+        """Guarda un mensaje solo en RAM (sin persistir en Supabase)."""
+        cid = self._clean_id(conversation_id)
+        valid_roles = {"user", "assistant", "system", "tool", "guest", "bookai"}
+        normalized_role = role if role in valid_roles else "assistant"
+        resolved_channel = channel or self.get_flag(conversation_id, "default_channel")
+        channel_to_store = resolved_channel or channel
+        if normalized_role in {"assistant", "system", "tool"}:
+            normalized_role = "bookai"
+        elif normalized_role == "user":
+            if not bypass_force_guest_role and self.get_flag(conversation_id, "force_guest_role"):
+                normalized_role = "guest"
+            else:
+                normalized_role = "user"
+
+        if normalized_role not in {"guest", "user", "bookai"}:
+            normalized_role = "bookai"
+
+        is_guest = normalized_role == "guest"
+        if not client_name and is_guest:
+            client_name = self.get_flag(cid, "client_name")
+
+        entry = {
+            "role": normalized_role,
+            "content": content.strip(),
+            "created_at": datetime.utcnow().isoformat(),
+        }
+        if escalation_id:
+            entry["escalation_id"] = escalation_id
+        if client_name and is_guest:
+            entry["client_name"] = client_name
+        if channel_to_store:
+            entry["channel"] = channel_to_store
+        if original_chat_id:
+            entry["original_chat_id"] = original_chat_id
+
+        self.runtime_memory.setdefault(cid, []).append(entry)
+        if len(self.runtime_memory[cid]) > self.max_runtime_messages:
+            self.runtime_memory[cid] = self.runtime_memory[cid][-self.max_runtime_messages:]
+
+    # ----------------------------------------------------------------------
     def clear(self, conversation_id: str) -> None:
         """Limpia la memoria temporal de una conversación."""
         cid = self._clean_id(conversation_id)

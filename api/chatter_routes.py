@@ -463,6 +463,17 @@ def register_chatter_routes(app, state) -> None:
                 channel=payload.channel.lower(),
                 bypass_force_guest_role=role == "user",
             )
+            for mem_id in related_ids:
+                if mem_id == chat_id:
+                    continue
+                state.memory_manager.add_runtime_message(
+                    mem_id,
+                    role,
+                    payload.message,
+                    channel=payload.channel.lower(),
+                    original_chat_id=chat_id,
+                    bypass_force_guest_role=role == "user",
+                )
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
