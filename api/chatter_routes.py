@@ -451,6 +451,15 @@ def register_chatter_routes(app, state) -> None:
             else:
                 role = "bookai"
             related_ids = _related_memory_ids(state, chat_id)
+            if property_id is None:
+                for mem_id in related_ids:
+                    try:
+                        candidate = state.memory_manager.get_flag(mem_id, "property_id")
+                    except Exception:
+                        candidate = None
+                    if candidate is not None:
+                        property_id = candidate
+                        break
             for mem_id in related_ids:
                 if property_id is not None:
                     state.memory_manager.set_flag(mem_id, "property_id", property_id)
