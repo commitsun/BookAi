@@ -208,6 +208,10 @@ def _related_memory_ids(state, chat_id: str) -> list[str]:
     if not memory_manager:
         return list(ids)
 
+    last_mem = memory_manager.get_flag(clean, "last_memory_id") if clean else None
+    if last_mem and isinstance(last_mem, str):
+        ids.add(last_mem.strip())
+
     suffix = f":{clean}" if clean else ""
     if not suffix:
         return list(ids)

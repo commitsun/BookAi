@@ -131,6 +131,8 @@ def register_whatsapp_routes(app, state):
             state.memory_manager.set_flag(memory_id, "force_guest_role", True)
             if sender and sender != memory_id:
                 state.memory_manager.set_flag(sender, "force_guest_role", True)
+                # Alias para que el chatter pueda ubicar el memory_id compuesto.
+                state.memory_manager.set_flag(sender, "last_memory_id", memory_id)
 
             try:
                 property_id = state.memory_manager.get_flag(memory_id, "property_id")
