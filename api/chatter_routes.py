@@ -210,15 +210,28 @@ def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -
     try:
         or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates if candidate]
         or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-        query = (
-            supabase.table("chat_history")
-            .select("property_id, created_at")
-            .eq("channel", channel)
-            .or_(",".join(or_filters))
-            .order("created_at", desc=True)
-            .limit(5)
-        )
-        rows = query.execute().data or []
+        rows = []
+        if or_filters:
+            query = (
+                supabase.table("chat_history")
+                .select("property_id, created_at")
+                .eq("channel", channel)
+                .or_(",".join(or_filters))
+                .order("created_at", desc=True)
+                .limit(10)
+            )
+            rows = query.execute().data or []
+        if not rows and clean_id:
+            rows = (
+                supabase.table("chat_history")
+                .select("property_id, created_at")
+                .eq("conversation_id", clean_id)
+                .order("created_at", desc=True)
+                .limit(20)
+                .execute()
+                .data
+                or []
+            )
         for row in rows:
             prop_id = row.get("property_id")
             if prop_id is not None:

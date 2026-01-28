@@ -138,6 +138,11 @@ def register_whatsapp_routes(app, state):
                 property_id = state.memory_manager.get_flag(memory_id, "property_id")
             except Exception:
                 property_id = None
+            if property_id is not None and sender:
+                try:
+                    state.memory_manager.set_flag(sender, "property_id", property_id)
+                except Exception:
+                    pass
             rooms = [f"chat:{sender}"]
             if property_id is not None:
                 rooms.append(f"property:{property_id}")
