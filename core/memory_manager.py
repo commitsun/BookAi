@@ -223,8 +223,8 @@ class MemoryManager:
                 if role == "guest":
                     messages.append(HumanMessage(content=content))
                 elif role == "user":
-                    # Mensajes del hotel/propietario no deben interpretarse como huésped.
-                    messages.append(AIMessage(content=content))
+                    # Mensajes del hotel/propietario: mantener rol user pero no como huésped.
+                    messages.append(SystemMessage(content=f"Hotel: {content}"))
                 elif role == "system":
                     messages.append(SystemMessage(content=content))
                 else:
