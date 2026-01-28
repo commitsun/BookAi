@@ -200,6 +200,23 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
 def register_chatter_routes(app, state) -> None:
     router = APIRouter(prefix="/api/v1/chatter", tags=["chatter"])
 
+    def _rooms(chat_id: str, property_id: Optional[str | int], channel: str) -> list[str]:
+        rooms = [f"chat:{chat_id}"]
+        if property_id is not None:
+            rooms.append(f"property:{property_id}")
+        if channel:
+            rooms.append(f"channel:{channel}")
+        return rooms
+
+    async def _emit(event: str, payload: dict) -> None:
+        socket_mgr = getattr(state, "socket_manager", None)
+        if not socket_mgr or not getattr(socket_mgr, "enabled", False):
+            return
+        try:
+            await socket_mgr.emit(event, payload, rooms=payload.get("rooms"))
+        except Exception as exc:
+            log.debug("No se pudo emitir evento socket: %s", exc)
+
     @router.get("/chats")
     async def list_chats(
         page: int = Query(default=1, ge=1),
@@ -421,6 +438,32 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.warning("No se pudo auto-resolver escalación para %s: %s", chat_id, exc)
 
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rooms = _rooms(chat_id, property_id, payload.channel.lower())
+        await _emit(
+            "chat.message.created",
+            {
+                "rooms": rooms,
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": payload.channel.lower(),
+                "sender": role,
+                "message": payload.message,
+                "created_at": now_iso,
+            },
+        )
+        await _emit(
+            "chat.updated",
+            {
+                "rooms": rooms,
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": payload.channel.lower(),
+                "last_message": payload.message,
+                "last_message_at": now_iso,
+            },
+        )
+
         return {
             "status": "sent",
             "chat_id": chat_id,
@@ -535,6 +578,24 @@ def register_chatter_routes(app, state) -> None:
         refined = _strip_instruction_block(refined)
         update_escalation(escalation_id, {"draft_response": refined})
 
+        await _emit(
+            "escalation.updated",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "escalation_id": escalation_id,
+                "draft_response": refined,
+            },
+        )
+        await _emit(
+            "chat.proposed_response.updated",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "proposed_response": refined,
+            },
+        )
+
         return {
             "chat_id": clean_id,
             "escalation_id": escalation_id,
@@ -551,6 +612,23 @@ def register_chatter_routes(app, state) -> None:
         bookai_flags = _bookai_settings(state)
         bookai_flags[clean_id] = payload.bookai_enabled
         state.save_tracking()
+
+        await _emit(
+            "chat.bookai.toggled",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "bookai_enabled": payload.bookai_enabled,
+            },
+        )
+        await _emit(
+            "chat.updated",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "bookai_enabled": payload.bookai_enabled,
+            },
+        )
 
         return {
             "chat_id": clean_id,
@@ -577,6 +655,16 @@ def register_chatter_routes(app, state) -> None:
                 f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
             )
         query.execute()
+
+        await _emit(
+            "chat.read",
+            {
+                "rooms": _rooms(clean_id, property_id, "whatsapp"),
+                "chat_id": clean_id,
+                "property_id": property_id,
+                "read_status": True,
+            },
+        )
 
         return {
             "chat_id": clean_id,
@@ -655,6 +743,7 @@ def register_chatter_routes(app, state) -> None:
             log.error("Error enviando plantilla: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Error enviando plantilla")
 
+        rendered = None
         try:
             rendered = template_def.render_content(payload.parameters) if template_def else None
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
@@ -672,6 +761,34 @@ def register_chatter_routes(app, state) -> None:
             )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)
+
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rooms = _rooms(chat_id, property_id, "whatsapp")
+        await _emit(
+            "chat.message.created",
+            {
+                "rooms": rooms,
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": "whatsapp",
+                "sender": "bookai",
+                "message": rendered or template_name,
+                "created_at": now_iso,
+                "template": template_name,
+                "template_language": language,
+            },
+        )
+        await _emit(
+            "chat.updated",
+            {
+                "rooms": rooms,
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": "whatsapp",
+                "last_message": rendered or template_name,
+                "last_message_at": now_iso,
+            },
+        )
 
         return {
             "status": "sent",

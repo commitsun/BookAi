@@ -12,6 +12,7 @@ import logging
 import re
 import importlib
 import requests
+import asyncio
 from datetime import datetime
 from typing import Dict, Optional
 from dataclasses import dataclass
@@ -23,6 +24,7 @@ import html
 from core.escalation_db import save_escalation, update_escalation
 from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
+from core.socket_manager import emit_event
 
 log = logging.getLogger("InternoTool")
 
@@ -52,6 +54,16 @@ NOTIFIED_ESCALATIONS: Dict[str, str] = {}
 
 # Gestor de memoria compartido (inyectado desde InternoAgent)
 _MEMORY_MANAGER = None
+
+
+def _fire_event(event: str, payload: dict, rooms: list[str] | None = None) -> None:
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:
+        return
+    if rooms:
+        payload["rooms"] = rooms
+    loop.create_task(emit_event(event, payload, rooms=rooms))
 
 
 def set_memory_manager(memory_manager):
@@ -155,6 +167,31 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
             NOTIFIED_ESCALATIONS[escalation_id] = sent_message_id or "sent"
             log.info(f"✅ Escalación {escalation_id} enviada correctamente al encargado.")
+
+            rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+            _fire_event(
+                "escalation.created",
+                {
+                    "chat_id": guest_chat_id,
+                    "escalation_id": escalation_id,
+                    "type": escalation_type,
+                    "reason": reason,
+                    "context": context,
+                },
+                rooms=rooms,
+            )
+            _fire_event(
+                "chat.updated",
+                {
+                    "chat_id": guest_chat_id,
+                    "needs_action": guest_message,
+                    "needs_action_type": escalation_type,
+                    "needs_action_reason": reason,
+                    "proposed_response": None,
+                },
+                rooms=rooms,
+            )
+
             return f"Escalación {escalation_id} notificada al encargado con éxito."
 
         NOTIFIED_ESCALATIONS.pop(escalation_id, None)
@@ -208,6 +245,25 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
 
         esc.draft_response = draft
         update_escalation(escalation_id, {"draft_response": draft})
+
+        rooms = [f"chat:{esc.guest_chat_id}", "channel:whatsapp"]
+        _fire_event(
+            "escalation.updated",
+            {
+                "chat_id": esc.guest_chat_id,
+                "escalation_id": escalation_id,
+                "draft_response": draft,
+            },
+            rooms=rooms,
+        )
+        _fire_event(
+            "chat.proposed_response.updated",
+            {
+                "chat_id": esc.guest_chat_id,
+                "proposed_response": draft,
+            },
+            rooms=rooms,
+        )
 
         formatted = (
             f"📝 *BORRADOR DE RESPUESTA PROPUESTO:*\n\n"
@@ -284,6 +340,42 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "manager_confirmed": True,
                 "sent_to_guest": True,
             })
+
+            rooms = [f"chat:{esc.guest_chat_id}", "channel:whatsapp"]
+            _fire_event(
+                "escalation.resolved",
+                {
+                    "chat_id": esc.guest_chat_id,
+                    "escalation_id": escalation_id,
+                    "final_response": final_text,
+                },
+                rooms=rooms,
+            )
+            _fire_event(
+                "chat.message.created",
+                {
+                    "chat_id": esc.guest_chat_id,
+                    "channel": "whatsapp",
+                    "sender": "bookai",
+                    "message": final_text,
+                    "created_at": datetime.utcnow().isoformat(),
+                },
+                rooms=rooms,
+            )
+            _fire_event(
+                "chat.updated",
+                {
+                    "chat_id": esc.guest_chat_id,
+                    "last_message": final_text,
+                    "last_message_at": datetime.utcnow().isoformat(),
+                    "needs_action": None,
+                    "needs_action_type": None,
+                    "needs_action_reason": None,
+                    "proposed_response": None,
+                },
+                rooms=rooms,
+            )
+
             return f"✅ *Respuesta enviada al huésped:*\n\n{final_text}"
 
         except Exception as e:

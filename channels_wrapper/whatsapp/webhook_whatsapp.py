@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+from datetime import datetime, timezone
 
 import requests
 from fastapi import Request
@@ -130,6 +131,40 @@ def register_whatsapp_routes(app, state):
             state.memory_manager.set_flag(memory_id, "force_guest_role", True)
             if sender and sender != memory_id:
                 state.memory_manager.set_flag(sender, "force_guest_role", True)
+
+            try:
+                property_id = state.memory_manager.get_flag(memory_id, "property_id")
+            except Exception:
+                property_id = None
+            rooms = [f"chat:{sender}"]
+            if property_id is not None:
+                rooms.append(f"property:{property_id}")
+            rooms.append("channel:whatsapp")
+            socket_mgr = getattr(state, "socket_manager", None)
+            if socket_mgr and getattr(socket_mgr, "enabled", False):
+                await socket_mgr.emit(
+                    "chat.message.created",
+                    {
+                        "chat_id": sender,
+                        "property_id": property_id,
+                        "channel": "whatsapp",
+                        "sender": "guest",
+                        "message": text,
+                        "created_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    rooms=rooms,
+                )
+                await socket_mgr.emit(
+                    "chat.updated",
+                    {
+                        "chat_id": sender,
+                        "property_id": property_id,
+                        "channel": "whatsapp",
+                        "last_message": text,
+                        "last_message_at": datetime.now(timezone.utc).isoformat(),
+                    },
+                    rooms=rooms,
+                )
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(

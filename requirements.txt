@@ -19,6 +19,7 @@ python-dotenv
 aiohttp
 httpx
 requests
+python-socketio
 
 # === Infraestructura ===
 supabase

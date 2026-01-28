@@ -17,6 +17,7 @@ from api.template_routes import register_template_routes
 from api.chatter_routes import register_chatter_routes
 from api.superintendente_routes import register_superintendente_routes
 from core.config import Settings
+from core.socket_manager import SocketManager, set_global_socket_manager
 
 # =============================================================
 # CONFIG GLOBAL / LOGGING
@@ -74,6 +75,18 @@ app.add_middleware(
 
 state = AppState()
 log.info("✅ Sistema inicializado con agentes y estado compartido")
+
+# =============================================================
+# SOCKET.IO (tiempo real)
+# =============================================================
+
+socket_manager = SocketManager(
+    app,
+    cors_origins=cors_origins,
+    bearer_token=Settings.ROOMDOO_BEARER_TOKEN,
+)
+setattr(state, "socket_manager", socket_manager if socket_manager.enabled else None)
+set_global_socket_manager(socket_manager if socket_manager.enabled else None)
 
 # =============================================================
 # WEBHOOKS REGISTRADOS
