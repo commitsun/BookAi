@@ -37,7 +37,7 @@ PROPERTY_BY_ID_WEBHOOK = os.getenv(
     "PROPERTY_BY_ID_WEBHOOK",
     "https://n8n-n8n.x9cffc.easypanel.host/webhook/bbd715b6-2a23-4cdb-9107-8e73849bb6ce",
 )
-DEFAULT_PROPERTY_TABLE = os.getenv("DEFAULT_PROPERTY_TABLE", "alda_hotels")
+DEFAULT_PROPERTY_TABLE = os.getenv("DEFAULT_PROPERTY_TABLE", "properties")
 
 
 def _normalize_phone_number(value: Optional[str]) -> str:
