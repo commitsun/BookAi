@@ -1,0 +1,174 @@
+name: "🔄 Full S3 → Supabase Vectorization"
+
+on:
+  workflow_dispatch:             # Lanzar manualmente desde GitHub
+    inputs:
+      full_refresh:
+        description: "Limpiar tablas y revectorizar todo (true/false)"
+        required: false
+        default: "false"
+  push:
+    branches:
+      - vectorizer-pipeline      # O cuando haya cambios en esta rama
+  schedule:
+    - cron: "0 3 * * *"          # Ejecutar cada día a las 03:00 UTC
+
+permissions:
+  id-token: write                # Para autenticación OIDC con AWS
+  contents: read
+
+jobs:
+  # 🧩 1️⃣ Sincroniza S3
+  sync-s3:
+    name: "🧩 1️⃣ Sync S3"
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🔐 Configure AWS credentials (OIDC)"
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::958933161814:role/github-oidc-s3-access
+          aws-region: eu-west-1
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+          echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+          echo "FULL_REFRESH=${{ github.event.inputs.full_refresh }}" >> $GITHUB_ENV
+
+      - name: "🚀 Step 1: Sync with S3"
+        run: python -m pipeline.s3_client
+
+  # ⏳ 2️⃣ Validar filtro de fechas (IA)
+  deadline-filter:
+    name: "⏳ 2️⃣ Deadline Filter"
+    needs: [sync-s3]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+
+      - name: "🚧 Step 2: Dry-run deadline filter check"
+        run: |
+          python - <<'PY'
+          from pipeline.deadline_filter import filter_expired_sections, is_variable_doc
+
+          sample = "Durante los días 23 y 24 de diciembre se ofrecerán turrones."
+          cleaned, removed = filter_expired_sections(sample)
+          print("is_variable_doc('Alda Hotels Centro Ponferrada-Variable.docx') ->", is_variable_doc("Alda Hotels Centro Ponferrada-Variable.docx"))
+          print("Removed blocks:", removed)
+          print("Filtered text:", cleaned)
+          PY
+
+  # 🧠 3️⃣ Vectoriza en Supabase (depende del anterior)
+  vectorize:
+    name: "🧠 3️⃣ Vectorize in Supabase"
+    needs: [deadline-filter]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🔐 Configure AWS credentials (OIDC)"
+        uses: aws-actions/configure-aws-credentials@v5
+        with:
+          role-to-assume: arn:aws:iam::958933161814:role/github-oidc-s3-access
+          aws-region: eu-west-1
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
+          echo "OPENAI_API_KEY=${{ secrets.OPENAI_API_KEY }}" >> $GITHUB_ENV
+          echo "S3_BUCKET=bookai-pre-roomdoo" >> $GITHUB_ENV
+          echo "AWS_DEFAULT_REGION=eu-west-1" >> $GITHUB_ENV
+          echo "FULL_REFRESH=${{ github.event.inputs.full_refresh }}" >> $GITHUB_ENV
+
+      - name: "🚀 Step 3: Run full vectorization pipeline"
+        run: python -m pipeline.run_pipeline
+
+  # 🧹 4️⃣ Limpia cache temporal  (depende del anterior)
+  clear-daily-cache:
+    name: "🧹 4️⃣ Clear kb_daily_cache"
+    needs: [vectorize]
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: "🛎️ Checkout repository"
+        uses: actions/checkout@v4
+
+      - name: "🐍 Setup Python"
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: "📦 Install dependencies"
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: "🌍 Load environment variables"
+        run: |
+          echo "SUPABASE_URL=${{ secrets.SUPABASE_URL }}" >> $GITHUB_ENV
+          echo "SUPABASE_KEY=${{ secrets.SUPABASE_KEY }}" >> $GITHUB_ENV
+          echo "TEMP_KB_TABLE=kb_daily_cache" >> $GITHUB_ENV
+
+      - name: "🧹 Step 4: Clear kb_daily_cache"
+        run: |
+          python - <<'PY'
+          import os
+          from supabase import create_client
+
+          url = os.getenv("SUPABASE_URL")
+          key = os.getenv("SUPABASE_KEY")
+          table = os.getenv("TEMP_KB_TABLE", "kb_daily_cache")
+          if not url or not key:
+              raise SystemExit("Missing SUPABASE_URL or SUPABASE_KEY")
+
+          supabase = create_client(url, key)
+          supabase.table(table).delete().not_.is_("id", "null").execute()
+          print(f"Cleared {table}")
+          PY

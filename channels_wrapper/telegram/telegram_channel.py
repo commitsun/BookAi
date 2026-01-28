@@ -11,7 +11,7 @@ from tools.interno_tool import ESCALATIONS_STORE  # ✅ nueva ubicación
 
 log = logging.getLogger("telegram")
 
-# ============================================================
+# ====================== ======================================
 # 🔧 Configuración inicial
 # ============================================================
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
