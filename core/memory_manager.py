@@ -220,8 +220,11 @@ class MemoryManager:
                 if not content:
                     continue
 
-                if role in {"user", "guest"}:
+                if role == "guest":
                     messages.append(HumanMessage(content=content))
+                elif role == "user":
+                    # Mensajes del hotel/propietario no deben interpretarse como huésped.
+                    messages.append(AIMessage(content=content))
                 elif role == "system":
                     messages.append(SystemMessage(content=content))
                 else:

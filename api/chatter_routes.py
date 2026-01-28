@@ -194,6 +194,34 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _related_memory_ids(state, chat_id: str) -> list[str]:
+    """Intenta alinear aliases (ej. instance:phone) para flags sin duplicar mensajes."""
+    ids = set()
+    raw = str(chat_id or "").strip()
+    if raw:
+        ids.add(raw)
+    clean = _clean_chat_id(raw) or raw
+    if clean:
+        ids.add(clean)
+
+    memory_manager = getattr(state, "memory_manager", None)
+    if not memory_manager:
+        return list(ids)
+
+    suffix = f":{clean}" if clean else ""
+    if not suffix:
+        return list(ids)
+
+    for store_name in ("state_flags", "runtime_memory"):
+        store = getattr(memory_manager, store_name, None)
+        if isinstance(store, dict):
+            for key in list(store.keys()):
+                if isinstance(key, str) and key.endswith(suffix):
+                    ids.add(key)
+
+    return list(ids)
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -418,9 +446,16 @@ def register_chatter_routes(app, state) -> None:
                 role = "bookai"
             else:
                 role = "bookai"
-            if property_id is not None:
-                state.memory_manager.set_flag(chat_id, "property_id", property_id)
-            state.memory_manager.set_flag(chat_id, "default_channel", payload.channel.lower())
+            related_ids = _related_memory_ids(state, chat_id)
+            for mem_id in related_ids:
+                if property_id is not None:
+                    state.memory_manager.set_flag(mem_id, "property_id", property_id)
+                state.memory_manager.set_flag(mem_id, "default_channel", payload.channel.lower())
+                # Al responder manualmente, limpiamos posibles pendientes antiguos.
+                state.memory_manager.clear_flag(mem_id, "escalation_in_progress")
+                state.memory_manager.clear_flag(mem_id, "escalation_confirmation_pending")
+                state.memory_manager.clear_flag(mem_id, "consulta_base_realizada")
+                state.memory_manager.clear_flag(mem_id, "inciso_enviado")
             state.memory_manager.save(
                 chat_id,
                 role,
