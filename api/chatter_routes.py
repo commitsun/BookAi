@@ -194,6 +194,40 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -> Optional[str | int]:
+    """Busca el ultimo property_id no nulo para el chat en DB."""
+    decoded_id = str(chat_id or "").strip()
+    clean_id = _clean_chat_id(decoded_id) or decoded_id
+    id_candidates = {clean_id}
+    if decoded_id and decoded_id != clean_id:
+        id_candidates.add(decoded_id)
+    tail = decoded_id.split(":")[-1] if ":" in decoded_id else ""
+    tail_clean = _clean_chat_id(tail) or tail
+    if tail_clean:
+        id_candidates.add(tail_clean)
+    like_patterns = {f"%:{candidate}" for candidate in id_candidates if candidate}
+
+    try:
+        or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates if candidate]
+        or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+        query = (
+            supabase.table("chat_history")
+            .select("property_id, created_at")
+            .eq("channel", channel)
+            .or_(",".join(or_filters))
+            .order("created_at", desc=True)
+            .limit(5)
+        )
+        rows = query.execute().data or []
+        for row in rows:
+            prop_id = row.get("property_id")
+            if prop_id is not None:
+                return prop_id
+    except Exception as exc:
+        log.debug("No se pudo inferir property_id desde history (%s): %s", chat_id, exc)
+    return None
+
+
 def _related_memory_ids(state, chat_id: str) -> list[str]:
     """Intenta alinear aliases (ej. instance:phone) para flags sin duplicar mensajes."""
     ids = set()
@@ -460,6 +494,8 @@ def register_chatter_routes(app, state) -> None:
                     if candidate is not None:
                         property_id = candidate
                         break
+            if property_id is None:
+                property_id = _resolve_property_id_from_history(chat_id, payload.channel.lower())
             for mem_id in related_ids:
                 if property_id is not None:
                     state.memory_manager.set_flag(mem_id, "property_id", property_id)
