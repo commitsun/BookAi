@@ -5,14 +5,18 @@ from __future__ import annotations
 import logging
 import os
 import re
+import json
+import asyncio
 from typing import Any, Dict, Optional
 
 import requests
 
 try:
     from core.db import supabase
+    from core.mcp_client import get_tools
 except Exception:
     supabase = None
+    get_tools = None
 
 log = logging.getLogger("InstanceContext")
 log.setLevel(logging.INFO)
@@ -85,6 +89,77 @@ def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         return {}
 
     return _extract_payload(data)
+
+
+def _run_async(coro):
+    try:
+        loop = asyncio.get_event_loop()
+    except RuntimeError:
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+
+    if loop.is_running():
+        import nest_asyncio
+
+        nest_asyncio.apply()
+    return loop.run_until_complete(coro)
+
+
+def _mcp_tool_matches(name: str) -> bool:
+    n = (name or "").strip().lower()
+    if n in {"property id", "property_id", "propertyid"}:
+        return True
+    if "property" in n and "id" in n:
+        return True
+    return False
+
+
+def _fetch_properties_by_code_mcp(table: str, hotel_code: str) -> list[Dict[str, Any]]:
+    if not get_tools:
+        return []
+
+    async def _load_tools():
+        for server in ("DispoPreciosAgent", "OnboardingAgent", "InfoAgent"):
+            try:
+                tools = await get_tools(server_name=server)
+            except Exception:
+                continue
+            for tool in tools or []:
+                if _mcp_tool_matches(getattr(tool, "name", "")):
+                    return tool
+        return None
+
+    try:
+        tool = _run_async(_load_tools())
+    except Exception:
+        tool = None
+
+    if not tool:
+        return []
+
+    payload = {"tabla": table, "hotel_code": hotel_code}
+    try:
+        raw = _run_async(tool.ainvoke(payload))
+    except Exception as exc:
+        log.warning("MCP property tool fallo: %s", exc)
+        return []
+
+    if isinstance(raw, str):
+        try:
+            raw = json.loads(raw)
+        except Exception:
+            raw = {}
+
+    data = _extract_payload(raw)
+    if isinstance(raw, list):
+        return raw
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict) and data:
+        return [data]
+    if isinstance(raw, dict) and raw:
+        return [raw]
+    return []
 
 
 def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
@@ -175,6 +250,24 @@ def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
         except Exception as exc:
             log.warning("Fallback supabase property_by_code fallo: %s", exc)
     return {}
+
+
+def fetch_properties_by_code(table: str, hotel_code: str) -> list[Dict[str, Any]]:
+    """
+    Devuelve multiples properties por hotel_code si existen.
+    Usa MCP como fuente principal.
+    """
+    mcp_rows = _fetch_properties_by_code_mcp(table, hotel_code)
+    if mcp_rows:
+        return mcp_rows
+
+    payload = {"tabla": table, "hotel_code": hotel_code}
+    data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
+    if isinstance(data, list):
+        return data
+    if isinstance(data, dict):
+        return [data] if data else []
+    return []
 
 
 def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
@@ -356,14 +449,33 @@ def hydrate_dynamic_context(
                 memory_manager.set_flag(chat_id, "property_name", property_name)
                 log.info("🏨 property_name=%s (chat_id=%s)", property_name, chat_id)
         if property_name:
-            prop_by_code = fetch_property_by_code(property_table, str(property_name))
-            resolved_id = _resolve_property_id(prop_by_code)
-            if not resolved_id:
-                prop_by_name = fetch_property_by_name(property_table, str(property_name))
-                resolved_id = _resolve_property_id(prop_by_name)
-            if resolved_id:
-                property_id = resolved_id
-                memory_manager.set_flag(chat_id, "property_id", resolved_id)
+            prop_rows = fetch_properties_by_code(property_table, str(property_name))
+            if len(prop_rows) > 1:
+                candidates = []
+                for row in prop_rows:
+                    candidates.append(
+                        {
+                            "property_id": row.get("property_id"),
+                            "name": row.get("name") or row.get("property_name"),
+                            "hotel_code": row.get("hotel_code"),
+                        }
+                    )
+                memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
+                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(property_name))
+                log.info(
+                    "🏨 property disambiguation needed hotel_code=%s candidates=%s",
+                    property_name,
+                    len(candidates),
+                )
+            else:
+                prop_by_code = prop_rows[0] if prop_rows else {}
+                resolved_id = _resolve_property_id(prop_by_code)
+                if not resolved_id:
+                    prop_by_name = fetch_property_by_name(property_table, str(property_name))
+                    resolved_id = _resolve_property_id(prop_by_name)
+                if resolved_id:
+                    property_id = resolved_id
+                    memory_manager.set_flag(chat_id, "property_id", resolved_id)
 
     if not instance_url:
         hotel_code = memory_manager.get_flag(chat_id, "property_name")

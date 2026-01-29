@@ -8,6 +8,8 @@
 
 import logging
 import asyncio
+import unicodedata
+import re
 from typing import Optional, List, Callable
 
 from langchain.agents import create_openai_tools_agent, AgentExecutor
@@ -18,6 +20,7 @@ from langchain.tools import BaseTool
 from tools.think_tool import create_think_tool
 from tools.inciso_tool import create_inciso_tool
 from tools.sub_agent_tool_wrapper import create_sub_agent_tool
+from tools.property_context_tool import create_property_context_tool
 
 # Sub-agentes
 from agents.dispo_precios_agent import DispoPreciosAgent
@@ -37,6 +40,8 @@ from core.utils.escalation_messages import EscalationMessages
 log = logging.getLogger("MainAgent")
 
 FLAG_ESCALATION_CONFIRMATION_PENDING = "escalation_confirmation_pending"
+FLAG_PROPERTY_CONFIRMATION_PENDING = "property_confirmation_pending"
+FLAG_PROPERTY_DISAMBIGUATION_PENDING = "property_disambiguation_pending"
 
 
 class MainAgent:
@@ -68,7 +73,8 @@ class MainAgent:
             "2. disponibilidad_precios → precios y disponibilidad.\n"
             "3. base_conocimientos → servicios, políticas, info general.\n"
             "4. Inciso → mensajes intermedios.\n"
-            "5. escalar_interno → escalar al encargado humano.\n\n"
+            "5. identificar_property → fija el contexto de la propiedad.\n"
+            "6. escalar_interno → escalar al encargado humano.\n\n"
             "NO generes respuestas por tu cuenta. SOLO invoca tools."
         )
 
@@ -77,6 +83,7 @@ class MainAgent:
 
         tools.append(create_think_tool(model_name="gpt-4.1"))
         tools.append(create_inciso_tool(send_callback=self.send_callback))
+        tools.append(create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id))
 
         dispo_agent = DispoPreciosAgent(memory_manager=self.memory_manager)
         tools.append(
@@ -213,6 +220,161 @@ class MainAgent:
             "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
         )
 
+    def _needs_property_context(self, chat_id: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        return not self.memory_manager.get_flag(chat_id, "property_id")
+
+    def _get_property_candidates(self, chat_id: str) -> list[dict]:
+        if not self.memory_manager or not chat_id:
+            return []
+        candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
+        if isinstance(candidates, list):
+            return candidates
+        return []
+
+    def _normalize_text(self, value: str) -> str:
+        text = (value or "").strip().lower()
+        if not text:
+            return ""
+        text = unicodedata.normalize("NFKD", text)
+        text = "".join(ch for ch in text if not unicodedata.combining(ch))
+        text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+        return re.sub(r"\s+", " ", text)
+
+    def _tokenize(self, value: str) -> list[str]:
+        text = self._normalize_text(value)
+        if not text:
+            return []
+        stop = {"hotel", "hostal", "aldea", "alda", "el", "la", "los", "las", "de", "del"}
+        return [t for t in text.split() if t and t not in stop]
+
+    def _load_embedded_prompt(self, key: str) -> str:
+        """
+        Carga snippets embebidos dentro de main_prompt.txt usando marcadores:
+        [[KEY]] ... [[/KEY]]
+        """
+        try:
+            base_prompt = load_prompt("main_prompt.txt") or ""
+        except Exception:
+            base_prompt = ""
+        if not base_prompt or not key:
+            return ""
+        pattern = rf"\\[\\[{re.escape(key)}\\]\\](.*?)\\[\\[/{re.escape(key)}\\]\\]"
+        match = re.search(pattern, base_prompt, flags=re.DOTALL | re.IGNORECASE)
+        if not match:
+            return ""
+        return match.group(1).strip()
+
+    def _build_disambiguation_question(self, candidates: list[dict]) -> str:
+        prompt = self._load_embedded_prompt("PROPERTY_DISAMBIGUATION")
+        if prompt:
+            return prompt
+        return "¿En cuál de nuestros hoteles estarías interesado? Indícame el nombre exacto, por favor."
+
+    def _resolve_property_from_candidates(self, chat_id: str, user_input: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        raw = (user_input or "").strip()
+        if not raw:
+            return False
+        candidates = self._get_property_candidates(chat_id)
+        if not candidates:
+            return False
+
+        selected = None
+        lowered = raw.lower()
+        raw_tokens = set(self._tokenize(raw))
+        best_score = -1
+        best_cand = None
+        for cand in candidates:
+            name = (cand or {}).get("name") or ""
+            code = (cand or {}).get("hotel_code") or ""
+            if name and (name.lower() in lowered or lowered in name.lower()):
+                selected = cand
+                break
+            if code and (code.lower() in lowered or lowered in code.lower()):
+                selected = cand
+                break
+            if name and raw_tokens:
+                cand_tokens = set(self._tokenize(name))
+                overlap = len(raw_tokens & cand_tokens)
+                if overlap > best_score:
+                    best_score = overlap
+                    best_cand = cand
+
+        if not selected and best_cand and best_score > 0:
+            selected = best_cand
+
+        if not selected and raw.isdigit():
+            for cand in candidates:
+                if str(cand.get("property_id") or "").strip() == raw:
+                    selected = cand
+                    break
+
+        if not selected:
+            return False
+
+        try:
+            tool = create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id)
+            tool.invoke(
+                {
+                    "hotel_code": selected.get("hotel_code") or selected.get("name"),
+                    "property_id": selected.get("property_id"),
+                }
+            )
+        except Exception as exc:
+            log.warning("No se pudo fijar property desde candidatos: %s", exc)
+            return False
+
+        return bool(
+            self.memory_manager.get_flag(chat_id, "property_id")
+            or self.memory_manager.get_flag(chat_id, "property_name")
+        )
+
+    async def _resolve_property_from_message(self, chat_id: str, user_input: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+
+        raw = (user_input or "").strip()
+        if not raw:
+            return False
+
+        property_id = None
+        if raw.isdigit():
+            try:
+                property_id = int(raw)
+            except Exception:
+                property_id = None
+
+        try:
+            tool = create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id)
+            tool.invoke(
+                {
+                    "hotel_code": None if property_id is not None else raw,
+                    "property_id": property_id,
+                }
+            )
+        except Exception as exc:
+            log.warning("No se pudo resolver property desde mensaje: %s", exc)
+            return False
+
+        return bool(
+            self.memory_manager.get_flag(chat_id, "property_id")
+            or self.memory_manager.get_flag(chat_id, "property_name")
+        )
+
+    def _request_property_context(self, chat_id: str, original_message: str) -> str:
+        self.memory_manager.set_flag(
+            chat_id,
+            FLAG_PROPERTY_CONFIRMATION_PENDING,
+            {"original_message": original_message},
+        )
+        prompt = self._load_embedded_prompt("PROPERTY_REQUEST")
+        if prompt:
+            return prompt
+        return "¿En qué hotel o propiedad te gustaría alojarte?"
+
     async def _delegate_escalation_to_interno(
             self,
             *,
@@ -266,6 +428,56 @@ class MainAgent:
                     self.memory_manager.save(chat_id, "user", user_input)
                     self.memory_manager.save(chat_id, "assistant", pending)
                     return pending
+
+                candidates = self._get_property_candidates(chat_id)
+                pending_disambiguation = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
+                if pending_disambiguation:
+                    resolved = self._resolve_property_from_candidates(chat_id, user_input)
+                    if not resolved:
+                        question = self._build_disambiguation_question(candidates)
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
+                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
+                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_hotel_code")
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    if isinstance(pending_disambiguation, dict):
+                        original_message = pending_disambiguation.get("original_message")
+                        if original_message:
+                            user_input = original_message
+
+                if candidates and not self.memory_manager.get_flag(chat_id, "property_id"):
+                    question = self._build_disambiguation_question(candidates)
+                    self.memory_manager.set_flag(
+                        chat_id,
+                        FLAG_PROPERTY_DISAMBIGUATION_PENDING,
+                        {"original_message": user_input},
+                    )
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    self.memory_manager.save(chat_id, "assistant", question)
+                    return question
+
+                pending_property = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CONFIRMATION_PENDING)
+                if pending_property:
+                    resolved = await self._resolve_property_from_message(chat_id, user_input)
+                    if not resolved:
+                        prompt = self._load_embedded_prompt("PROPERTY_REQUEST")
+                        question = prompt or "¿Podrías decirme el nombre del hotel en el que quieres alojarte?"
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_CONFIRMATION_PENDING)
+                    original_message = pending_property.get("original_message") if isinstance(pending_property, dict) else None
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    if original_message:
+                        user_input = original_message
+
+                if self._needs_property_context(chat_id):
+                    question = self._request_property_context(chat_id, user_input)
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    self.memory_manager.save(chat_id, "assistant", question)
+                    return question
 
                 base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
                 dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
