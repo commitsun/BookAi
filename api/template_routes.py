@@ -205,7 +205,7 @@ def register_template_routes(app, state) -> None:
                     state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
                     state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
-                source_tag = payload.source.instance_id or payload.source.instance_url
+                source_tag = hotel_code or payload.source.instance_url
                 state.memory_manager.save(
                     chat_id,
                     role="system",

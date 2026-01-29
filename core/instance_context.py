@@ -444,7 +444,7 @@ def hydrate_dynamic_context(
     if not property_id and property_table:
         property_name = memory_manager.get_flag(chat_id, "property_name")
         if not property_name:
-            property_name = instance_payload.get("hotel_code") or instance_payload.get("instance_id")
+            property_name = instance_payload.get("hotel_code")
             if property_name:
                 memory_manager.set_flag(chat_id, "property_name", property_name)
                 log.info("🏨 property_name=%s (chat_id=%s)", property_name, chat_id)
