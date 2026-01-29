@@ -3,7 +3,7 @@ import re
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from core.db import get_conversation_history, save_message
+from core.db import get_conversation_history, save_message, get_last_property_id_for_conversation
 
 log = logging.getLogger("MemoryManager")
 
@@ -53,6 +53,42 @@ class MemoryManager:
     def _resolve_history_table(self, conversation_id: str) -> str:
         table = self.get_flag(conversation_id, "history_table")
         return str(table).strip() if table else "chat_history"
+
+    def get_last_property_id_hint(self, conversation_id: str, limit: int = 30) -> Optional[int]:
+        """
+        Busca el último property_id en el historial, incluso si no está en memoria.
+        """
+        try:
+            db_conversation_id = self._resolve_db_conversation_id(conversation_id)
+            table = self._resolve_history_table(conversation_id)
+            prop = get_last_property_id_for_conversation(
+                db_conversation_id,
+                table=table,
+                limit=limit,
+            )
+            if prop is None:
+                return None
+            return int(prop)
+        except Exception:
+            return None
+
+    def has_history(self, conversation_id: str, limit: int = 1) -> bool:
+        """
+        Devuelve True si hay historial (RAM o DB) para el conversation_id.
+        """
+        try:
+            if self.runtime_memory.get(self._clean_id(conversation_id)):
+                return True
+            db_conversation_id = self._resolve_db_conversation_id(conversation_id)
+            table = self._resolve_history_table(conversation_id)
+            rows = get_conversation_history(
+                db_conversation_id,
+                limit=limit,
+                table=table,
+            )
+            return bool(rows)
+        except Exception:
+            return False
 
     # ----------------------------------------------------------------------
     def get_memory(self, conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:

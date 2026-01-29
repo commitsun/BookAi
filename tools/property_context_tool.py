@@ -9,6 +9,8 @@ otras tools lo usen.
 from __future__ import annotations
 
 import logging
+import re
+import unicodedata
 from typing import Optional, Any
 
 from pydantic import BaseModel, Field
@@ -19,6 +21,8 @@ from core.instance_context import (
     fetch_property_by_code,
     fetch_property_by_id,
     fetch_property_by_name,
+    fetch_properties_by_code,
+    fetch_properties_by_query,
     fetch_instance_by_code,
 )
 
@@ -55,6 +59,62 @@ def _hotel_code_variants(raw: Optional[str]) -> list[str]:
             variants.append(f"{prefix}{clean}")
     return list(dict.fromkeys(variants))
 
+def _clean_hotel_input(raw: Optional[str]) -> Optional[str]:
+    text = (raw or "").strip()
+    if not text:
+        return None
+    lowered = text.lower()
+    for prefix in (
+        "para el ",
+        "para la ",
+        "para los ",
+        "para las ",
+        "para ",
+        "en el ",
+        "en la ",
+        "en los ",
+        "en las ",
+        "en ",
+    ):
+        if lowered.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
+    return text or None
+
+def _is_valid_hotel_label(raw: Optional[str]) -> bool:
+    clean = (raw or "").strip().lower()
+    if not clean or len(clean) < 3:
+        return False
+    generic = {"hotel", "hostal", "alojamiento", "propiedad"}
+    if clean in generic:
+        return False
+    banned = {
+        "reserva",
+        "reservar",
+        "quiero",
+        "hacer",
+        "otra",
+        "nueva",
+        "precio",
+        "precios",
+        "disponibilidad",
+        "oferta",
+    }
+    if any(term in clean for term in banned):
+        return False
+    return True
+
+def _normalize_match_text(value: Optional[str]) -> str:
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"[^a-z0-9]+", " ", text).strip()
+    stop = {"hotel", "hostal", "alda", "el", "la", "los", "las", "de", "del"}
+    tokens = [t for t in text.split() if t and t not in stop]
+    return " ".join(tokens)
+
 
 class PropertyContextTool:
     """Herramienta para fijar el contexto de property en memoria."""
@@ -81,6 +141,7 @@ class PropertyContextTool:
         property_id: Optional[Any],
         hotel_code: Optional[str],
         property_table: Optional[str] = None,
+        display_name: Optional[str] = None,
     ) -> None:
         if not self.memory_manager or not self.chat_id:
             return
@@ -92,8 +153,12 @@ class PropertyContextTool:
             self.memory_manager.set_flag(self.chat_id, "property_id", property_id)
             self.memory_manager.set_flag(self.chat_id, "wa_context_property_id", property_id)
         if hotel_code:
-            self.memory_manager.set_flag(self.chat_id, "property_name", hotel_code)
             self.memory_manager.set_flag(self.chat_id, "wa_context_hotel_code", str(hotel_code))
+        if display_name:
+            self.memory_manager.set_flag(self.chat_id, "property_display_name", str(display_name))
+            self.memory_manager.set_flag(self.chat_id, "property_name", str(display_name))
+        elif hotel_code:
+            self.memory_manager.set_flag(self.chat_id, "property_name", str(hotel_code))
 
         # Guardar constancia en historial con property_id ya fijado (sin exponer IDs al usuario)
         try:
@@ -116,7 +181,8 @@ class PropertyContextTool:
 
         table = self._resolve_table(property_table)
         resolved_property_id: Optional[Any] = property_id
-        resolved_hotel_code = (hotel_code or "").strip() or None
+        resolved_hotel_code = _clean_hotel_input(hotel_code) or None
+        resolved_display_name: Optional[str] = None
 
         log.info(
             "PropertyContextTool start chat_id=%s property_id=%s hotel_code=%s table=%s",
@@ -125,6 +191,61 @@ class PropertyContextTool:
             resolved_hotel_code,
             table,
         )
+
+        # Preferir lista MCP por instance code (si existe) para resolver nombres parciales
+        if resolved_property_id is None and resolved_hotel_code and self.memory_manager and self.chat_id:
+            instance_code = self.memory_manager.get_flag(self.chat_id, "instance_hotel_code")
+            if instance_code:
+                inst_candidates = fetch_properties_by_code(table, str(instance_code))
+                log.info(
+                    "PropertyContextTool MCP fallback chat_id=%s instance_code=%s candidates=%s",
+                    self.chat_id,
+                    instance_code,
+                    len(inst_candidates) if isinstance(inst_candidates, list) else "n/a",
+                )
+                if inst_candidates:
+                    target = _normalize_match_text(resolved_hotel_code)
+                    matched = []
+                    for row in inst_candidates:
+                        name = row.get("name") or row.get("property_name") or row.get("hotel_code") or ""
+                        name_norm = _normalize_match_text(name)
+                        if target and target in name_norm:
+                            matched.append(row)
+                    if len(matched) == 1:
+                        payload = matched[0]
+                        resolved_property_id = payload.get("property_id")
+                        resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or resolved_hotel_code
+                        resolved_display_name = payload.get("name") or payload.get("property_name")
+                        log.info(
+                            "PropertyContextTool MCP fallback matched chat_id=%s property_id=%s name=%s",
+                            self.chat_id,
+                            resolved_property_id,
+                            resolved_display_name or resolved_hotel_code,
+                        )
+                    elif len(matched) > 1:
+                        self.memory_manager.set_flag(
+                            self.chat_id,
+                            "property_disambiguation_candidates",
+                            [
+                                {
+                                    "property_id": row.get("property_id"),
+                                    "name": row.get("name") or row.get("property_name"),
+                                    "hotel_code": row.get("hotel_code"),
+                                    "city": row.get("city"),
+                                    "street": row.get("street"),
+                                }
+                                for row in matched
+                            ],
+                        )
+                        self.memory_manager.set_flag(
+                            self.chat_id,
+                            "property_disambiguation_hotel_code",
+                            resolved_hotel_code,
+                        )
+                        return (
+                            "He encontrado varios hoteles parecidos. "
+                            "¿Podrías indicarme el nombre del hotel (aprox)?"
+                        )
 
         if resolved_property_id is None and resolved_hotel_code:
             for variant in _hotel_code_variants(resolved_hotel_code):
@@ -136,12 +257,64 @@ class PropertyContextTool:
                 if prop_id is not None:
                     resolved_property_id = prop_id
                     resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or variant
+                    resolved_display_name = payload.get("name") or payload.get("property_name")
                     break
+
+        if resolved_property_id is None and resolved_hotel_code and len(resolved_hotel_code) >= 3:
+            candidates = fetch_properties_by_query(table, resolved_hotel_code)
+            if candidates:
+                if len(candidates) == 1:
+                    payload = candidates[0]
+                    resolved_property_id = payload.get("property_id")
+                    resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or resolved_hotel_code
+                    resolved_display_name = payload.get("name") or payload.get("property_name")
+                else:
+                    if self.memory_manager and self.chat_id:
+                        self.memory_manager.set_flag(
+                            self.chat_id,
+                            "property_disambiguation_candidates",
+                            [
+                                {
+                                    "property_id": row.get("property_id"),
+                                    "name": row.get("name") or row.get("property_name"),
+                                    "hotel_code": row.get("hotel_code"),
+                                    "city": row.get("city"),
+                                    "street": row.get("street"),
+                                }
+                                for row in candidates
+                            ],
+                        )
+                        self.memory_manager.set_flag(
+                            self.chat_id,
+                            "property_disambiguation_hotel_code",
+                            resolved_hotel_code,
+                        )
+                    preview = candidates[:5]
+                    lines = []
+                    for row in preview:
+                        name = row.get("name") or row.get("property_name") or row.get("hotel_code") or "Hotel"
+                        city = row.get("city") or ""
+                        street = row.get("street") or ""
+                        address = ", ".join([part for part in [street, city] if part])
+                        if address:
+                            lines.append(f"- {name} — {address}")
+                        else:
+                            lines.append(f"- {name}")
+                    extra = ""
+                    if len(candidates) > len(preview):
+                        extra = f"\nY {len(candidates) - len(preview)} más."
+                    return (
+                        "He encontrado varios hoteles parecidos. "
+                        "Indícame el nombre del hotel (aprox):\n"
+                        + "\n".join(lines)
+                        + extra
+                    )
 
         if resolved_property_id is not None and not resolved_hotel_code:
             payload = fetch_property_by_id(table, resolved_property_id)
             if payload:
-                resolved_hotel_code = payload.get("hotel_code") or payload.get("name")
+                resolved_display_name = payload.get("name") or payload.get("property_name")
+                resolved_hotel_code = resolved_display_name or payload.get("hotel_code")
 
         if resolved_hotel_code:
             # Intentar fijar credenciales de instancia si existen
@@ -160,17 +333,27 @@ class PropertyContextTool:
             )
 
         if resolved_property_id is None:
-            # Guardar al menos el hotel_code como contexto
-            self._set_flags(None, resolved_hotel_code, table)
+            if not _is_valid_hotel_label(resolved_hotel_code):
+                return "Necesito el codigo o nombre del hotel para identificar la propiedad."
+            # Guardar al menos el hotel_code como contexto si parece válido
+            self._set_flags(None, resolved_hotel_code, table, display_name=resolved_display_name)
             return (
                 f"Listo, ya tengo el contexto del hotel {resolved_hotel_code}."
                 if resolved_hotel_code
                 else "Contexto del hotel actualizado."
             )
 
-        self._set_flags(resolved_property_id, resolved_hotel_code, table)
+        log.info(
+            "PropertyContextTool resolved chat_id=%s property_id=%s hotel_code=%s display_name=%s",
+            self.chat_id,
+            resolved_property_id,
+            resolved_hotel_code,
+            resolved_display_name,
+        )
+        self._set_flags(resolved_property_id, resolved_hotel_code, table, display_name=resolved_display_name)
         if resolved_hotel_code:
-            return f"Perfecto, ya identifique el hotel {resolved_hotel_code}."
+            label = resolved_display_name or resolved_hotel_code
+            return f"Perfecto, ya identifique el hotel {label}."
         return "Perfecto, ya identifique la propiedad."
 
     def _run(

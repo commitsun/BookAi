@@ -21,26 +21,12 @@ except Exception:
 log = logging.getLogger("InstanceContext")
 log.setLevel(logging.INFO)
 
-INSTANCE_LOOKUP_WEBHOOK = os.getenv(
-    "INSTANCE_LOOKUP_WEBHOOK",
-    "https://n8n-n8n.x9cffc.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
-)
-INSTANCE_BY_CODE_WEBHOOK = os.getenv(
-    "INSTANCE_BY_CODE_WEBHOOK",
-    "https://n8n-n8n.x9cffc.easypanel.host/webhook/3fa1f333-b61b-4436-9104-ecedd635967e",
-)
-PROPERTY_BY_NAME_WEBHOOK = os.getenv(
-    "PROPERTY_BY_NAME_WEBHOOK",
-    "https://n8n-n8n.x9cffc.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
-)
-PROPERTY_BY_CODE_WEBHOOK = os.getenv(
-    "PROPERTY_BY_CODE_WEBHOOK",
-    "https://n8n-n8n.x9cffc.easypanel.host/webhook/c7eb1821-7a5c-4273-b82d-68e852ce8df7",
-)
-PROPERTY_BY_ID_WEBHOOK = os.getenv(
-    "PROPERTY_BY_ID_WEBHOOK",
-    "https://n8n-n8n.x9cffc.easypanel.host/webhook/bbd715b6-2a23-4cdb-9107-8e73849bb6ce",
-)
+# Webhooks deshabilitados: usamos MCP/Supabase directamente.
+INSTANCE_LOOKUP_WEBHOOK = ""
+INSTANCE_BY_CODE_WEBHOOK = ""
+PROPERTY_BY_NAME_WEBHOOK = ""
+PROPERTY_BY_CODE_WEBHOOK = ""
+PROPERTY_BY_ID_WEBHOOK = ""
 DEFAULT_PROPERTY_TABLE = os.getenv("DEFAULT_PROPERTY_TABLE", "properties")
 
 
@@ -59,6 +45,8 @@ def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
 def _extract_payload(data: Any) -> Dict[str, Any]:
     if isinstance(data, dict):
         inner = data.get("data")
+        if inner is None:
+            inner = data.get("response")
         if isinstance(inner, list):
             return inner[0] if inner else {}
         if isinstance(inner, dict):
@@ -153,6 +141,8 @@ def _fetch_properties_by_code_mcp(table: str, hotel_code: str) -> list[Dict[str,
     data = _extract_payload(raw)
     if isinstance(raw, list):
         return raw
+    if isinstance(raw, dict) and isinstance(raw.get("response"), list):
+        return raw.get("response") or []
     if isinstance(data, list):
         return data
     if isinstance(data, dict) and data:
@@ -208,10 +198,6 @@ def fetch_instance_by_code(hotel_code: str) -> Dict[str, Any]:
 
 
 def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
-    payload = {"tabla": table, "name": name, "hotel_code": name}
-    data = _post_json(PROPERTY_BY_NAME_WEBHOOK, payload)
-    if data:
-        return data
     if supabase:
         try:
             resp = (
@@ -222,18 +208,18 @@ def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
                 .execute()
             )
             rows = resp.data or []
-            return rows[0] if rows else {}
+            if rows:
+                return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_name fallo: %s", exc)
+    payload = {"tabla": table, "name": name, "hotel_code": name}
+    data = _post_json(PROPERTY_BY_NAME_WEBHOOK, payload)
+    if data:
+        return data
     return {}
 
 
 def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
-    payload = {"tabla": table, "hotel_code": hotel_code}
-    data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
-    if data:
-        return data
-    log.info("🔎 Property fallback by code via Supabase: table=%s hotel_code=%s", table, hotel_code)
     if supabase:
         try:
             resp = (
@@ -246,9 +232,13 @@ def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
             rows = resp.data or []
             if rows:
                 log.info("✅ Property found in Supabase: table=%s hotel_code=%s", table, hotel_code)
-            return rows[0] if rows else {}
+                return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_code fallo: %s", exc)
+    payload = {"tabla": table, "hotel_code": hotel_code}
+    data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
+    if data:
+        return data
     return {}
 
 
@@ -260,22 +250,51 @@ def fetch_properties_by_code(table: str, hotel_code: str) -> list[Dict[str, Any]
     mcp_rows = _fetch_properties_by_code_mcp(table, hotel_code)
     if mcp_rows:
         return mcp_rows
+    if supabase:
+        try:
+            resp = (
+                supabase.table(table)
+                .select("*")
+                .eq("hotel_code", hotel_code)
+                .execute()
+            )
+            rows = resp.data or []
+            if rows:
+                return rows
+        except Exception as exc:
+            log.warning("Fallback supabase properties by code fallo: %s", exc)
+    return []
 
-    payload = {"tabla": table, "hotel_code": hotel_code}
-    data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict):
-        return [data] if data else []
+
+def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
+    """
+    Busca properties por coincidencia parcial en name/hotel_code/property_name.
+    """
+    if not query:
+        return []
+    q = str(query).strip()
+    if not q:
+        return []
+    if supabase:
+        try:
+            pattern = f"%{q}%"
+            response = (
+                supabase.table(table)
+                .select("*")
+                .or_(
+                    f"name.ilike.{pattern},hotel_code.ilike.{pattern}"
+                )
+                .limit(10)
+                .execute()
+            )
+            rows = response.data or []
+            return rows
+        except Exception as exc:
+            log.warning("Fallback supabase properties by query fallo: %s", exc)
     return []
 
 
 def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
-    payload = {"tabla": table, "property_id": property_id}
-    data = _post_json(PROPERTY_BY_ID_WEBHOOK, payload)
-    if data:
-        return data
-    log.info("🔎 Property fallback by id via Supabase: table=%s property_id=%s", table, property_id)
     if supabase:
         try:
             resp = (
@@ -288,9 +307,13 @@ def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
             rows = resp.data or []
             if rows:
                 log.info("✅ Property found in Supabase: table=%s property_id=%s", table, property_id)
-            return rows[0] if rows else {}
+                return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_id fallo: %s", exc)
+    payload = {"tabla": table, "property_id": property_id}
+    data = _post_json(PROPERTY_BY_ID_WEBHOOK, payload)
+    if data:
+        return data
     return {}
 
 
@@ -424,6 +447,10 @@ def hydrate_dynamic_context(
         memory_manager.set_flag(chat_id, "instance_url", instance_url)
         log.info("🔗 instance_url=%s (chat_id=%s)", instance_url, chat_id)
 
+    instance_hotel_code = instance_payload.get("hotel_code")
+    if instance_hotel_code:
+        memory_manager.set_flag(chat_id, "instance_hotel_code", instance_hotel_code)
+
     property_table = memory_manager.get_flag(chat_id, "property_table") or _resolve_property_table(instance_payload)
     if not property_table and DEFAULT_PROPERTY_TABLE:
         property_table = DEFAULT_PROPERTY_TABLE
@@ -438,44 +465,62 @@ def hydrate_dynamic_context(
 
     property_id = memory_manager.get_flag(chat_id, "property_id") or _resolve_property_id(instance_payload)
     if property_id:
-        memory_manager.set_flag(chat_id, "property_id", property_id)
-        log.info("🏷️ property_id=%s (chat_id=%s)", property_id, chat_id)
+        should_set_property_id = True
+        if not memory_manager.get_flag(chat_id, "property_id"):
+            instance_code = instance_payload.get("hotel_code")
+            if instance_code and property_table:
+                try:
+                    rows = fetch_properties_by_code(property_table, str(instance_code))
+                except Exception:
+                    rows = []
+                if len(rows) > 1:
+                    should_set_property_id = False
+        if should_set_property_id:
+            memory_manager.set_flag(chat_id, "property_id", property_id)
+            log.info("🏷️ property_id=%s (chat_id=%s)", property_id, chat_id)
 
     if not property_id and property_table:
         property_name = memory_manager.get_flag(chat_id, "property_name")
-        if not property_name:
-            property_name = instance_payload.get("hotel_code")
-            if property_name:
-                memory_manager.set_flag(chat_id, "property_name", property_name)
-                log.info("🏨 property_name=%s (chat_id=%s)", property_name, chat_id)
+        instance_code = memory_manager.get_flag(chat_id, "instance_hotel_code") or instance_payload.get("hotel_code")
+        if instance_code:
+            memory_manager.set_flag(chat_id, "instance_hotel_code", instance_code)
         if property_name:
             prop_rows = fetch_properties_by_code(property_table, str(property_name))
-            if len(prop_rows) > 1:
-                candidates = []
-                for row in prop_rows:
-                    candidates.append(
-                        {
-                            "property_id": row.get("property_id"),
-                            "name": row.get("name") or row.get("property_name"),
-                            "hotel_code": row.get("hotel_code"),
-                        }
-                    )
-                memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
-                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(property_name))
-                log.info(
-                    "🏨 property disambiguation needed hotel_code=%s candidates=%s",
-                    property_name,
-                    len(candidates),
+        elif instance_code:
+            prop_rows = fetch_properties_by_code(property_table, str(instance_code))
+        else:
+            prop_rows = []
+        if len(prop_rows) > 1:
+            candidates = []
+            for row in prop_rows:
+                candidates.append(
+                    {
+                        "property_id": row.get("property_id"),
+                        "name": row.get("name") or row.get("property_name"),
+                        "hotel_code": row.get("hotel_code"),
+                    }
                 )
-            else:
-                prop_by_code = prop_rows[0] if prop_rows else {}
-                resolved_id = _resolve_property_id(prop_by_code)
-                if not resolved_id:
-                    prop_by_name = fetch_property_by_name(property_table, str(property_name))
+            memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
+            if property_name:
+                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(property_name))
+            elif instance_code:
+                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(instance_code))
+            log.info(
+                "🏨 property disambiguation needed hotel_code=%s candidates=%s",
+                property_name or instance_code,
+                len(candidates),
+            )
+        else:
+            prop_by_code = prop_rows[0] if prop_rows else {}
+            resolved_id = _resolve_property_id(prop_by_code)
+            if not resolved_id:
+                fallback_name = property_name or instance_code
+                if fallback_name:
+                    prop_by_name = fetch_property_by_name(property_table, str(fallback_name))
                     resolved_id = _resolve_property_id(prop_by_name)
-                if resolved_id:
-                    property_id = resolved_id
-                    memory_manager.set_flag(chat_id, "property_id", resolved_id)
+            if resolved_id:
+                property_id = resolved_id
+                memory_manager.set_flag(chat_id, "property_id", resolved_id)
 
     if not instance_url:
         hotel_code = memory_manager.get_flag(chat_id, "property_name")
@@ -495,6 +540,9 @@ def hydrate_dynamic_context(
             memory_manager.set_flag(chat_id, "kb", kb_name)
             memory_manager.set_flag(chat_id, "knowledge_base", kb_name)
         prop_code = prop_details.get("hotel_code")
-        prop_name = prop_code or prop_details.get("name")
+        prop_display = prop_details.get("name") or prop_details.get("property_name")
+        prop_name = prop_code or prop_display
         if prop_name:
             memory_manager.set_flag(chat_id, "property_name", prop_name)
+        if prop_display:
+            memory_manager.set_flag(chat_id, "property_display_name", prop_display)

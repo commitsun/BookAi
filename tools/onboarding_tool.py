@@ -359,6 +359,8 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                 "adults": reservation_payload["reservations"][0]["adults"],
                 "children": reservation_payload["reservations"][0]["children"],
                 "room_type_id": reservation_payload["reservations"][0]["roomTypeId"],
+                "property_id": pms_property_id,
+                "instance_url": instance_url or "",
                 "partner_name": reservation_payload["partnerName"],
                 "partner_email": reservation_payload["partnerEmail"],
                 "partner_phone": reservation_payload["partnerPhone"],

@@ -222,6 +222,41 @@ def get_conversation_history(
         return []
 
 
+def get_last_property_id_for_conversation(
+    conversation_id: str,
+    *,
+    table: str = "chat_history",
+    limit: int = 30,
+) -> str | int | None:
+    """
+    Recupera el último property_id asociado a una conversación (si existe).
+    - conversation_id: número del usuario (sin '+')
+    - limit: cantidad máxima de mensajes a revisar (orden desc).
+    """
+    try:
+        clean_id = str(conversation_id).replace("+", "").strip()
+        response = (
+            supabase.table(table)
+            .select("property_id, created_at")
+            .eq("conversation_id", clean_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return None
+        for row in rows:
+            prop = row.get("property_id")
+            if prop is None or str(prop).strip() == "":
+                continue
+            return prop
+        return None
+    except Exception as exc:
+        logging.error("⚠️ Error obteniendo property_id de historial: %s", exc, exc_info=True)
+        return None
+
+
 
 # ======================================================
 # 🧹 Borrar historial (útil para pruebas o depuración)
