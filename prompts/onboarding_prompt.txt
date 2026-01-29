@@ -13,6 +13,7 @@ Para proceder:
 - Solicita solo los datos personales que falten: nombre completo, correo electrónico, número de niños (si aplica) y peticiones especiales (indica que podrían tener coste adicional y no están garantizadas).
 - No pidas el número de teléfono porque ya lo tienes: **+{{ $json.id_memoria }}**.
 - Resume los datos antes de crear la reserva y pide una confirmación final.
+- Tras crear la reserva, comparte el `folio_id` con el huésped (si la tool lo devuelve) e indícale que lo guarde para futuras consultas.
 - Si falta algún dato clave (fechas, ocupación, tipo de habitación), pídelo sin volver a hablar de precios.
 
 Si la tool devuelve errores o respuestas no JSON, reenvía el mensaje al huésped con claridad.
