@@ -170,7 +170,7 @@ def _pending_responses(limit: int = 200) -> Dict[str, str]:
         proposed = (esc.get("draft_response") or "").strip()
         if not proposed:
             continue
-        result[guest_id] = proposed
+        result[guest_id] = _with_final_tag(proposed)
     return result
 
 
@@ -188,6 +188,16 @@ def _pending_messages(limit: int = 200) -> Dict[str, list]:
         if isinstance(messages, list):
             result[guest_id] = messages
     return result
+
+
+def _with_final_tag(text: str) -> str:
+    tag = "[RESPUESTA_FINAL]"
+    clean = (text or "").strip()
+    if not clean:
+        return clean
+    if clean.startswith(tag):
+        return clean
+    return f"{tag} {clean}"
 
 
 def _bookai_settings(state) -> Dict[str, bool]:
@@ -707,6 +717,7 @@ def register_chatter_routes(app, state) -> None:
         refined = extract_clean_draft(result or "").strip() or result.strip()
         refined = _strip_instruction_block(refined)
         update_escalation(escalation_id, {"draft_response": refined})
+        tagged = _with_final_tag(refined)
 
         await _emit(
             "escalation.updated",
@@ -722,14 +733,14 @@ def register_chatter_routes(app, state) -> None:
             {
                 "rooms": _rooms(clean_id, None, "whatsapp"),
                 "chat_id": clean_id,
-                "proposed_response": refined,
+                "proposed_response": tagged,
             },
         )
 
         return {
             "chat_id": clean_id,
             "escalation_id": escalation_id,
-            "proposed_response": refined,
+            "proposed_response": tagged,
         }
 
     @router.post("/chats/{chat_id}/escalation-chat")
@@ -818,7 +829,7 @@ def register_chatter_routes(app, state) -> None:
             "escalation_id": escalation_id,
             "ai_message": ai_message,
             "messages": messages,
-            "proposed_response": draft_response or None,
+            "proposed_response": _with_final_tag(draft_response) if draft_response else None,
         }
 
     @router.patch("/chats/{chat_id}/bookai")
