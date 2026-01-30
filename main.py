@@ -61,8 +61,26 @@ if not cors_origins:
     log.warning("CORS_ORIGINS vacío. Se permite cualquier origen por defecto.")
     cors_origins = ["*"]
 
+class ConditionalCORSMiddleware:
+    """Evita duplicar headers CORS en rutas que ya los manejan (p.ej. Socket.IO)."""
+
+    def __init__(self, app, *, skip_paths: list[str], **cors_kwargs):
+        self.app = app
+        self.cors = CORSMiddleware(app, **cors_kwargs)
+        self.skip_paths = tuple(skip_paths)
+
+    async def __call__(self, scope, receive, send):
+        if scope.get("type") == "http":
+            path = scope.get("path") or ""
+            for prefix in self.skip_paths:
+                if path.startswith(prefix):
+                    return await self.app(scope, receive, send)
+        return await self.cors(scope, receive, send)
+
+
 app.add_middleware(
-    CORSMiddleware,
+    ConditionalCORSMiddleware,
+    skip_paths=["/ws"],
     allow_origins=cors_origins,
     allow_credentials="*" not in cors_origins,
     allow_methods=["*"],
