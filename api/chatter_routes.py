@@ -11,7 +11,7 @@ from typing import Any, Dict, List, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from core.config import Settings
+from core.config import Settings, ModelConfig, ModelTier
 from core.db import supabase
 from core.escalation_db import list_pending_escalations, resolve_latest_pending_escalation
 from core.template_registry import TemplateRegistry, TemplateDefinition
@@ -55,6 +55,10 @@ class ProposedResponseRequest(BaseModel):
         default=None,
         description="ID de la respuesta original (opcional, no usado por ahora)",
     )
+
+
+class EscalationChatRequest(BaseModel):
+    message: str = Field(..., description="Mensaje del operador hacia la IA")
 
 
 # ---------------------------------------------------------------------------
@@ -167,6 +171,22 @@ def _pending_responses(limit: int = 200) -> Dict[str, str]:
         if not proposed:
             continue
         result[guest_id] = proposed
+    return result
+
+
+def _pending_messages(limit: int = 200) -> Dict[str, list]:
+    """Devuelve un mapa guest_chat_id -> historial de mensajes de escalación."""
+    pending = list_pending_escalations(limit=limit) or []
+    result: Dict[str, list] = {}
+    for esc in pending:
+        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
+        if not guest_id:
+            continue
+        messages = esc.get("messages")
+        if not messages:
+            continue
+        if isinstance(messages, list):
+            result[guest_id] = messages
     return result
 
 
@@ -354,6 +374,7 @@ def register_chatter_routes(app, state) -> None:
         pending_reason_map = _pending_reasons()
         pending_type_map = _pending_types()
         proposed_map = _pending_responses()
+        pending_messages_map = _pending_messages()
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
         if page_keys:
@@ -409,6 +430,7 @@ def register_chatter_routes(app, state) -> None:
                     "needs_action_type": pending_type_map.get(cid),
                     "needs_action_reason": pending_reason_map.get(cid),
                     "proposed_response": proposed_map.get(cid),
+                    "escalation_messages": pending_messages_map.get(cid),
                 }
             )
 
@@ -708,6 +730,95 @@ def register_chatter_routes(app, state) -> None:
             "chat_id": clean_id,
             "escalation_id": escalation_id,
             "proposed_response": refined,
+        }
+
+    @router.post("/chats/{chat_id}/escalation-chat")
+    async def escalation_chat(
+        chat_id: str,
+        payload: EscalationChatRequest,
+        _: None = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+        message = (payload.message or "").strip()
+        if not message:
+            raise HTTPException(status_code=422, detail="message requerida")
+
+        from core.escalation_db import get_latest_pending_escalation, append_escalation_message
+
+        esc = get_latest_pending_escalation(clean_id)
+        if not esc:
+            raise HTTPException(status_code=404, detail="No hay escalación pendiente")
+
+        escalation_id = str(esc.get("escalation_id") or "").strip()
+        if not escalation_id:
+            raise HTTPException(status_code=404, detail="Escalación inválida")
+
+        operator_ts = datetime.now(timezone.utc).isoformat()
+        messages = append_escalation_message(
+            escalation_id=escalation_id,
+            role="operator",
+            content=message,
+            timestamp=operator_ts,
+        )
+
+        guest_message = (esc.get("guest_message") or "").strip()
+        esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
+        reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
+        context = (esc.get("context") or "").strip()
+        draft_response = (esc.get("draft_response") or "").strip()
+
+        system_prompt = (
+            "Eres un asistente interno para operadores de hotel. "
+            "Responde preguntas sobre el contexto de la escalación con claridad y brevedad. "
+            "No generes la respuesta final al huésped a menos que el operador lo solicite explícitamente. "
+            "Si falta información, indícalo."
+        )
+        user_prompt = (
+            "Contexto de escalación:\n"
+            f"- Mensaje del huésped: {guest_message or 'No disponible'}\n"
+            f"- Tipo: {esc_type or 'No disponible'}\n"
+            f"- Motivo: {reason or 'No disponible'}\n"
+            f"- Contexto: {context or 'No disponible'}\n"
+            f"- Borrador actual: {draft_response or 'No disponible'}\n\n"
+            f"Pregunta del operador:\n{message}"
+        )
+
+        llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+        ai_raw = llm.invoke(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        ai_message = (getattr(ai_raw, "content", None) or str(ai_raw or "")).strip()
+        if not ai_message:
+            ai_message = "No tengo suficiente información para responder."
+
+        ai_ts = datetime.now(timezone.utc).isoformat()
+        messages = append_escalation_message(
+            escalation_id=escalation_id,
+            role="ai",
+            content=ai_message,
+            timestamp=ai_ts,
+        )
+
+        await _emit(
+            "escalation.chat.updated",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "escalation_id": escalation_id,
+                "messages": messages,
+                "ai_message": ai_message,
+            },
+        )
+
+        return {
+            "chat_id": clean_id,
+            "escalation_id": escalation_id,
+            "ai_message": ai_message,
+            "messages": messages,
+            "proposed_response": draft_response or None,
         }
 
     @router.patch("/chats/{chat_id}/bookai")

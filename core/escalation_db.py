@@ -61,6 +61,59 @@ def update_escalation(escalation_id: str, updates: dict):
 
 
 # ======================================================
+# 💬 Historial de mensajes de escalación
+# ======================================================
+def get_escalation_messages(escalation_id: str) -> list[dict]:
+    """Devuelve el historial de mensajes (JSONB) de una escalación."""
+    if not escalation_id:
+        return []
+    try:
+        result = (
+            supabase.table("escalations")
+            .select("messages")
+            .eq("escalation_id", escalation_id)
+            .single()
+            .execute()
+        )
+        data = result.data or {}
+        messages = data.get("messages") or []
+        return messages if isinstance(messages, list) else []
+    except Exception as e:
+        log.error(
+            "⚠️ Error obteniendo mensajes de escalación %s: %s",
+            escalation_id,
+            e,
+            exc_info=True,
+        )
+        return []
+
+
+def append_escalation_message(
+    escalation_id: str,
+    role: str,
+    content: str,
+    timestamp: str | None = None,
+) -> list[dict]:
+    """Agrega un mensaje al historial de la escalación y lo persiste en DB."""
+    if not escalation_id or not content:
+        return []
+    messages = get_escalation_messages(escalation_id)
+    messages.append(
+        {
+            "role": role,
+            "content": content,
+            "timestamp": timestamp or datetime.utcnow().isoformat(),
+        }
+    )
+    try:
+        update_escalation(escalation_id, {"messages": messages})
+    except Exception:
+        # update_escalation ya loguea el error
+        pass
+    return messages
+
+
+# ======================================================
 # 🧾 Listar escalaciones pendientes de confirmación
 # ======================================================
 def list_pending_escalations(limit: int = 20):
