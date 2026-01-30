@@ -79,6 +79,11 @@ def _clean_hotel_input(raw: Optional[str]) -> Optional[str]:
         if lowered.startswith(prefix):
             text = text[len(prefix):].strip()
             break
+    lowered = text.lower()
+    for prefix in ("el ", "la ", "los ", "las "):
+        if lowered.startswith(prefix):
+            text = text[len(prefix):].strip()
+            break
     return text or None
 
 def _is_valid_hotel_label(raw: Optional[str]) -> bool:
@@ -162,8 +167,9 @@ class PropertyContextTool:
 
         # Guardar constancia en historial con property_id ya fijado (sin exponer IDs al usuario)
         try:
-            if hotel_code:
-                note = f"Contexto de propiedad actualizado: {hotel_code}."
+            label = display_name or hotel_code
+            if label:
+                note = f"Contexto de propiedad actualizado: {label}."
             else:
                 note = "Contexto de propiedad actualizado."
             self.memory_manager.save(self.chat_id, "system", note)

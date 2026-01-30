@@ -44,6 +44,7 @@ FLAG_ESCALATION_CONFIRMATION_PENDING = "escalation_confirmation_pending"
 FLAG_PROPERTY_CONFIRMATION_PENDING = "property_confirmation_pending"
 FLAG_PROPERTY_DISAMBIGUATION_PENDING = "property_disambiguation_pending"
 FLAG_PROPERTY_SWITCH_PENDING = "property_switch_pending"
+FLAG_PROPERTY_SWITCH_ASKED = "property_switch_asked"
 
 
 class MainAgent:
@@ -466,6 +467,8 @@ class MainAgent:
         except Exception as exc:
             log.warning("No se pudo enriquecer property desde candidatos: %s", exc)
 
+        self._sync_property_labels(chat_id)
+
         log.info(
             "[PROPERTY_MATCH] matched chat_id=%s property_id=%s name=%s",
             chat_id,
@@ -515,6 +518,8 @@ class MainAgent:
             self.memory_manager.get_flag(chat_id, "property_id")
             or self.memory_manager.get_flag(chat_id, "property_name")
         )
+        if resolved:
+            self._sync_property_labels(chat_id)
         log.info(
             "[PROPERTY_RESOLVE] message end chat_id=%s resolved=%s prop_id=%s prop_name=%s",
             chat_id,
@@ -523,6 +528,29 @@ class MainAgent:
             self.memory_manager.get_flag(chat_id, "property_name"),
         )
         return resolved
+
+    def _sync_property_labels(self, chat_id: str) -> None:
+        if not self.memory_manager or not chat_id:
+            return
+        prop_id = self.memory_manager.get_flag(chat_id, "property_id")
+        if not prop_id:
+            return
+        table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+        if not table:
+            return
+        try:
+            payload = fetch_property_by_id(table, prop_id)
+        except Exception:
+            payload = {}
+        display = (payload.get("name") or payload.get("property_name") or "").strip()
+        code = (payload.get("hotel_code") or "").strip()
+        if display:
+            self.memory_manager.set_flag(chat_id, "property_display_name", display)
+            self.memory_manager.set_flag(chat_id, "property_name", display)
+        elif code:
+            self.memory_manager.set_flag(chat_id, "property_name", code)
+        if code:
+            self.memory_manager.set_flag(chat_id, "wa_context_hotel_code", code)
 
     def _request_property_context(self, chat_id: str, original_message: str) -> str:
         self.memory_manager.set_flag(
@@ -573,16 +601,30 @@ class MainAgent:
             FLAG_PROPERTY_SWITCH_PENDING,
             {"original_message": original_message},
         )
+        self.memory_manager.set_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED, True)
         current_display = self.memory_manager.get_flag(chat_id, "property_display_name")
         current_name = self.memory_manager.get_flag(chat_id, "property_name")
         instance_name = self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+        property_id = self.memory_manager.get_flag(chat_id, "property_id")
         if instance_name and current_name and str(instance_name).strip().lower() == str(current_name).strip().lower():
             current_name = None
+        if instance_name and property_id:
+            try:
+                table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                payload = fetch_property_by_id(table, property_id) if table else {}
+                prop_code = (payload.get("hotel_code") or payload.get("name") or "").strip()
+                if prop_code and str(prop_code).lower() != str(instance_name).strip().lower():
+                    current_display = None
+                    current_name = None
+            except Exception:
+                pass
         if not self._is_valid_property_label(current_display):
             current_display = None
         if not self._is_valid_property_label(current_name):
             current_name = None
-        current = current_display or current_name or "el mismo hotel"
+        current = current_display or current_name
+        if not current:
+            return "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo."
         return (
             f"¿Esta nueva reserva es para {current} o para otro hotel? "
             "Si es otro, dime el nombre (aprox) y continúo."
@@ -605,8 +647,21 @@ class MainAgent:
                 "property_label": property_label_hint,
             },
         )
+        self.memory_manager.set_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED, True)
         label = property_label_hint if self._is_valid_property_label(property_label_hint) else None
+        instance_name = self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+        if instance_name and property_id_hint:
+            try:
+                table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                payload = fetch_property_by_id(table, property_id_hint) if table else {}
+                prop_code = (payload.get("hotel_code") or payload.get("name") or "").strip()
+                if prop_code and str(prop_code).lower() != str(instance_name).strip().lower():
+                    label = None
+            except Exception:
+                pass
         current = label or "el mismo hotel"
+        if current == "el mismo hotel":
+            return "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo."
         return (
             f"¿Esta nueva reserva es para {current} o para otro hotel? "
             "Si es otro, dime el nombre (aprox) y continúo."
@@ -739,6 +794,7 @@ class MainAgent:
                             decision = True
                     if decision is True:
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_PENDING)
+                        self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED)
                         if hint_property_id and not self.memory_manager.get_flag(chat_id, "property_id"):
                             try:
                                 tool = create_property_context_tool(
@@ -754,6 +810,7 @@ class MainAgent:
                         skip_new_reservation_checks = True
                     elif decision is False:
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_PENDING)
+                        self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED)
                         self._clear_property_context(chat_id)
                         question = self._request_property_context(chat_id, original_message or user_input)
                         self.memory_manager.save(chat_id, "user", user_input)
@@ -772,9 +829,14 @@ class MainAgent:
                                 if candidate_name.lower().startswith(prefix):
                                     candidate_name = candidate_name[len(prefix):].strip()
                                     break
+                        for prefix in ("el ", "la ", "los ", "las "):
+                            if candidate_name.lower().startswith(prefix):
+                                candidate_name = candidate_name[len(prefix):].strip()
+                                break
                         resolved = await self._resolve_property_from_message(chat_id, candidate_name)
                         if resolved:
                             self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_PENDING)
+                            self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED)
                             self.memory_manager.save(chat_id, "user", user_input)
                             if original_message:
                                 user_input = original_message
@@ -782,10 +844,37 @@ class MainAgent:
                         else:
                             # Evitar bucle: si no se pudo resolver, preguntar por hotel directamente
                             self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_PENDING)
+                            self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED)
                             question = self._request_property_context(chat_id, original_message or user_input)
                             self.memory_manager.save(chat_id, "user", user_input)
                             self.memory_manager.save(chat_id, "assistant", question)
                             return question
+
+                # Si ya preguntamos “mismo u otro hotel” y el huésped dio un nombre, no repetir la pregunta.
+                if self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED) and self._is_valid_property_label(user_input):
+                    candidate_name = (user_input or "").strip()
+                    if candidate_name.lower().startswith(("es para ", "para ", "en ")):
+                        for prefix in ("es para ", "para ", "en "):
+                            if candidate_name.lower().startswith(prefix):
+                                candidate_name = candidate_name[len(prefix):].strip()
+                                break
+                    for prefix in ("el ", "la ", "los ", "las "):
+                        if candidate_name.lower().startswith(prefix):
+                            candidate_name = candidate_name[len(prefix):].strip()
+                            break
+                    resolved = await self._resolve_property_from_message(chat_id, candidate_name)
+                    if not resolved:
+                        candidates = self._ensure_property_candidates(chat_id)
+                        if candidates and self._resolve_property_from_candidates(chat_id, candidate_name):
+                            resolved = True
+                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED)
+                    if resolved:
+                        skip_new_reservation_checks = True
+                    else:
+                        question = self._request_property_context(chat_id, user_input)
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
 
                 # 🔎 Si el usuario menciona un hotel directamente, intenta resolver antes de volver a preguntar
                 if (
