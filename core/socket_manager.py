@@ -30,7 +30,8 @@ class SocketManager:
             engineio_logger=False,
         )
         self._register_handlers()
-        app.mount("/ws", socketio.ASGIApp(self.sio))
+        # Acepta conexiones en /ws (sin /socket.io) para alinearse con el frontend.
+        app.mount("/ws", socketio.ASGIApp(self.sio, socketio_path=""))
         self.enabled = True
         log.info("Socket.IO montado en /ws")
 
