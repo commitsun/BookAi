@@ -170,7 +170,7 @@ def _pending_responses(limit: int = 200) -> Dict[str, str]:
         proposed = (esc.get("draft_response") or "").strip()
         if not proposed:
             continue
-        result[guest_id] = _with_final_tag(proposed)
+        result[guest_id] = proposed
     return result
 
 
@@ -188,16 +188,6 @@ def _pending_messages(limit: int = 200) -> Dict[str, list]:
         if isinstance(messages, list):
             result[guest_id] = messages
     return result
-
-
-def _with_final_tag(text: str) -> str:
-    tag = "[RESPUESTA_FINAL]"
-    clean = (text or "").strip()
-    if not clean:
-        return clean
-    if clean.startswith(tag):
-        return clean
-    return f"{tag} {clean}"
 
 
 def _bookai_settings(state) -> Dict[str, bool]:
@@ -440,6 +430,7 @@ def register_chatter_routes(app, state) -> None:
                     "needs_action_type": pending_type_map.get(cid),
                     "needs_action_reason": pending_reason_map.get(cid),
                     "proposed_response": proposed_map.get(cid),
+                    "is_final_response": bool(proposed_map.get(cid)),
                     "escalation_messages": pending_messages_map.get(cid),
                 }
             )
@@ -717,7 +708,6 @@ def register_chatter_routes(app, state) -> None:
         refined = extract_clean_draft(result or "").strip() or result.strip()
         refined = _strip_instruction_block(refined)
         update_escalation(escalation_id, {"draft_response": refined})
-        tagged = _with_final_tag(refined)
 
         await _emit(
             "escalation.updated",
@@ -733,14 +723,16 @@ def register_chatter_routes(app, state) -> None:
             {
                 "rooms": _rooms(clean_id, None, "whatsapp"),
                 "chat_id": clean_id,
-                "proposed_response": tagged,
+                "proposed_response": refined,
+                "is_final_response": True,
             },
         )
 
         return {
             "chat_id": clean_id,
             "escalation_id": escalation_id,
-            "proposed_response": tagged,
+            "proposed_response": refined,
+            "is_final_response": True,
         }
 
     @router.post("/chats/{chat_id}/escalation-chat")
@@ -829,7 +821,45 @@ def register_chatter_routes(app, state) -> None:
             "escalation_id": escalation_id,
             "ai_message": ai_message,
             "messages": messages,
-            "proposed_response": _with_final_tag(draft_response) if draft_response else None,
+            "proposed_response": draft_response or None,
+            "is_final_response": bool(draft_response),
+        }
+
+    @router.get("/chats/{chat_id}/escalation-chat")
+    async def get_escalation_chat(
+        chat_id: str,
+        escalation_id: Optional[str] = Query(default=None),
+        _: None = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+
+        from core.escalation_db import (
+            get_escalation,
+            get_latest_pending_escalation,
+            get_escalation_messages,
+        )
+
+        esc = None
+        if escalation_id:
+            esc = get_escalation(escalation_id)
+        if not esc:
+            esc = get_latest_pending_escalation(clean_id)
+        if not esc:
+            raise HTTPException(status_code=404, detail="No hay escalación pendiente")
+
+        escalation_id = str(esc.get("escalation_id") or escalation_id or "").strip()
+        if not escalation_id:
+            raise HTTPException(status_code=404, detail="Escalación inválida")
+
+        draft_response = (esc.get("draft_response") or "").strip()
+        messages = get_escalation_messages(escalation_id)
+
+        return {
+            "chat_id": clean_id,
+            "escalation_id": escalation_id,
+            "messages": messages,
+            "proposed_response": draft_response or None,
+            "is_final_response": bool(draft_response),
         }
 
     @router.patch("/chats/{chat_id}/bookai")
