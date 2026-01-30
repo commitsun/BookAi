@@ -311,6 +311,8 @@ class SuperintendenteAgent:
             guest_id, candidates = _resolve_guest_id_by_name(
                 guest_label,
                 property_id=property_id,
+                memory_manager=self.memory_manager,
+                chat_id=encargado_id,
             )
             if not guest_id:
                 if candidates:

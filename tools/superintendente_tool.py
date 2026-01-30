@@ -225,6 +225,8 @@ def _split_guest_tokens(raw: str) -> list[str]:
 def _resolve_guest_ids(
     raw: str,
     property_id: Optional[int] = None,
+    memory_manager: Any = None,
+    chat_id: str = "",
 ) -> tuple[list[str], list[str], list[dict]]:
     display: list[str] = []
     clean_ids: list[str] = []
@@ -243,7 +245,12 @@ def _resolve_guest_ids(
             clean_ids.append(normalized)
             continue
 
-        resolved, candidates = _resolve_guest_id_by_name(token, property_id=property_id)
+        resolved, candidates = _resolve_guest_id_by_name(
+            token,
+            property_id=property_id,
+            memory_manager=memory_manager,
+            chat_id=chat_id,
+        )
         if resolved:
             if resolved in seen:
                 continue
@@ -277,10 +284,84 @@ def _resolve_guest_id_by_name(
     name: str,
     property_id: Optional[int] = None,
     limit: int = 50,
+    memory_manager: Any = None,
+    chat_id: str = "",
 ) -> tuple[Optional[str], list[dict]]:
     name = (name or "").strip()
     if not name:
         return None, []
+
+    query_name = _normalize_name(name)
+
+    def _score(candidate: dict) -> int:
+        candidate_name = _normalize_name(candidate.get("client_name"))
+        if candidate_name == query_name:
+            return 0
+        if candidate_name.startswith(query_name):
+            return 1
+        if query_name in candidate_name:
+            return 2
+        return 3
+
+    def _token_match(query: str, candidate: str) -> bool:
+        if not query or not candidate:
+            return False
+        q_tokens = query.split()
+        c_tokens = candidate.split()
+        for qt in q_tokens:
+            for ct in c_tokens:
+                if qt == ct or qt.startswith(ct) or ct.startswith(qt):
+                    return True
+        return False
+
+    # 1) Intentar resolver con reservas en memoria (consulta_reserva_general reciente)
+    try:
+        if memory_manager and chat_id:
+            cached = memory_manager.get_flag(chat_id, "superintendente_last_reservations") or {}
+            items = cached.get("items") if isinstance(cached, dict) else None
+            if isinstance(items, list) and items:
+                candidates = []
+                for item in items:
+                    client_name = (item.get("partner_name") or "").strip()
+                    phone = _clean_phone(item.get("partner_phone") or "")
+                    if not client_name or not phone:
+                        continue
+                    candidate_norm = _normalize_name(client_name)
+                    if not _token_match(query_name, candidate_norm):
+                        continue
+                    candidates.append(
+                        {
+                            "phone": phone,
+                            "client_name": client_name,
+                            "created_at": item.get("checkin") or item.get("checkout"),
+                            "property_id": property_id,
+                            "source": "reservations",
+                        }
+                    )
+
+                if candidates:
+                    candidates.sort(key=lambda c: (_score(c), -_parse_ts(c.get("created_at"))))
+                    unique: list[dict] = []
+                    seen = set()
+                    for cand in candidates:
+                        phone = cand.get("phone")
+                        if not phone or phone in seen:
+                            continue
+                        seen.add(phone)
+                        cand["score"] = _score(cand)
+                        unique.append(cand)
+                    if unique:
+                        best_score = unique[0].get("score", 3)
+                        best = [c for c in unique if c.get("score", 3) == best_score]
+                        if len(best) == 1:
+                            return best[0].get("phone"), unique
+                        # Si hay empate pero todos comparten el mismo teléfono, úsalo.
+                        phones = {c.get("phone") for c in best if c.get("phone")}
+                        if len(phones) == 1:
+                            return next(iter(phones)), unique
+                        return None, unique
+    except Exception:
+        pass
 
     def _run_query(filter_property: bool) -> list[dict]:
         query = (
@@ -322,18 +403,6 @@ def _resolve_guest_id_by_name(
 
     if not candidates:
         return None, []
-
-    query_name = _normalize_name(name)
-
-    def _score(candidate: dict) -> int:
-        candidate_name = _normalize_name(candidate.get("client_name"))
-        if candidate_name == query_name:
-            return 0
-        if candidate_name.startswith(query_name):
-            return 1
-        if query_name in candidate_name:
-            return 2
-        return 3
 
     candidates.sort(
         key=lambda c: (_score(c), -_parse_ts(c.get("created_at")))
@@ -695,6 +764,8 @@ def create_send_template_tool(
         display_ids, normalized_ids, unresolved = _resolve_guest_ids(
             guest_ids,
             property_id=property_id,
+            memory_manager=memory_manager,
+            chat_id=chat_id,
         )
         if unresolved:
             return _format_unresolved_guests(unresolved)
@@ -901,6 +972,8 @@ def create_send_broadcast_tool(
             display_ids, ids, unresolved = _resolve_guest_ids(
                 guest_ids,
                 property_id=property_id,
+                memory_manager=memory_manager,
+                chat_id=chat_id,
             )
             if unresolved:
                 return _format_unresolved_guests(unresolved)
@@ -1180,6 +1253,8 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                 resolved_guest_id, candidates = _resolve_guest_id_by_name(
                     guest_id,
                     property_id=property_id,
+                    memory_manager=memory_manager,
+                    chat_id=chat_id,
                 )
                 if not resolved_guest_id:
                     if candidates:
@@ -1381,6 +1456,8 @@ def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, 
             resolved_guest_id, candidates = _resolve_guest_id_by_name(
                 guest_id,
                 property_id=property_id,
+                memory_manager=memory_manager,
+                chat_id=chat_id,
             )
             if not resolved_guest_id:
                 if candidates:
@@ -1671,6 +1748,23 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                     )
             else:
                 simplified = filtered
+
+            if memory_manager and chat_id:
+                try:
+                    cache_payload = {
+                        "items": simplified,
+                        "meta": {
+                            "fecha_inicio": fecha_inicio,
+                            "fecha_fin": fecha_fin,
+                            "property_id": pms_property_id,
+                            "hotel_code": hotel_code,
+                            "instance_url": payload.get("instance_url"),
+                        },
+                        "stored_at": datetime.utcnow().isoformat(),
+                    }
+                    memory_manager.set_flag(chat_id, "superintendente_last_reservations", cache_payload)
+                except Exception:
+                    pass
 
             return json.dumps(simplified, ensure_ascii=False)
         except Exception as exc:
