@@ -85,7 +85,19 @@ class SocketManager:
                 await self.sio.enter_room(sid, str(room))
 
         @self.sio.event
+        async def room_join(sid, data):
+            rooms = (data or {}).get("rooms") or []
+            for room in rooms:
+                await self.sio.enter_room(sid, str(room))
+
+        @self.sio.event
         async def leave(sid, data):
+            rooms = (data or {}).get("rooms") or []
+            for room in rooms:
+                await self.sio.leave_room(sid, str(room))
+
+        @self.sio.event
+        async def room_leave(sid, data):
             rooms = (data or {}).get("rooms") or []
             for room in rooms:
                 await self.sio.leave_room(sid, str(room))
