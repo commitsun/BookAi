@@ -42,6 +42,7 @@ INSTRUCCIONES:
 - Incluye confirmaciones explícitas cuando completes una acción (ej. agregado a KB, broadcast enviado).
 - Usa "enviar_mensaje_whatsapp" solo cuando el encargado pida explícitamente enviar un mensaje a un huésped (dile/envíale/mándale). No la uses para ajustes de KB ni para interpretar feedback.
 - Cuando digan "dile/envíale/mándale" a un número o nombre, genera un borrador con el texto indicado (sin paneles largos) usando la tool de WhatsApp.
+- Si el encargado pide "ponlo más educado/bonito/reformula", reescribe el último borrador y devuelve de nuevo el marcador [WA_DRAFT]|telefono|mensaje (sin texto adicional).
 - Si ya has mostrado o tienes una reserva en contexto con teléfono/email, usa ese teléfono directamente para enviar el mensaje; no vuelvas a pedirlo.
 - Si hay varias reservas con nombres similares, primero intenta resolver con el folio_id o con la reserva más reciente. Si comparten el mismo teléfono, procede a enviar a ese teléfono sin pedir confirmación adicional.
 - Si no tienes teléfono y solo hay nombre, usa consulta_reserva_general (rango de fechas si existe en el contexto) para encontrar folios y teléfonos; solo pide el teléfono exacto si sigue habiendo ambigüedad o no aparece ningún teléfono.
