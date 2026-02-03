@@ -21,6 +21,7 @@ from core.message_utils import (
     extract_kb_fields,
     format_superintendente_message,
     get_escalation_metadata,
+    looks_like_new_instruction,
     sanitize_wa_message,
 )
 from core.db import get_conversation_history
@@ -119,34 +120,7 @@ def register_telegram_routes(app, state):
         Detecta si el encargado está cambiando de tema (ej. mandar mensaje, pedir historial)
         para no atrapar la solicitud dentro de un flujo previo.
         """
-        if not text:
-            return False
-
-        action_terms = {
-            "mandale",
-            "mándale",
-            "enviale",
-            "envíale",
-            "manda",
-            "mensaje",
-            "whatsapp",
-            "historial",
-            "convers",
-            "broadcast",
-            "plantilla",
-            "resumen",
-            "agrega",
-            "añade",
-            "anade",
-            "actualiza",
-            "actualizar",
-            "base de cono",
-            "kb",
-            "elimina",
-            "borra",
-            "quitar",
-        }
-        return any(term in text for term in action_terms) or bool(_extract_phone(text))
+        return looks_like_new_instruction(text) or bool(_extract_phone(text))
 
     async def _collect_conversations(
         guest_id: str,
