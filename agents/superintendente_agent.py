@@ -316,6 +316,19 @@ class SuperintendenteAgent:
                 chat_id=encargado_id,
             )
             if not guest_id:
+                # Fallback: reintenta con extracción LLM si el nombre estaba contaminado por instrucciones.
+                parsed_llm = await self._extract_send_intent_llm(clean_input)
+                if parsed_llm:
+                    llm_guest, llm_message = parsed_llm
+                    if llm_guest and llm_guest.strip() != guest_label:
+                        guest_id, candidates = _resolve_guest_id_by_name(
+                            llm_guest,
+                            property_id=property_id,
+                            memory_manager=self.memory_manager,
+                            chat_id=encargado_id,
+                        )
+                        if guest_id and llm_message:
+                            message = llm_message
                 if candidates:
                     log.info("Superintendente fast draft: nombre ambiguo (%s)", guest_label)
                     lines = []
