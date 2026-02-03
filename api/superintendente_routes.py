@@ -883,7 +883,23 @@ def register_superintendente_routes(app, state) -> None:
                                 }
                             )
                         if not updated:
-                            return {"result": "⚠️ No hay borrador pendiente para ajustar."}
+                            recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+                            if recovered:
+                                drafts = recovered
+                                updated = []
+                                for draft in drafts:
+                                    guest_id = draft.get("guest_id")
+                                    base_msg = draft.get("message", "")
+                                    rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                                    updated.append(
+                                        {
+                                            **draft,
+                                            "guest_id": guest_id,
+                                            "message": _ensure_guest_language(rewritten, guest_id),
+                                        }
+                                    )
+                            if not updated:
+                                return {"result": "⚠️ No pude recuperar el borrador anterior. ¿Quieres que lo genere de nuevo?"}
                         pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
                         state.superintendente_pending_wa[session_key] = pending_payload
                         if alt_key:
