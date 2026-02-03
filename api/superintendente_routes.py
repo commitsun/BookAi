@@ -274,6 +274,69 @@ def _load_last_pending_wa(state, owner_id: str) -> Any:
     return None
 
 
+def _parse_kb_draft_marker(raw_text: str) -> dict[str, str] | None:
+    if not raw_text or "[KB_DRAFT]|" not in raw_text:
+        return None
+    marker = raw_text[raw_text.index("[KB_DRAFT]|") :]
+    parts = marker.split("|", 4)
+    if len(parts) < 5:
+        return None
+    _, hotel_name, topic, category, content = parts[:5]
+    return {
+        "hotel_name": hotel_name.strip(),
+        "topic": topic.strip(),
+        "category": category.strip(),
+        "content": content.strip(),
+    }
+
+
+def _persist_pending_kb(state, key: str, payload: Any) -> None:
+    if not state or not key:
+        return
+    try:
+        store = state.tracking.setdefault("superintendente_pending_kb", {})
+        if not isinstance(store, dict):
+            state.tracking["superintendente_pending_kb"] = {}
+            store = state.tracking["superintendente_pending_kb"]
+        if payload is None:
+            store.pop(str(key), None)
+        else:
+            store[str(key)] = payload
+        state.save_tracking()
+    except Exception:
+        pass
+
+
+def _load_pending_kb(state, key: str) -> Any:
+    if not state or not key:
+        return None
+    try:
+        store = state.tracking.get("superintendente_pending_kb", {})
+        if isinstance(store, dict):
+            return store.get(str(key))
+    except Exception:
+        pass
+    return None
+
+
+def _is_short_confirmation(text: str) -> bool:
+    clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+    tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+    yes_words = {"ok", "okay", "okey", "si", "sí", "vale", "confirmo", "confirmar"}
+    if clean in yes_words:
+        return True
+    return 0 < len(tokens) <= 2 and all(tok in yes_words for tok in tokens)
+
+
+def _is_short_rejection(text: str) -> bool:
+    clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+    tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+    no_words = {"no", "cancelar", "cancelado", "descartar", "rechazar"}
+    if clean in no_words:
+        return True
+    return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
+
+
 def _format_wa_preview(drafts: list[dict]) -> str:
     if not drafts:
         return ""
@@ -363,6 +426,53 @@ def register_superintendente_routes(app, state) -> None:
                     state.memory_manager.set_flag(alt_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
             except Exception:
                 pass
+
+        # --------------------------------------------------------
+        # ✅ Confirmación / ajustes de KB pendientes (Chatter)
+        # --------------------------------------------------------
+        pending_kb = _load_pending_kb(state, session_key) or (alt_key and _load_pending_kb(state, alt_key))
+        if not pending_kb and alt_key:
+            pending_kb = _load_pending_kb(state, alt_key)
+
+        if pending_kb:
+            if _looks_like_new_instruction(message.lower()):
+                _persist_pending_kb(state, session_key, pending_kb)
+                if alt_key:
+                    _persist_pending_kb(state, alt_key, pending_kb)
+            else:
+                if _is_short_rejection(message):
+                    _persist_pending_kb(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_kb(state, alt_key, None)
+                    return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
+
+                kb_response = await state.interno_agent.process_kb_response(
+                    chat_id=session_key,
+                    escalation_id="",
+                    manager_response=message,
+                    topic=pending_kb.get("topic", ""),
+                    draft_content=pending_kb.get("content", ""),
+                    hotel_name=pending_kb.get("hotel_name", payload.hotel_name),
+                    superintendente_agent=state.superintendente_agent,
+                    pending_state=pending_kb,
+                    source=pending_kb.get("source", "superintendente"),
+                )
+
+                if isinstance(kb_response, (tuple, list)):
+                    kb_response = " ".join(str(x) for x in kb_response)
+                elif not isinstance(kb_response, str):
+                    kb_response = str(kb_response)
+
+                if "agregad" in kb_response.lower() or "✅" in kb_response:
+                    _persist_pending_kb(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_kb(state, alt_key, None)
+                else:
+                    _persist_pending_kb(state, session_key, pending_kb)
+                    if alt_key:
+                        _persist_pending_kb(state, alt_key, pending_kb)
+
+                return {"result": kb_response}
 
         if not auto_send_wa:
             pending_wa = state.superintendente_pending_wa.get(session_key)
@@ -571,6 +681,18 @@ def register_superintendente_routes(app, state) -> None:
             except Exception:
                 pass
             return {"result": _format_wa_preview(wa_drafts)}
+
+        kb_payload = _parse_kb_draft_marker(result)
+        if kb_payload:
+            pending_kb = {
+                **kb_payload,
+                "source": "superintendente",
+                "category": kb_payload.get("category") or "general",
+            }
+            _persist_pending_kb(state, session_key, pending_kb)
+            if alt_key:
+                _persist_pending_kb(state, alt_key, pending_kb)
+            return {"result": result}
 
         return {"result": result}
 
