@@ -866,7 +866,14 @@ def register_superintendente_routes(app, state) -> None:
                         _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
                         return {"result": _format_wa_preview(updated)}
 
-        if not pending_last and _looks_like_adjustment(message):
+        if (
+            not pending_last
+            and message
+            and not looks_like_new_instruction(message)
+            and not _is_short_wa_confirmation(message)
+            and not _is_short_wa_cancel(message)
+            and len(message.split()) <= 8
+        ):
             recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
             if not recovered:
                 try:
