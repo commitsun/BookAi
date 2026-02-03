@@ -360,6 +360,23 @@ def _resolve_guest_id_by_name(
                         if len(phones) == 1:
                             return next(iter(phones)), unique
                         return None, unique
+            # 1b) Intentar resolver con el último detalle de reserva consultado
+            last_detail = memory_manager.get_flag(chat_id, "superintendente_last_reservation_detail")
+            if isinstance(last_detail, dict):
+                client_name = (last_detail.get("partner_name") or last_detail.get("partnerName") or "").strip()
+                phone = _clean_phone(last_detail.get("partner_phone") or last_detail.get("partnerPhone") or "")
+                if client_name and phone:
+                    candidate_norm = _normalize_name(client_name)
+                    if _token_match(query_name, candidate_norm):
+                        return phone, [
+                            {
+                                "phone": phone,
+                                "client_name": client_name,
+                                "created_at": last_detail.get("checkin") or last_detail.get("checkout"),
+                                "property_id": property_id,
+                                "source": "last_detail",
+                            }
+                        ]
     except Exception:
         pass
 
@@ -1917,6 +1934,11 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
         try:
             raw_response = await consulta_tool.ainvoke(payload)
             parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
+            if memory_manager and chat_id and isinstance(parsed, dict):
+                try:
+                    memory_manager.set_flag(chat_id, "superintendente_last_reservation_detail", parsed)
+                except Exception:
+                    pass
             return json.dumps(parsed, ensure_ascii=False)
         except Exception as exc:
             log.error("Error consultando reserva por folio: %s", exc, exc_info=True)
