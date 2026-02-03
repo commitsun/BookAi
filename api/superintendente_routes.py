@@ -426,6 +426,34 @@ def _is_short_rejection(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
 
 
+def _looks_like_kb_confirmation(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    confirm_terms = {
+        "ok",
+        "vale",
+        "de acuerdo",
+        "confirmo",
+        "confirma",
+        "confirmar",
+        "guardalo",
+        "guárdalo",
+        "guardala",
+        "guárdala",
+        "agrega",
+        "agregar",
+        "añade",
+        "anade",
+        "añádelo",
+        "añadelo",
+        "añádela",
+        "añadela",
+        "guardar",
+    }
+    return any(term in low for term in confirm_terms)
+
+
 def _looks_like_adjustment(text: str) -> bool:
     if not text:
         return False
@@ -690,12 +718,14 @@ def register_superintendente_routes(app, state) -> None:
                         pending_last = None
                         pending_type = None
                     else:
+                        if action != "confirm" and _looks_like_kb_confirmation(message):
+                            action = "confirm"
                         if action == "cancel" or _is_short_rejection(message):
                             _persist_pending_kb(state, session_key, None)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, None)
-                        _pop_trailing_pending_type(state, owner_id, "kb")
-                        return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
+                            _pop_trailing_pending_type(state, owner_id, "kb")
+                            return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
 
                         kb_response = await state.interno_agent.process_kb_response(
                             chat_id=session_key,
