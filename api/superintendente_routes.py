@@ -197,21 +197,22 @@ def _parse_wa_drafts(raw_text: str) -> list[dict]:
     return drafts
 
 
-def _recover_wa_drafts_from_memory(state, session_key: str) -> list[dict]:
-    if not state or not session_key or not state.memory_manager:
-        return []
-    try:
-        recent = state.memory_manager.get_memory(session_key, limit=10)
-    except Exception:
+def _recover_wa_drafts_from_memory(state, *conversation_ids: str) -> list[dict]:
+    if not state or not state.memory_manager:
         return []
     marker = "[WA_DRAFT]|"
-    for msg in reversed(recent or []):
-        content = msg.get("content", "") or ""
-        if marker in content:
-            chunk = content[content.index(marker):]
-            parts = chunk.split("|", 2)
-            if len(parts) == 3:
-                return [{"guest_id": parts[1], "message": parts[2]}]
+    for conv_id in [cid for cid in conversation_ids if cid]:
+        try:
+            recent = state.memory_manager.get_memory(conv_id, limit=20)
+        except Exception:
+            continue
+        for msg in reversed(recent or []):
+            content = msg.get("content", "") or ""
+            if marker in content:
+                chunk = content[content.index(marker):]
+                parts = chunk.split("|", 2)
+                if len(parts) == 3:
+                    return [{"guest_id": parts[1], "message": parts[2]}]
     return []
 
 
@@ -308,9 +309,16 @@ def register_superintendente_routes(app, state) -> None:
         if not pending_wa and alt_key:
             pending_wa = state.superintendente_pending_wa.get(alt_key)
         if not pending_wa and message and not _looks_like_new_instruction(message):
-            recovered = _recover_wa_drafts_from_memory(state, session_key)
-            if not recovered and alt_key:
-                recovered = _recover_wa_drafts_from_memory(state, alt_key)
+            recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+            if not recovered:
+                try:
+                    sessions = _tracking_sessions(state).get(owner_id, {})
+                    for sid in list(sessions.keys())[-5:]:
+                        recovered = _recover_wa_drafts_from_memory(state, sid)
+                        if recovered:
+                            break
+                except Exception:
+                    recovered = []
             if recovered:
                 pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
                 state.superintendente_pending_wa[session_key] = pending_wa
