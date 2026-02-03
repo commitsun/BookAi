@@ -650,6 +650,15 @@ def register_superintendente_routes(app, state) -> None:
         if pending_last:
             pending_type = pending_last.get("type")
             action = await _classify_pending_action(message, pending_type or "")
+            if (
+                pending_type == "wa"
+                and action == "new"
+                and message
+                and not _is_short_wa_confirmation(message)
+                and not _is_short_wa_cancel(message)
+                and not looks_like_new_instruction(message)
+            ):
+                action = "adjust"
 
             if action == "new":
                 if pending_type == "wa":
