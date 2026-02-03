@@ -1749,6 +1749,50 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             else:
                 simplified = filtered
 
+            # 🔎 Enriquecer con contacto (teléfono/email) si falta en el listado general
+            if isinstance(simplified, list) and simplified:
+                consulta_persona_tool = create_consulta_reserva_persona_tool(
+                    memory_manager=memory_manager,
+                    chat_id=chat_id,
+                )
+
+                def _extract_contact(detail: Any) -> tuple[Optional[str], Optional[str]]:
+                    if not isinstance(detail, dict):
+                        return None, None
+                    phone = detail.get("partnerPhone") or detail.get("partner_phone")
+                    email = detail.get("partnerEmail") or detail.get("partner_email")
+                    partner = detail.get("partner") if isinstance(detail.get("partner"), dict) else {}
+                    if not phone and isinstance(partner, dict):
+                        phone = partner.get("phone") or partner.get("mobile")
+                    if not email and isinstance(partner, dict):
+                        email = partner.get("email")
+                    return phone, email
+
+                for item in simplified:
+                    if not isinstance(item, dict):
+                        continue
+                    if item.get("partner_phone"):
+                        continue
+                    folio_id = item.get("folio_id") or item.get("folio")
+                    if not folio_id:
+                        continue
+                    try:
+                        detail_raw = await consulta_persona_tool.ainvoke(
+                            {
+                                "folio_id": str(folio_id),
+                                "property_id": pms_property_id,
+                                "hotel_code": hotel_code,
+                            }
+                        )
+                        detail = json.loads(detail_raw) if isinstance(detail_raw, str) else detail_raw
+                        phone, email = _extract_contact(detail)
+                        if phone:
+                            item["partner_phone"] = phone
+                        if email and not item.get("partner_email"):
+                            item["partner_email"] = email
+                    except Exception as exc:
+                        log.warning("No se pudo enriquecer folio_id=%s: %s", folio_id, exc)
+
             if memory_manager and chat_id:
                 try:
                     cache_payload = {

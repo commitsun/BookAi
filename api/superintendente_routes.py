@@ -296,6 +296,13 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_id
         alt_key = owner_id if payload.session_id else None
         message = (payload.message or "").strip()
+        if state.memory_manager:
+            try:
+                state.memory_manager.set_flag(session_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
+                if alt_key:
+                    state.memory_manager.set_flag(alt_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
+            except Exception:
+                pass
 
         pending_wa = state.superintendente_pending_wa.get(session_key)
         if not pending_wa and alt_key:
@@ -428,6 +435,13 @@ def register_superintendente_routes(app, state) -> None:
                         content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                         channel="superintendente",
                     )
+                    if alt_key:
+                        state.memory_manager.save(
+                            conversation_id=alt_key,
+                            role="system",
+                            content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                            channel="superintendente",
+                        )
             except Exception:
                 pass
             return {"result": _format_wa_preview(wa_drafts)}
