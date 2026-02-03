@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import logging
+import re
 import secrets
 import string
 from datetime import datetime
@@ -12,6 +13,9 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.config import Settings
+from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
+from core.instance_context import ensure_instance_credentials
+from core.message_utils import sanitize_wa_message
 
 log = logging.getLogger("SuperintendenteRoutes")
 
@@ -95,6 +99,169 @@ def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     raise HTTPException(status_code=422, detail="owner_id requerido")
 
 
+def _normalize_guest_id(guest_id: str | None) -> str:
+    return str(guest_id or "").replace("+", "").strip()
+
+
+def _is_short_wa_confirmation(text: str) -> bool:
+    clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+    tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+    confirm_words = set(WA_CONFIRM_WORDS) | {"vale", "listo"}
+    if clean in confirm_words:
+        return True
+
+    return 0 < len(tokens) <= 2 and all(tok in confirm_words for tok in tokens)
+
+
+def _is_short_wa_cancel(text: str) -> bool:
+    clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+    tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
+
+    cancel_words = set(WA_CANCEL_WORDS) | {"cancelado", "cancelo", "cancela"}
+    if clean in cancel_words:
+        return True
+
+    return 0 < len(tokens) <= 2 and all(tok in cancel_words for tok in tokens)
+
+
+def _looks_like_new_instruction(text: str) -> bool:
+    if not text:
+        return False
+    action_terms = {
+        "mandale",
+        "mándale",
+        "enviale",
+        "envíale",
+        "manda",
+        "mensaje",
+        "whatsapp",
+        "historial",
+        "convers",
+        "broadcast",
+        "plantilla",
+        "resumen",
+        "agrega",
+        "añade",
+        "anade",
+        "elimina",
+        "borra",
+    }
+    lowered = text.lower()
+    return any(term in lowered for term in action_terms)
+
+
+def _clean_wa_payload(msg: str) -> str:
+    base = sanitize_wa_message(msg or "")
+    if not base:
+        return base
+    base = re.sub(r"\[\s*superintendente\s*\]", "", base, flags=re.IGNORECASE).strip()
+    cut_markers = [
+        "borrador",
+        "confirma",
+        "confirmar",
+        "por favor",
+        "ok para",
+        "ok p",
+        "plantilla",
+    ]
+    lower = base.lower()
+    cuts = [lower.find(m) for m in cut_markers if lower.find(m) > 0]
+    if cuts:
+        base = base[: min(cuts)].strip()
+    return base.strip()
+
+
+def _ensure_guest_language(msg: str, guest_id: str) -> str:
+    return msg
+
+
+def _parse_wa_drafts(raw_text: str) -> list[dict]:
+    if "[WA_DRAFT]|" not in (raw_text or ""):
+        return []
+    drafts: list[dict] = []
+    parts = (raw_text or "").split("[WA_DRAFT]|")
+    for chunk in parts[1:]:
+        if not chunk:
+            continue
+        subparts = chunk.split("|", 1)
+        if len(subparts) < 2:
+            continue
+        guest_id = subparts[0].strip()
+        msg = subparts[1].strip()
+        if not guest_id or not msg:
+            continue
+        msg_clean = _clean_wa_payload(msg)
+        msg_clean = _ensure_guest_language(msg_clean, guest_id)
+        drafts.append({"guest_id": guest_id, "message": msg_clean})
+    return drafts
+
+
+def _format_wa_preview(drafts: list[dict]) -> str:
+    if not drafts:
+        return ""
+    if len(drafts) == 1:
+        guest_id = drafts[0].get("guest_id")
+        msg = drafts[0].get("message", "")
+        return (
+            f"📝 Borrador WhatsApp para {guest_id}:\n"
+            f"{msg}\n\n"
+            "✏️ Escribe ajustes directamente si deseas modificarlo.\n"
+            "✅ Responde 'sí' para enviar.\n"
+            "❌ Responde 'no' para descartar."
+        )
+
+    lines = ["📝 Borradores de WhatsApp preparados:"]
+    for draft in drafts:
+        guest_id = draft.get("guest_id", "")
+        msg = draft.get("message", "")
+        lines.append(f"• {guest_id}: {msg}")
+    lines.append("")
+    lines.append("✏️ Escribe ajustes para aplicar a todos.")
+    lines.append("✅ Responde 'sí' para enviar todos.")
+    lines.append("❌ Responde 'no' para descartar.")
+    return "\n".join(lines)
+
+
+async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
+    clean_base = sanitize_wa_message(base_message or "")
+    clean_adj = sanitize_wa_message(adjustments or "")
+    if not clean_adj:
+        return clean_base
+    if not llm:
+        if clean_base and clean_adj:
+            return _clean_wa_payload(f"{clean_base}. {clean_adj}")
+        return _clean_wa_payload(clean_base or clean_adj)
+
+    system = (
+        "Eres el asistente del encargado de un hotel. "
+        "Genera un único mensaje corto de WhatsApp en español neutro, tono cordial y directo. "
+        "Incluye las ideas del mensaje base y los ajustes. "
+        "No añadas instrucciones, confirmaciones ni comillas; entrega solo el texto listo para enviar."
+    )
+    user_msg = (
+        "Mensaje base:\n"
+        f"{clean_base or 'N/A'}\n\n"
+        "Ajustes solicitados:\n"
+        f"{clean_adj}\n\n"
+        "Devuelve solo el mensaje final en una línea."
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user_msg},
+            ]
+        )
+        text = (getattr(response, "content", None) or "").strip()
+        if not text:
+            return _clean_wa_payload(clean_adj)
+        return _clean_wa_payload(text)
+    except Exception as exc:
+        log.warning("No se pudo reformular borrador WA: %s", exc)
+        return _clean_wa_payload(clean_adj or clean_base)
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -108,14 +275,110 @@ def register_superintendente_routes(app, state) -> None:
             raise HTTPException(status_code=500, detail="Superintendente no disponible")
 
         owner_id = _resolve_owner_id(payload)
+        session_key = payload.session_id or owner_id
+        message = (payload.message or "").strip()
+
+        pending_wa = state.superintendente_pending_wa.get(session_key)
+        if pending_wa and message and not _looks_like_new_instruction(message):
+            if _is_short_wa_cancel(message):
+                state.superintendente_pending_wa.pop(session_key, None)
+                return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
+
+            if _is_short_wa_confirmation(message):
+                drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
+                drafts = drafts or []
+                if not drafts:
+                    state.superintendente_pending_wa.pop(session_key, None)
+                    return {"result": "⚠️ No hay borrador pendiente para enviar."}
+
+                if state.memory_manager:
+                    try:
+                        ensure_instance_credentials(state.memory_manager, session_key)
+                    except Exception:
+                        pass
+
+                sent = 0
+                for draft in drafts:
+                    guest_id = draft.get("guest_id")
+                    msg_raw = draft.get("message", "")
+                    if not guest_id:
+                        continue
+                    msg_to_send = _clean_wa_payload(msg_raw)
+                    msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                    await state.channel_manager.send_message(
+                        guest_id,
+                        msg_to_send,
+                        channel="whatsapp",
+                        context_id=session_key,
+                    )
+                    try:
+                        if state.memory_manager:
+                            state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
+                            state.memory_manager.save(
+                                session_key,
+                                "system",
+                                f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                channel="superintendente",
+                            )
+                    except Exception:
+                        pass
+                    sent += 1
+
+                state.superintendente_pending_wa.pop(session_key, None)
+                guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
+                return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
+
+            drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
+            drafts = drafts or []
+            llm = getattr(state.superintendente_agent, "llm", None)
+            updated: list[dict] = []
+            for draft in drafts:
+                guest_id = draft.get("guest_id")
+                base_msg = draft.get("message", "")
+                rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                updated.append(
+                    {
+                        **draft,
+                        "guest_id": guest_id,
+                        "message": _ensure_guest_language(rewritten, guest_id),
+                    }
+                )
+            pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
+            state.superintendente_pending_wa[session_key] = pending_payload
+            return {"result": _format_wa_preview(updated)}
+
         result = await agent.ainvoke(
-            user_input=payload.message,
+            user_input=message,
             encargado_id=owner_id,
             hotel_name=payload.hotel_name,
             context_window=payload.context_window,
             chat_history=payload.chat_history,
             session_id=payload.session_id,
         )
+
+        wa_drafts = _parse_wa_drafts(result)
+        if wa_drafts:
+            if state.memory_manager:
+                try:
+                    ctx_property_id = state.memory_manager.get_flag(session_key, "property_id")
+                    ctx_hotel_code = state.memory_manager.get_flag(session_key, "property_name")
+                    for draft in wa_drafts:
+                        if ctx_property_id is not None:
+                            draft["property_id"] = ctx_property_id
+                        if ctx_hotel_code:
+                            draft["hotel_code"] = ctx_hotel_code
+                        guest_id = draft.get("guest_id")
+                        if guest_id:
+                            if ctx_property_id is not None:
+                                state.memory_manager.set_flag(guest_id, "property_id", ctx_property_id)
+                            if ctx_hotel_code:
+                                state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel_code)
+                except Exception:
+                    pass
+            pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]
+            state.superintendente_pending_wa[session_key] = pending_payload
+            return {"result": _format_wa_preview(wa_drafts)}
+
         return {"result": result}
 
     @router.post("/sessions")

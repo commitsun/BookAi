@@ -450,9 +450,9 @@ class SuperintendenteAgent:
             return None
 
         patterns = [
-            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:un|una)?\s*mensaje\s+que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+(.+?)\s+que\s+(.+)$",
+            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:un|una)?\s*mensaje\s+(?:de\s+)?que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
         ]
         for pattern in patterns:
             match = re.search(pattern, raw)
@@ -464,6 +464,7 @@ class SuperintendenteAgent:
             r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s*:\s*(.+)$",
             r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(?:diciendo|diciéndole)?\s*[:\-]?\s*(.+)$",
             r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(.+)$",
+            r"(?i)\b(?:dile)\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
             r"(?i)\b(?:dile)\s+a\s+(.+?)\s+(.+)$",
         ]
         for pattern in fallback_patterns:
