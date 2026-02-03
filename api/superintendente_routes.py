@@ -224,7 +224,10 @@ def _persist_pending_wa(state, key: str, payload: Any) -> None:
         if not isinstance(store, dict):
             state.tracking["superintendente_pending_wa"] = {}
             store = state.tracking["superintendente_pending_wa"]
-        store[str(key)] = payload
+        if payload is None:
+            store.pop(str(key), None)
+        else:
+            store[str(key)] = payload
         state.save_tracking()
     except Exception:
         pass
@@ -237,6 +240,35 @@ def _load_pending_wa(state, key: str) -> Any:
         store = state.tracking.get("superintendente_pending_wa", {})
         if isinstance(store, dict):
             return store.get(str(key))
+    except Exception:
+        pass
+    return None
+
+
+def _persist_last_pending_wa(state, owner_id: str, payload: Any) -> None:
+    if not state or not owner_id:
+        return
+    try:
+        store = state.tracking.setdefault("superintendente_last_pending_wa", {})
+        if not isinstance(store, dict):
+            state.tracking["superintendente_last_pending_wa"] = {}
+            store = state.tracking["superintendente_last_pending_wa"]
+        if payload is None:
+            store.pop(str(owner_id), None)
+        else:
+            store[str(owner_id)] = payload
+        state.save_tracking()
+    except Exception:
+        pass
+
+
+def _load_last_pending_wa(state, owner_id: str) -> Any:
+    if not state or not owner_id:
+        return None
+    try:
+        store = state.tracking.get("superintendente_last_pending_wa", {})
+        if isinstance(store, dict):
+            return store.get(str(owner_id))
     except Exception:
         pass
     return None
@@ -338,6 +370,8 @@ def register_superintendente_routes(app, state) -> None:
                 pending_wa = state.superintendente_pending_wa.get(alt_key)
             if not pending_wa:
                 pending_wa = _load_pending_wa(state, session_key) or (alt_key and _load_pending_wa(state, alt_key))
+            if not pending_wa:
+                pending_wa = _load_last_pending_wa(state, owner_id)
             if not pending_wa and message and not _looks_like_new_instruction(message):
                 recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
                 if not recovered:
@@ -357,6 +391,7 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, pending_wa)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, pending_wa)
+                    _persist_last_pending_wa(state, owner_id, pending_wa)
             if pending_wa and message and not _looks_like_new_instruction(message):
                 if _is_short_wa_cancel(message):
                     state.superintendente_pending_wa.pop(session_key, None)
@@ -365,6 +400,7 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, None)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
+                    _persist_last_pending_wa(state, owner_id, None)
                     return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
                 if _is_short_wa_confirmation(message):
@@ -415,6 +451,7 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, None)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
+                    _persist_last_pending_wa(state, owner_id, None)
                     guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
                     return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
 
@@ -442,6 +479,7 @@ def register_superintendente_routes(app, state) -> None:
                 _persist_pending_wa(state, session_key, pending_payload)
                 if alt_key:
                     _persist_pending_wa(state, alt_key, pending_payload)
+                _persist_last_pending_wa(state, owner_id, pending_payload)
                 return {"result": _format_wa_preview(updated)}
 
         result = await agent.ainvoke(
@@ -513,6 +551,7 @@ def register_superintendente_routes(app, state) -> None:
             _persist_pending_wa(state, session_key, pending_payload)
             if alt_key:
                 _persist_pending_wa(state, alt_key, pending_payload)
+            _persist_last_pending_wa(state, owner_id, pending_payload)
             try:
                 if state.memory_manager and wa_drafts:
                     draft = wa_drafts[0]
