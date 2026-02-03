@@ -489,9 +489,16 @@ def register_superintendente_routes(app, state) -> None:
                 pending_wa = state.superintendente_pending_wa.get(alt_key)
             if not pending_wa:
                 pending_wa = _load_pending_wa(state, session_key) or (alt_key and _load_pending_wa(state, alt_key))
-            if not pending_wa:
+
+            wants_wa_followup = (
+                _is_short_wa_confirmation(message)
+                or _is_short_wa_cancel(message)
+                or _looks_like_adjustment(message)
+            )
+            if not pending_wa and wants_wa_followup:
                 pending_wa = _load_last_pending_wa(state, owner_id)
-            if not pending_wa and message and not _looks_like_new_instruction(message):
+
+            if not pending_wa and wants_wa_followup and message and not _looks_like_new_instruction(message):
                 recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
                 if not recovered:
                     try:
