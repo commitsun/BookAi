@@ -12,7 +12,7 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
-from core.config import Settings
+from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
 from core.instance_context import ensure_instance_credentials
 from core.message_utils import sanitize_wa_message, looks_like_new_instruction
@@ -319,31 +319,44 @@ def _looks_like_adjustment(text: str) -> bool:
     if not text:
         return False
     low = text.lower()
-    adjustment_terms = {
-        "ajusta",
-        "ajuste",
-        "modifica",
-        "modifícalo",
-        "cambia",
-        "cámbialo",
-        "mejora",
-        "ponlo",
-        "ponlo mas",
-        "ponlo más",
-        "mas bonito",
-        "más bonito",
-        "mas formal",
-        "más formal",
-        "mas amable",
-        "más amable",
-        "mas corto",
-        "más corto",
-        "mas largo",
-        "más largo",
-        "reformula",
-        "refrasea",
-    }
+    adjustment_terms = {"ajusta", "modifica", "cambia", "mejora", "reformula", "refrasea"}
     return any(term in low for term in adjustment_terms)
+
+
+async def _classify_pending_action(text: str, pending_type: str) -> str:
+    """
+    Clasifica el mensaje del encargado cuando hay un borrador pendiente.
+    Devuelve: "confirm" | "cancel" | "adjust" | "new".
+    """
+    if _is_short_wa_confirmation(text):
+        return "confirm"
+    if _is_short_wa_cancel(text):
+        return "cancel"
+    if _is_short_confirmation(text):
+        return "confirm"
+    if _is_short_rejection(text):
+        return "cancel"
+
+    llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+    system = (
+        "Eres un clasificador. Solo responde con una palabra: "
+        "confirm, cancel, adjust o new.\n"
+        "Reglas: confirm=aprueba envío/guardar; cancel=descarta; "
+        "adjust=quiere cambiar el borrador; new=es una solicitud nueva."
+    )
+    user = (
+        f"Tipo de borrador pendiente: {pending_type}\n"
+        f"Mensaje del encargado: {text}\n"
+        "Respuesta:"
+    )
+    try:
+        resp = llm.invoke([{"role": "system", "content": system}, {"role": "user", "content": user}])
+        raw = (getattr(resp, "content", None) or "").strip().lower()
+        if raw in {"confirm", "cancel", "adjust", "new"}:
+            return raw
+    except Exception:
+        pass
+    return "new"
 
 
 def _format_wa_preview(drafts: list[dict]) -> str:
@@ -437,6 +450,56 @@ def register_superintendente_routes(app, state) -> None:
                 pass
 
         # --------------------------------------------------------
+        # ✅ Confirmación WA directa si el pending se perdió
+        # --------------------------------------------------------
+        if _is_short_wa_confirmation(message):
+            recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+            if not recovered:
+                try:
+                    sessions = _tracking_sessions(state).get(owner_id, {})
+                    for sid in list(sessions.keys())[-5:]:
+                        recovered = _recover_wa_drafts_from_memory(state, sid)
+                        if recovered:
+                            break
+                except Exception:
+                    recovered = []
+            if recovered:
+                if state.memory_manager:
+                    try:
+                        ensure_instance_credentials(state.memory_manager, session_key)
+                    except Exception:
+                        pass
+                sent = 0
+                for draft in recovered:
+                    guest_id = draft.get("guest_id")
+                    msg_raw = draft.get("message", "")
+                    if not guest_id:
+                        continue
+                    msg_to_send = _clean_wa_payload(msg_raw)
+                    msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                    await state.channel_manager.send_message(
+                        guest_id,
+                        msg_to_send,
+                        channel="whatsapp",
+                        context_id=session_key,
+                    )
+                    try:
+                        if state.memory_manager:
+                            state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
+                            state.memory_manager.save(
+                                session_key,
+                                "system",
+                                f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                channel="superintendente",
+                            )
+                    except Exception:
+                        pass
+                    sent += 1
+
+                guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in recovered if d.get("guest_id")])
+                return {"result": f"✅ Mensaje enviado a {sent}/{len(recovered)} huésped(es): {guest_list}"}
+
+        # --------------------------------------------------------
         # ✅ Confirmación / ajustes de KB pendientes (Chatter)
         # --------------------------------------------------------
         pending_kb = _load_pending_kb(state, session_key) or (alt_key and _load_pending_kb(state, alt_key))
@@ -444,10 +507,16 @@ def register_superintendente_routes(app, state) -> None:
             pending_kb = _load_pending_kb(state, alt_key)
 
         if pending_kb:
-            if _looks_like_new_instruction(message.lower()) and not _looks_like_adjustment(message):
+            action = await _classify_pending_action(message, "kb")
+            if action == "new":
                 _persist_pending_kb(state, session_key, None)
                 if alt_key:
                     _persist_pending_kb(state, alt_key, None)
+            elif action == "cancel":
+                _persist_pending_kb(state, session_key, None)
+                if alt_key:
+                    _persist_pending_kb(state, alt_key, None)
+                return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
             else:
                 if _is_short_rejection(message):
                     _persist_pending_kb(state, session_key, None)
@@ -472,7 +541,7 @@ def register_superintendente_routes(app, state) -> None:
                 elif not isinstance(kb_response, str):
                     kb_response = str(kb_response)
 
-                if "agregad" in kb_response.lower() or "✅" in kb_response:
+                if action == "confirm" or "agregad" in kb_response.lower() or "✅" in kb_response:
                     _persist_pending_kb(state, session_key, None)
                     if alt_key:
                         _persist_pending_kb(state, alt_key, None)
@@ -490,11 +559,8 @@ def register_superintendente_routes(app, state) -> None:
             if not pending_wa:
                 pending_wa = _load_pending_wa(state, session_key) or (alt_key and _load_pending_wa(state, alt_key))
 
-            wants_wa_followup = (
-                _is_short_wa_confirmation(message)
-                or _is_short_wa_cancel(message)
-                or _looks_like_adjustment(message)
-            )
+            action = await _classify_pending_action(message, "wa")
+            wants_wa_followup = action in {"confirm", "cancel", "adjust"}
             if not pending_wa and wants_wa_followup:
                 pending_wa = _load_last_pending_wa(state, owner_id)
             if not pending_wa and _looks_like_adjustment(message):
@@ -529,7 +595,7 @@ def register_superintendente_routes(app, state) -> None:
                     if alt_key:
                         _persist_pending_wa(state, alt_key, pending_wa)
                     _persist_last_pending_wa(state, owner_id, pending_wa)
-            if pending_wa and _looks_like_new_instruction(message) and not _looks_like_adjustment(message):
+            if pending_wa and action == "new":
                 state.superintendente_pending_wa.pop(session_key, None)
                 if alt_key:
                     state.superintendente_pending_wa.pop(alt_key, None)
@@ -540,7 +606,7 @@ def register_superintendente_routes(app, state) -> None:
                 pending_wa = None
 
             if pending_wa and message and not _looks_like_new_instruction(message):
-                if _is_short_wa_cancel(message):
+                if action == "cancel" or _is_short_wa_cancel(message):
                     state.superintendente_pending_wa.pop(session_key, None)
                     if alt_key:
                         state.superintendente_pending_wa.pop(alt_key, None)
@@ -550,7 +616,7 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_last_pending_wa(state, owner_id, None)
                     return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
-                if _is_short_wa_confirmation(message):
+                if action == "confirm" or _is_short_wa_confirmation(message):
                     drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                     drafts = drafts or []
                     if not drafts:
