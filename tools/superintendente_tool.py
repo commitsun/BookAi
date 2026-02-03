@@ -6,6 +6,7 @@ import asyncio
 import json
 import logging
 import re
+import unicodedata
 from datetime import datetime, timedelta
 from typing import Any, Optional, Callable
 
@@ -198,7 +199,15 @@ def _looks_like_phone(value: str) -> bool:
 
 
 def _normalize_name(value: str) -> str:
-    return re.sub(r"\s+", " ", str(value or "").strip().lower())
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return ""
+    # Normaliza acentos/diacríticos y elimina puntuación para mejorar coincidencias.
+    deaccented = "".join(
+        ch for ch in unicodedata.normalize("NFKD", raw) if not unicodedata.combining(ch)
+    )
+    cleaned = re.sub(r"[^a-z0-9]+", " ", deaccented)
+    return re.sub(r"\s+", " ", cleaned).strip()
 
 
 def _parse_ts(value: Any) -> float:
