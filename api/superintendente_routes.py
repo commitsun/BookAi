@@ -866,6 +866,56 @@ def register_superintendente_routes(app, state) -> None:
                         _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
                         return {"result": _format_wa_preview(updated)}
 
+        if not pending_last and _looks_like_adjustment(message):
+            recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+            if not recovered:
+                try:
+                    sessions = _tracking_sessions(state).get(owner_id, {})
+                    for sid in list(sessions.keys())[-5:]:
+                        recovered = _recover_wa_drafts_from_memory(state, sid)
+                        if recovered:
+                            break
+                except Exception:
+                    recovered = []
+            if recovered:
+                pending_payload: Any = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
+                state.superintendente_pending_wa[session_key] = pending_payload
+                if alt_key:
+                    state.superintendente_pending_wa[alt_key] = pending_payload
+                _persist_pending_wa(state, session_key, pending_payload)
+                if alt_key:
+                    _persist_pending_wa(state, alt_key, pending_payload)
+                _persist_last_pending_wa(state, owner_id, pending_payload)
+                _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+
+                drafts = pending_payload.get("drafts") if isinstance(pending_payload, dict) else [pending_payload]
+                drafts = drafts or []
+                llm = getattr(state.superintendente_agent, "llm", None)
+                updated: list[dict] = []
+                for draft in drafts:
+                    guest_id = draft.get("guest_id")
+                    base_msg = draft.get("message", "")
+                    rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                    updated.append(
+                        {
+                            **draft,
+                            "guest_id": guest_id,
+                            "message": _ensure_guest_language(rewritten, guest_id),
+                        }
+                    )
+                if updated:
+                    new_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
+                    state.superintendente_pending_wa[session_key] = new_payload
+                    if alt_key:
+                        state.superintendente_pending_wa[alt_key] = new_payload
+                    _persist_pending_wa(state, session_key, new_payload)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, new_payload)
+                    _persist_last_pending_wa(state, owner_id, new_payload)
+                    _update_last_pending_action(state, owner_id, new_payload)
+                    _record_pending_action(state, owner_id, "wa", new_payload, session_key)
+                    return {"result": _format_wa_preview(updated)}
+
         result = await agent.ainvoke(
             user_input=message,
             encargado_id=owner_id,
