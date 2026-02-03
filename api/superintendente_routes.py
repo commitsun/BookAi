@@ -197,6 +197,24 @@ def _parse_wa_drafts(raw_text: str) -> list[dict]:
     return drafts
 
 
+def _recover_wa_drafts_from_memory(state, session_key: str) -> list[dict]:
+    if not state or not session_key or not state.memory_manager:
+        return []
+    try:
+        recent = state.memory_manager.get_memory(session_key, limit=10)
+    except Exception:
+        return []
+    marker = "[WA_DRAFT]|"
+    for msg in reversed(recent or []):
+        content = msg.get("content", "") or ""
+        if marker in content:
+            chunk = content[content.index(marker):]
+            parts = chunk.split("|", 2)
+            if len(parts) == 3:
+                return [{"guest_id": parts[1], "message": parts[2]}]
+    return []
+
+
 def _format_wa_preview(drafts: list[dict]) -> str:
     if not drafts:
         return ""
@@ -276,12 +294,26 @@ def register_superintendente_routes(app, state) -> None:
 
         owner_id = _resolve_owner_id(payload)
         session_key = payload.session_id or owner_id
+        alt_key = owner_id if payload.session_id else None
         message = (payload.message or "").strip()
 
         pending_wa = state.superintendente_pending_wa.get(session_key)
+        if not pending_wa and alt_key:
+            pending_wa = state.superintendente_pending_wa.get(alt_key)
+        if not pending_wa and message and not _looks_like_new_instruction(message):
+            recovered = _recover_wa_drafts_from_memory(state, session_key)
+            if not recovered and alt_key:
+                recovered = _recover_wa_drafts_from_memory(state, alt_key)
+            if recovered:
+                pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
+                state.superintendente_pending_wa[session_key] = pending_wa
+                if alt_key:
+                    state.superintendente_pending_wa[alt_key] = pending_wa
         if pending_wa and message and not _looks_like_new_instruction(message):
             if _is_short_wa_cancel(message):
                 state.superintendente_pending_wa.pop(session_key, None)
+                if alt_key:
+                    state.superintendente_pending_wa.pop(alt_key, None)
                 return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
             if _is_short_wa_confirmation(message):
@@ -289,6 +321,8 @@ def register_superintendente_routes(app, state) -> None:
                 drafts = drafts or []
                 if not drafts:
                     state.superintendente_pending_wa.pop(session_key, None)
+                    if alt_key:
+                        state.superintendente_pending_wa.pop(alt_key, None)
                     return {"result": "⚠️ No hay borrador pendiente para enviar."}
 
                 if state.memory_manager:
@@ -325,6 +359,8 @@ def register_superintendente_routes(app, state) -> None:
                     sent += 1
 
                 state.superintendente_pending_wa.pop(session_key, None)
+                if alt_key:
+                    state.superintendente_pending_wa.pop(alt_key, None)
                 guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
                 return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
 
@@ -345,6 +381,8 @@ def register_superintendente_routes(app, state) -> None:
                 )
             pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
             state.superintendente_pending_wa[session_key] = pending_payload
+            if alt_key:
+                state.superintendente_pending_wa[alt_key] = pending_payload
             return {"result": _format_wa_preview(updated)}
 
         result = await agent.ainvoke(
@@ -377,6 +415,19 @@ def register_superintendente_routes(app, state) -> None:
                     pass
             pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]
             state.superintendente_pending_wa[session_key] = pending_payload
+            if alt_key:
+                state.superintendente_pending_wa[alt_key] = pending_payload
+            try:
+                if state.memory_manager and wa_drafts:
+                    draft = wa_drafts[0]
+                    state.memory_manager.save(
+                        conversation_id=session_key,
+                        role="system",
+                        content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                        channel="superintendente",
+                    )
+            except Exception:
+                pass
             return {"result": _format_wa_preview(wa_drafts)}
 
         return {"result": result}

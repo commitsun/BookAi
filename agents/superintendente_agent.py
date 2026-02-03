@@ -449,73 +449,21 @@ class SuperintendenteAgent:
         if not re.search(r"\b(envia|envíale|enviale|manda|mándale|mandale|dile)\b", raw, flags=re.IGNORECASE):
             return None
 
-        def _normalize_name_msg(name: str, msg: str) -> tuple[str, str]:
-            name_clean = " ".join((name or "").split())
-            msg_clean = (msg or "").strip()
-            if not name_clean:
-                return name_clean, msg_clean
-
-            # Si el nombre incluye "a <nombre>", tomar el último tramo como nombre real
-            # y pasar el prefijo como ajuste del mensaje (ej. "de manera educada").
-            if re.search(r"\s+a\s+", name_clean, flags=re.IGNORECASE):
-                parts = re.split(r"\s+a\s+", name_clean, flags=re.IGNORECASE)
-                if len(parts) > 1:
-                    candidate = parts[-1].strip()
-                    prefix = " ".join(p.strip() for p in parts[:-1] if p.strip())
-
-                    def _norm(val: str) -> str:
-                        return re.sub(r"[^\w]+", " ", (val or "").lower()).strip()
-
-                    if _norm(prefix) == _norm(candidate):
-                        prefix = ""
-                    if prefix:
-                        msg_clean = f"{prefix} {msg_clean}".strip()
-                    name_clean = candidate
-
-            # Si el nombre contiene un prefijo de instrucciones ("de manera educada a X")
-            # o una repetición del nombre ("Patricia Luna a Patricia Luna"), recorta al último tramo.
-            lowered = name_clean.lower()
-            instruction_markers = {
-                "de manera",
-                "por favor",
-                "educad",
-                "amable",
-                "amablemente",
-                "cordial",
-                "con tono",
-            }
-            if any(m in lowered for m in instruction_markers) or " a " in lowered:
-                idx = lowered.rfind(" a ")
-                if idx != -1 and idx + 3 < len(name_clean):
-                    candidate = name_clean[idx + 3 :].strip()
-                    prefix = name_clean[:idx].strip()
-
-                    def _norm(val: str) -> str:
-                        return re.sub(r"[^\w]+", " ", (val or "").lower()).strip()
-
-                    if _norm(prefix) == _norm(candidate) or any(m in _norm(prefix) for m in instruction_markers):
-                        if prefix:
-                            msg_clean = f"{prefix} {msg_clean}".strip()
-                        name_clean = candidate
-
-            return name_clean, msg_clean
-
         patterns = [
-            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:un|una)?\s*mensaje\s+(?:de\s+)?que\s+(.+)$",
-            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
+            r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+(?:un|una)?\s*mensaje\s+que\s+(.+)$",
+            r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+un\s+mensaje\s+a\s+(.+?)\s+que\s+(.+)$",
         ]
         for pattern in patterns:
             match = re.search(pattern, raw)
             if match:
                 name = match.group(1).strip()
                 msg = match.group(2).strip()
-                return _normalize_name_msg(name, msg)
+                return name, msg
         fallback_patterns = [
             r"(?i)\b(?:dile|envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s*:\s*(.+)$",
             r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(?:diciendo|diciéndole)?\s*[:\-]?\s*(.+)$",
             r"(?i)\b(?:envia(?:le)?|envíale|manda(?:le)?|mándale)\s+a\s+(.+?)\s+un\s+mensaje\s+(.+)$",
-            r"(?i)\b(?:dile)\s+a\s+(.+?)\s+(?:de\s+)?que\s+(.+)$",
             r"(?i)\b(?:dile)\s+a\s+(.+?)\s+(.+)$",
         ]
         for pattern in fallback_patterns:
@@ -523,7 +471,7 @@ class SuperintendenteAgent:
             if match:
                 name = match.group(1).strip()
                 msg = match.group(2).strip()
-                return _normalize_name_msg(name, msg)
+                return name, msg
         return None
 
     async def _create_tools(self, hotel_name: str, encargado_id: str):
