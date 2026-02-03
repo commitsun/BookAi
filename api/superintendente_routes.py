@@ -379,6 +379,8 @@ def register_superintendente_routes(app, state) -> None:
                         "message": _ensure_guest_language(rewritten, guest_id),
                     }
                 )
+            if not updated:
+                return {"result": "⚠️ No hay borrador pendiente para ajustar."}
             pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
             state.superintendente_pending_wa[session_key] = pending_payload
             if alt_key:
