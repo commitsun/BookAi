@@ -337,6 +337,37 @@ def _is_short_rejection(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
 
 
+def _looks_like_adjustment(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    adjustment_terms = {
+        "ajusta",
+        "ajuste",
+        "modifica",
+        "modifícalo",
+        "cambia",
+        "cámbialo",
+        "mejora",
+        "ponlo",
+        "ponlo mas",
+        "ponlo más",
+        "mas bonito",
+        "más bonito",
+        "mas formal",
+        "más formal",
+        "mas amable",
+        "más amable",
+        "mas corto",
+        "más corto",
+        "mas largo",
+        "más largo",
+        "reformula",
+        "refrasea",
+    }
+    return any(term in low for term in adjustment_terms)
+
+
 def _format_wa_preview(drafts: list[dict]) -> str:
     if not drafts:
         return ""
@@ -435,10 +466,10 @@ def register_superintendente_routes(app, state) -> None:
             pending_kb = _load_pending_kb(state, alt_key)
 
         if pending_kb:
-            if _looks_like_new_instruction(message.lower()):
-                _persist_pending_kb(state, session_key, pending_kb)
+            if _looks_like_new_instruction(message.lower()) and not _looks_like_adjustment(message):
+                _persist_pending_kb(state, session_key, None)
                 if alt_key:
-                    _persist_pending_kb(state, alt_key, pending_kb)
+                    _persist_pending_kb(state, alt_key, None)
             else:
                 if _is_short_rejection(message):
                     _persist_pending_kb(state, session_key, None)
@@ -502,6 +533,16 @@ def register_superintendente_routes(app, state) -> None:
                     if alt_key:
                         _persist_pending_wa(state, alt_key, pending_wa)
                     _persist_last_pending_wa(state, owner_id, pending_wa)
+            if pending_wa and _looks_like_new_instruction(message) and not _looks_like_adjustment(message):
+                state.superintendente_pending_wa.pop(session_key, None)
+                if alt_key:
+                    state.superintendente_pending_wa.pop(alt_key, None)
+                _persist_pending_wa(state, session_key, None)
+                if alt_key:
+                    _persist_pending_wa(state, alt_key, None)
+                _persist_last_pending_wa(state, owner_id, None)
+                pending_wa = None
+
             if pending_wa and message and not _looks_like_new_instruction(message):
                 if _is_short_wa_cancel(message):
                     state.superintendente_pending_wa.pop(session_key, None)
