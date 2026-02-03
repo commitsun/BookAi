@@ -139,6 +139,32 @@ def format_superintendente_message(text: str) -> str:
     return "\n".join(compact).strip()
 
 
+def looks_like_new_instruction(text: str) -> bool:
+    if not text:
+        return False
+    action_terms = {
+        "mandale",
+        "mándale",
+        "enviale",
+        "envíale",
+        "manda",
+        "mensaje",
+        "whatsapp",
+        "historial",
+        "convers",
+        "broadcast",
+        "plantilla",
+        "resumen",
+        "agrega",
+        "añade",
+        "anade",
+        "elimina",
+        "borra",
+    }
+    lowered = text.lower()
+    return any(term in lowered for term in action_terms)
+
+
 def build_kb_preview(topic: str, category: str, content: str) -> str:
     """Previsualización consistente para propuestas de KB."""
     return (

@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 from core.config import Settings
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
 from core.instance_context import ensure_instance_credentials
-from core.message_utils import sanitize_wa_message
+from core.message_utils import sanitize_wa_message, looks_like_new_instruction
 
 log = logging.getLogger("SuperintendenteRoutes")
 
@@ -126,29 +126,7 @@ def _is_short_wa_cancel(text: str) -> bool:
 
 
 def _looks_like_new_instruction(text: str) -> bool:
-    if not text:
-        return False
-    action_terms = {
-        "mandale",
-        "mándale",
-        "enviale",
-        "envíale",
-        "manda",
-        "mensaje",
-        "whatsapp",
-        "historial",
-        "convers",
-        "broadcast",
-        "plantilla",
-        "resumen",
-        "agrega",
-        "añade",
-        "anade",
-        "elimina",
-        "borra",
-    }
-    lowered = text.lower()
-    return any(term in lowered for term in action_terms)
+    return looks_like_new_instruction(text)
 
 
 def _clean_wa_payload(msg: str) -> str:
