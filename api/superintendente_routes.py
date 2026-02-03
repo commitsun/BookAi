@@ -497,6 +497,17 @@ def register_superintendente_routes(app, state) -> None:
             )
             if not pending_wa and wants_wa_followup:
                 pending_wa = _load_last_pending_wa(state, owner_id)
+            if not pending_wa and _looks_like_adjustment(message):
+                recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+                if recovered:
+                    pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
+                    state.superintendente_pending_wa[session_key] = pending_wa
+                    if alt_key:
+                        state.superintendente_pending_wa[alt_key] = pending_wa
+                    _persist_pending_wa(state, session_key, pending_wa)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, pending_wa)
+                    _persist_last_pending_wa(state, owner_id, pending_wa)
 
             if not pending_wa and wants_wa_followup and message and not _looks_like_new_instruction(message):
                 recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)

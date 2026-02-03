@@ -121,7 +121,11 @@ class SuperintendenteAgent:
 
             log.info("SuperintendenteAgent ainvoke: %s", convo_id)
 
-            fast_draft = await self._try_direct_whatsapp_draft(user_input, encargado_id)
+            fast_draft = await self._try_direct_whatsapp_draft(
+                user_input,
+                encargado_id,
+                session_id=active_session_id,
+            )
             if fast_draft:
                 await self._safe_call(
                     getattr(self.memory_manager, "save", None),
@@ -279,7 +283,12 @@ class SuperintendenteAgent:
             log.error("Error en SuperintendenteAgent: %s", exc, exc_info=True)
             raise
 
-    async def _try_direct_whatsapp_draft(self, user_input: str, encargado_id: str) -> Optional[str]:
+    async def _try_direct_whatsapp_draft(
+        self,
+        user_input: str,
+        encargado_id: str,
+        session_id: Optional[str] = None,
+    ) -> Optional[str]:
         clean_input = user_input.strip()
         if clean_input.lower().startswith("/super"):
             clean_input = clean_input.split(" ", 1)[1].strip() if " " in clean_input else ""
@@ -309,24 +318,38 @@ class SuperintendenteAgent:
         if _looks_like_phone(guest_label):
             guest_id = _clean_phone(guest_label)
         else:
-            guest_id, candidates = _resolve_guest_id_by_name(
-                guest_label,
-                property_id=property_id,
-                memory_manager=self.memory_manager,
-                chat_id=encargado_id,
-            )
+            guest_id = None
+            candidates: list[dict] = []
+            chat_candidates = []
+            if session_id:
+                chat_candidates.append(session_id)
+            if encargado_id and encargado_id not in chat_candidates:
+                chat_candidates.append(encargado_id)
+
+            for cid in chat_candidates:
+                guest_id, candidates = _resolve_guest_id_by_name(
+                    guest_label,
+                    property_id=property_id,
+                    memory_manager=self.memory_manager,
+                    chat_id=cid,
+                )
+                if guest_id:
+                    break
             if not guest_id:
                 # Fallback: reintenta con extracción LLM si el nombre estaba contaminado por instrucciones.
                 parsed_llm = await self._extract_send_intent_llm(clean_input)
                 if parsed_llm:
                     llm_guest, llm_message = parsed_llm
                     if llm_guest and llm_guest.strip() != guest_label:
-                        guest_id, candidates = _resolve_guest_id_by_name(
-                            llm_guest,
-                            property_id=property_id,
-                            memory_manager=self.memory_manager,
-                            chat_id=encargado_id,
-                        )
+                        for cid in chat_candidates or [encargado_id]:
+                            guest_id, candidates = _resolve_guest_id_by_name(
+                                llm_guest,
+                                property_id=property_id,
+                                memory_manager=self.memory_manager,
+                                chat_id=cid,
+                            )
+                            if guest_id:
+                                break
                         if guest_id and llm_message:
                             message = llm_message
                 if candidates:
