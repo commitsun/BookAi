@@ -462,6 +462,15 @@ def _looks_like_adjustment(text: str) -> bool:
     return any(term in low for term in adjustment_terms)
 
 
+def _looks_like_send_confirmation(text: str) -> bool:
+    if not text:
+        return False
+    low = text.lower()
+    send_terms = {"envia", "envía", "enviale", "envíale", "manda", "mandale", "mándale", "enviar"}
+    confirm_hints = {"este", "último", "ultimo", "mensaje", "envialo", "envíalo", "mandalo", "mándalo"}
+    return any(t in low for t in send_terms) and any(t in low for t in confirm_hints)
+
+
 async def _classify_pending_action(text: str, pending_type: str) -> str:
     """
     Clasifica el mensaje del encargado cuando hay un borrador pendiente.
@@ -687,6 +696,8 @@ def register_superintendente_routes(app, state) -> None:
                 and not looks_like_new_instruction(message)
             ):
                 action = "adjust"
+            if pending_type == "wa" and action == "new" and _looks_like_send_confirmation(message):
+                action = "confirm"
 
             if action == "new":
                 if pending_type == "wa":
