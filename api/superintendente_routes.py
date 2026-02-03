@@ -390,6 +390,24 @@ def _pop_last_pending_action(state, owner_id: str) -> None:
         pass
 
 
+def _pop_trailing_pending_type(state, owner_id: str, action_type: str) -> None:
+    if not state or not owner_id or not action_type:
+        return
+    try:
+        store = state.tracking.get("superintendente_pending_stack", {})
+        if not isinstance(store, dict):
+            return
+        stack = store.get(str(owner_id)) or []
+        if not isinstance(stack, list) or not stack:
+            return
+        while stack and stack[-1].get("type") == action_type:
+            stack.pop()
+        store[str(owner_id)] = stack
+        state.save_tracking()
+    except Exception:
+        pass
+
+
 def _is_short_confirmation(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -642,11 +660,16 @@ def register_superintendente_routes(app, state) -> None:
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
                     _persist_last_pending_wa(state, owner_id, None)
+                    _pop_trailing_pending_type(state, owner_id, "wa")
                 elif pending_type == "kb":
                     _persist_pending_kb(state, session_key, None)
                     if alt_key:
                         _persist_pending_kb(state, alt_key, None)
-                _pop_last_pending_action(state, owner_id)
+                    _pop_trailing_pending_type(state, owner_id, "kb")
+                elif pending_type == "kb_remove":
+                    _pop_trailing_pending_type(state, owner_id, "kb_remove")
+                else:
+                    _pop_last_pending_action(state, owner_id)
             else:
                 if pending_type == "kb":
                     pending_kb = pending_last.get("payload") or _load_pending_kb(state, session_key)
@@ -662,8 +685,8 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_kb(state, session_key, None)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, None)
-                            _pop_last_pending_action(state, owner_id)
-                            return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
+                        _pop_trailing_pending_type(state, owner_id, "kb")
+                        return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
 
                         kb_response = await state.interno_agent.process_kb_response(
                             chat_id=session_key,
@@ -686,7 +709,7 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_kb(state, session_key, None)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, None)
-                            _pop_last_pending_action(state, owner_id)
+                            _pop_trailing_pending_type(state, owner_id, "kb")
                         else:
                             _persist_pending_kb(state, session_key, pending_kb)
                             if alt_key:
@@ -705,7 +728,7 @@ def register_superintendente_routes(app, state) -> None:
                         pending_type = None
                     else:
                         if action == "cancel" or _is_short_rejection(message):
-                            _pop_last_pending_action(state, owner_id)
+                            _pop_trailing_pending_type(state, owner_id, "kb_remove")
                             return {"result": "✓ Eliminación cancelada."}
                         if action == "adjust":
                             return {
@@ -723,7 +746,7 @@ def register_superintendente_routes(app, state) -> None:
                             note=note,
                             criteria=criteria,
                         )
-                        _pop_last_pending_action(state, owner_id)
+                        _pop_trailing_pending_type(state, owner_id, "kb_remove")
                         msg = result_obj.get("message") if isinstance(result_obj, dict) else None
                         return {"result": msg or "✅ Eliminación completada."}
 
@@ -749,7 +772,7 @@ def register_superintendente_routes(app, state) -> None:
                             if alt_key:
                                 _persist_pending_wa(state, alt_key, None)
                             _persist_last_pending_wa(state, owner_id, None)
-                            _pop_last_pending_action(state, owner_id)
+                            _pop_trailing_pending_type(state, owner_id, "wa")
                             return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
                         if action == "confirm" or _is_short_wa_confirmation(message):
@@ -799,7 +822,7 @@ def register_superintendente_routes(app, state) -> None:
                             if alt_key:
                                 _persist_pending_wa(state, alt_key, None)
                             _persist_last_pending_wa(state, owner_id, None)
-                            _pop_last_pending_action(state, owner_id)
+                            _pop_trailing_pending_type(state, owner_id, "wa")
                             guest_list = ", ".join(
                                 [_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")]
                             )
