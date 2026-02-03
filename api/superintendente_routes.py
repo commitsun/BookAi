@@ -216,6 +216,32 @@ def _recover_wa_drafts_from_memory(state, *conversation_ids: str) -> list[dict]:
     return []
 
 
+def _persist_pending_wa(state, key: str, payload: Any) -> None:
+    if not state or not key:
+        return
+    try:
+        store = state.tracking.setdefault("superintendente_pending_wa", {})
+        if not isinstance(store, dict):
+            state.tracking["superintendente_pending_wa"] = {}
+            store = state.tracking["superintendente_pending_wa"]
+        store[str(key)] = payload
+        state.save_tracking()
+    except Exception:
+        pass
+
+
+def _load_pending_wa(state, key: str) -> Any:
+    if not state or not key:
+        return None
+    try:
+        store = state.tracking.get("superintendente_pending_wa", {})
+        if isinstance(store, dict):
+            return store.get(str(key))
+    except Exception:
+        pass
+    return None
+
+
 def _format_wa_preview(drafts: list[dict]) -> str:
     if not drafts:
         return ""
@@ -297,6 +323,7 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_id
         alt_key = owner_id if payload.session_id else None
         message = (payload.message or "").strip()
+        auto_send_wa = False  # En Chatter mantenemos borrador + confirmación.
         if state.memory_manager:
             try:
                 state.memory_manager.set_flag(session_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
@@ -305,49 +332,137 @@ def register_superintendente_routes(app, state) -> None:
             except Exception:
                 pass
 
-        pending_wa = state.superintendente_pending_wa.get(session_key)
-        if not pending_wa and alt_key:
-            pending_wa = state.superintendente_pending_wa.get(alt_key)
-        if not pending_wa and message and not _looks_like_new_instruction(message):
-            recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
-            if not recovered:
-                try:
-                    sessions = _tracking_sessions(state).get(owner_id, {})
-                    for sid in list(sessions.keys())[-5:]:
-                        recovered = _recover_wa_drafts_from_memory(state, sid)
-                        if recovered:
-                            break
-                except Exception:
-                    recovered = []
-            if recovered:
-                pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
-                state.superintendente_pending_wa[session_key] = pending_wa
-                if alt_key:
-                    state.superintendente_pending_wa[alt_key] = pending_wa
-        if pending_wa and message and not _looks_like_new_instruction(message):
-            if _is_short_wa_cancel(message):
-                state.superintendente_pending_wa.pop(session_key, None)
-                if alt_key:
-                    state.superintendente_pending_wa.pop(alt_key, None)
-                return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
-
-            if _is_short_wa_confirmation(message):
-                drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
-                drafts = drafts or []
-                if not drafts:
+        if not auto_send_wa:
+            pending_wa = state.superintendente_pending_wa.get(session_key)
+            if not pending_wa and alt_key:
+                pending_wa = state.superintendente_pending_wa.get(alt_key)
+            if not pending_wa:
+                pending_wa = _load_pending_wa(state, session_key) or (alt_key and _load_pending_wa(state, alt_key))
+            if not pending_wa and message and not _looks_like_new_instruction(message):
+                recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
+                if not recovered:
+                    try:
+                        sessions = _tracking_sessions(state).get(owner_id, {})
+                        for sid in list(sessions.keys())[-5:]:
+                            recovered = _recover_wa_drafts_from_memory(state, sid)
+                            if recovered:
+                                break
+                    except Exception:
+                        recovered = []
+                if recovered:
+                    pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
+                    state.superintendente_pending_wa[session_key] = pending_wa
+                    if alt_key:
+                        state.superintendente_pending_wa[alt_key] = pending_wa
+                    _persist_pending_wa(state, session_key, pending_wa)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, pending_wa)
+            if pending_wa and message and not _looks_like_new_instruction(message):
+                if _is_short_wa_cancel(message):
                     state.superintendente_pending_wa.pop(session_key, None)
                     if alt_key:
                         state.superintendente_pending_wa.pop(alt_key, None)
-                    return {"result": "⚠️ No hay borrador pendiente para enviar."}
+                    _persist_pending_wa(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, None)
+                    return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
+                if _is_short_wa_confirmation(message):
+                    drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
+                    drafts = drafts or []
+                    if not drafts:
+                        state.superintendente_pending_wa.pop(session_key, None)
+                        if alt_key:
+                            state.superintendente_pending_wa.pop(alt_key, None)
+                        return {"result": "⚠️ No hay borrador pendiente para enviar."}
+
+                    if state.memory_manager:
+                        try:
+                            ensure_instance_credentials(state.memory_manager, session_key)
+                        except Exception:
+                            pass
+
+                    sent = 0
+                    for draft in drafts:
+                        guest_id = draft.get("guest_id")
+                        msg_raw = draft.get("message", "")
+                        if not guest_id:
+                            continue
+                        msg_to_send = _clean_wa_payload(msg_raw)
+                        msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                        await state.channel_manager.send_message(
+                            guest_id,
+                            msg_to_send,
+                            channel="whatsapp",
+                            context_id=session_key,
+                        )
+                        try:
+                            if state.memory_manager:
+                                state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
+                                state.memory_manager.save(
+                                    session_key,
+                                    "system",
+                                    f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                    channel="superintendente",
+                                )
+                        except Exception:
+                            pass
+                        sent += 1
+
+                    state.superintendente_pending_wa.pop(session_key, None)
+                    if alt_key:
+                        state.superintendente_pending_wa.pop(alt_key, None)
+                    _persist_pending_wa(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, None)
+                    guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
+                    return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
+
+                drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
+                drafts = drafts or []
+                llm = getattr(state.superintendente_agent, "llm", None)
+                updated: list[dict] = []
+                for draft in drafts:
+                    guest_id = draft.get("guest_id")
+                    base_msg = draft.get("message", "")
+                    rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                    updated.append(
+                        {
+                            **draft,
+                            "guest_id": guest_id,
+                            "message": _ensure_guest_language(rewritten, guest_id),
+                        }
+                    )
+                if not updated:
+                    return {"result": "⚠️ No hay borrador pendiente para ajustar."}
+                pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
+                state.superintendente_pending_wa[session_key] = pending_payload
+                if alt_key:
+                    state.superintendente_pending_wa[alt_key] = pending_payload
+                _persist_pending_wa(state, session_key, pending_payload)
+                if alt_key:
+                    _persist_pending_wa(state, alt_key, pending_payload)
+                return {"result": _format_wa_preview(updated)}
+
+        result = await agent.ainvoke(
+            user_input=message,
+            encargado_id=owner_id,
+            hotel_name=payload.hotel_name,
+            context_window=payload.context_window,
+            chat_history=payload.chat_history,
+            session_id=payload.session_id,
+        )
+
+        wa_drafts = _parse_wa_drafts(result)
+        if wa_drafts:
+            if auto_send_wa:
                 if state.memory_manager:
                     try:
                         ensure_instance_credentials(state.memory_manager, session_key)
                     except Exception:
                         pass
-
                 sent = 0
-                for draft in drafts:
+                for draft in wa_drafts:
                     guest_id = draft.get("guest_id")
                     msg_raw = draft.get("message", "")
                     if not guest_id:
@@ -372,47 +487,8 @@ def register_superintendente_routes(app, state) -> None:
                     except Exception:
                         pass
                     sent += 1
-
-                state.superintendente_pending_wa.pop(session_key, None)
-                if alt_key:
-                    state.superintendente_pending_wa.pop(alt_key, None)
-                guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
-                return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
-
-            drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
-            drafts = drafts or []
-            llm = getattr(state.superintendente_agent, "llm", None)
-            updated: list[dict] = []
-            for draft in drafts:
-                guest_id = draft.get("guest_id")
-                base_msg = draft.get("message", "")
-                rewritten = await _rewrite_wa_draft(llm, base_msg, message)
-                updated.append(
-                    {
-                        **draft,
-                        "guest_id": guest_id,
-                        "message": _ensure_guest_language(rewritten, guest_id),
-                    }
-                )
-            if not updated:
-                return {"result": "⚠️ No hay borrador pendiente para ajustar."}
-            pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
-            state.superintendente_pending_wa[session_key] = pending_payload
-            if alt_key:
-                state.superintendente_pending_wa[alt_key] = pending_payload
-            return {"result": _format_wa_preview(updated)}
-
-        result = await agent.ainvoke(
-            user_input=message,
-            encargado_id=owner_id,
-            hotel_name=payload.hotel_name,
-            context_window=payload.context_window,
-            chat_history=payload.chat_history,
-            session_id=payload.session_id,
-        )
-
-        wa_drafts = _parse_wa_drafts(result)
-        if wa_drafts:
+                guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in wa_drafts if d.get("guest_id")])
+                return {"result": f"✅ Mensaje enviado a {sent}/{len(wa_drafts)} huésped(es): {guest_list}"}
             if state.memory_manager:
                 try:
                     ctx_property_id = state.memory_manager.get_flag(session_key, "property_id")
@@ -434,6 +510,9 @@ def register_superintendente_routes(app, state) -> None:
             state.superintendente_pending_wa[session_key] = pending_payload
             if alt_key:
                 state.superintendente_pending_wa[alt_key] = pending_payload
+            _persist_pending_wa(state, session_key, pending_payload)
+            if alt_key:
+                _persist_pending_wa(state, alt_key, pending_payload)
             try:
                 if state.memory_manager and wa_drafts:
                     draft = wa_drafts[0]
