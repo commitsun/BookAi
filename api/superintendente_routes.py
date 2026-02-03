@@ -598,6 +598,39 @@ def register_superintendente_routes(app, state) -> None:
         # --------------------------------------------------------
         if pending_last:
             pending_type = pending_last.get("type")
+            pending_payload = pending_last.get("payload")
+            if not pending_payload:
+                if pending_type == "wa":
+                    state.superintendente_pending_wa.pop(session_key, None)
+                    if alt_key:
+                        state.superintendente_pending_wa.pop(alt_key, None)
+                    _persist_pending_wa(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, None)
+                    _persist_last_pending_wa(state, owner_id, None)
+                elif pending_type == "kb":
+                    _persist_pending_kb(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_kb(state, alt_key, None)
+                _pop_last_pending_action(state, owner_id)
+                pending_last = None
+            if pending_last and looks_like_new_instruction(message) and not _looks_like_adjustment(message):
+                if pending_type == "wa":
+                    state.superintendente_pending_wa.pop(session_key, None)
+                    if alt_key:
+                        state.superintendente_pending_wa.pop(alt_key, None)
+                    _persist_pending_wa(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_wa(state, alt_key, None)
+                    _persist_last_pending_wa(state, owner_id, None)
+                elif pending_type == "kb":
+                    _persist_pending_kb(state, session_key, None)
+                    if alt_key:
+                        _persist_pending_kb(state, alt_key, None)
+                _pop_last_pending_action(state, owner_id)
+                pending_last = None
+        if pending_last:
+            pending_type = pending_last.get("type")
             action = await _classify_pending_action(message, pending_type or "")
 
             if action == "new":
@@ -622,71 +655,77 @@ def register_superintendente_routes(app, state) -> None:
 
                     if not pending_kb:
                         _pop_last_pending_action(state, owner_id)
-                        return {"result": "⚠️ No hay borrador pendiente para ajustar."}
-
-                    if action == "cancel" or _is_short_rejection(message):
-                        _persist_pending_kb(state, session_key, None)
-                        if alt_key:
-                            _persist_pending_kb(state, alt_key, None)
-                        _pop_last_pending_action(state, owner_id)
-                        return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
-
-                    kb_response = await state.interno_agent.process_kb_response(
-                        chat_id=session_key,
-                        escalation_id="",
-                        manager_response=message,
-                        topic=pending_kb.get("topic", ""),
-                        draft_content=pending_kb.get("content", ""),
-                        hotel_name=pending_kb.get("hotel_name", payload.hotel_name),
-                        superintendente_agent=state.superintendente_agent,
-                        pending_state=pending_kb,
-                        source=pending_kb.get("source", "superintendente"),
-                    )
-
-                    if isinstance(kb_response, (tuple, list)):
-                        kb_response = " ".join(str(x) for x in kb_response)
-                    elif not isinstance(kb_response, str):
-                        kb_response = str(kb_response)
-
-                    if action == "confirm" or "agregad" in kb_response.lower() or "✅" in kb_response:
-                        _persist_pending_kb(state, session_key, None)
-                        if alt_key:
-                            _persist_pending_kb(state, alt_key, None)
-                        _pop_last_pending_action(state, owner_id)
+                        pending_last = None
+                        pending_type = None
                     else:
-                        _persist_pending_kb(state, session_key, pending_kb)
-                        if alt_key:
-                            _persist_pending_kb(state, alt_key, pending_kb)
-                        _update_last_pending_action(state, owner_id, pending_kb)
+                        if action == "cancel" or _is_short_rejection(message):
+                            _persist_pending_kb(state, session_key, None)
+                            if alt_key:
+                                _persist_pending_kb(state, alt_key, None)
+                            _pop_last_pending_action(state, owner_id)
+                            return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
 
-                    return {"result": kb_response}
+                        kb_response = await state.interno_agent.process_kb_response(
+                            chat_id=session_key,
+                            escalation_id="",
+                            manager_response=message,
+                            topic=pending_kb.get("topic", ""),
+                            draft_content=pending_kb.get("content", ""),
+                            hotel_name=pending_kb.get("hotel_name", payload.hotel_name),
+                            superintendente_agent=state.superintendente_agent,
+                            pending_state=pending_kb,
+                            source=pending_kb.get("source", "superintendente"),
+                        )
+
+                        if isinstance(kb_response, (tuple, list)):
+                            kb_response = " ".join(str(x) for x in kb_response)
+                        elif not isinstance(kb_response, str):
+                            kb_response = str(kb_response)
+
+                        if action == "confirm" or "agregad" in kb_response.lower() or "✅" in kb_response:
+                            _persist_pending_kb(state, session_key, None)
+                            if alt_key:
+                                _persist_pending_kb(state, alt_key, None)
+                            _pop_last_pending_action(state, owner_id)
+                        else:
+                            _persist_pending_kb(state, session_key, pending_kb)
+                            if alt_key:
+                                _persist_pending_kb(state, alt_key, pending_kb)
+                            _update_last_pending_action(state, owner_id, pending_kb)
+
+                        return {"result": kb_response}
 
                 if pending_type == "kb_remove":
                     pending_remove = pending_last.get("payload") or {}
                     hotel_name = pending_remove.get("hotel_name") or payload.hotel_name
                     remove_payload = pending_remove.get("payload") if isinstance(pending_remove, dict) else {}
-                    if action == "cancel" or _is_short_rejection(message):
+                    if not remove_payload:
                         _pop_last_pending_action(state, owner_id)
-                        return {"result": "✓ Eliminación cancelada."}
-                    if action == "adjust":
-                        return {
-                            "result": (
-                                "Indica qué registros quieres conservar o ajusta el criterio para refinar la eliminación."
-                            )
-                        }
-                    target_ids = remove_payload.get("target_ids") or []
-                    criteria = remove_payload.get("criteria") or ""
-                    note = remove_payload.get("note") or ""
-                    result_obj = await state.superintendente_agent.handle_kb_removal(
-                        target_ids=target_ids,
-                        hotel_name=hotel_name,
-                        encargado_id=owner_id,
-                        note=note,
-                        criteria=criteria,
-                    )
-                    _pop_last_pending_action(state, owner_id)
-                    msg = result_obj.get("message") if isinstance(result_obj, dict) else None
-                    return {"result": msg or "✅ Eliminación completada."}
+                        pending_last = None
+                        pending_type = None
+                    else:
+                        if action == "cancel" or _is_short_rejection(message):
+                            _pop_last_pending_action(state, owner_id)
+                            return {"result": "✓ Eliminación cancelada."}
+                        if action == "adjust":
+                            return {
+                                "result": (
+                                    "Indica qué registros quieres conservar o ajusta el criterio para refinar la eliminación."
+                                )
+                            }
+                        target_ids = remove_payload.get("target_ids") or []
+                        criteria = remove_payload.get("criteria") or ""
+                        note = remove_payload.get("note") or ""
+                        result_obj = await state.superintendente_agent.handle_kb_removal(
+                            target_ids=target_ids,
+                            hotel_name=hotel_name,
+                            encargado_id=owner_id,
+                            note=note,
+                            criteria=criteria,
+                        )
+                        _pop_last_pending_action(state, owner_id)
+                        msg = result_obj.get("message") if isinstance(result_obj, dict) else None
+                        return {"result": msg or "✅ Eliminación completada."}
 
                 if pending_type == "wa":
                     pending_wa = pending_last.get("payload")
@@ -699,97 +738,101 @@ def register_superintendente_routes(app, state) -> None:
 
                     if not pending_wa:
                         _pop_last_pending_action(state, owner_id)
-                        return {"result": "⚠️ No hay borrador pendiente para ajustar."}
+                        pending_last = None
+                        pending_type = None
+                    else:
+                        if action == "cancel" or _is_short_wa_cancel(message):
+                            state.superintendente_pending_wa.pop(session_key, None)
+                            if alt_key:
+                                state.superintendente_pending_wa.pop(alt_key, None)
+                            _persist_pending_wa(state, session_key, None)
+                            if alt_key:
+                                _persist_pending_wa(state, alt_key, None)
+                            _persist_last_pending_wa(state, owner_id, None)
+                            _pop_last_pending_action(state, owner_id)
+                            return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
-                    if action == "cancel" or _is_short_wa_cancel(message):
-                        state.superintendente_pending_wa.pop(session_key, None)
-                        if alt_key:
-                            state.superintendente_pending_wa.pop(alt_key, None)
-                        _persist_pending_wa(state, session_key, None)
-                        if alt_key:
-                            _persist_pending_wa(state, alt_key, None)
-                        _persist_last_pending_wa(state, owner_id, None)
-                        _pop_last_pending_action(state, owner_id)
-                        return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
+                        if action == "confirm" or _is_short_wa_confirmation(message):
+                            drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
+                            drafts = drafts or []
+                            if not drafts:
+                                _pop_last_pending_action(state, owner_id)
+                                return {"result": "⚠️ No hay borrador pendiente para enviar."}
 
-                    if action == "confirm" or _is_short_wa_confirmation(message):
+                            if state.memory_manager:
+                                try:
+                                    ensure_instance_credentials(state.memory_manager, session_key)
+                                except Exception:
+                                    pass
+
+                            sent = 0
+                            for draft in drafts:
+                                guest_id = draft.get("guest_id")
+                                msg_raw = draft.get("message", "")
+                                if not guest_id:
+                                    continue
+                                msg_to_send = _clean_wa_payload(msg_raw)
+                                msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                                await state.channel_manager.send_message(
+                                    guest_id,
+                                    msg_to_send,
+                                    channel="whatsapp",
+                                    context_id=session_key,
+                                )
+                                try:
+                                    if state.memory_manager:
+                                        state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
+                                        state.memory_manager.save(
+                                            session_key,
+                                            "system",
+                                            f"[WA_SENT]|{guest_id}|{msg_to_send}",
+                                            channel="superintendente",
+                                        )
+                                except Exception:
+                                    pass
+                                sent += 1
+
+                            state.superintendente_pending_wa.pop(session_key, None)
+                            if alt_key:
+                                state.superintendente_pending_wa.pop(alt_key, None)
+                            _persist_pending_wa(state, session_key, None)
+                            if alt_key:
+                                _persist_pending_wa(state, alt_key, None)
+                            _persist_last_pending_wa(state, owner_id, None)
+                            _pop_last_pending_action(state, owner_id)
+                            guest_list = ", ".join(
+                                [_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")]
+                            )
+                            return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
+
                         drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                         drafts = drafts or []
-                        if not drafts:
-                            _pop_last_pending_action(state, owner_id)
-                            return {"result": "⚠️ No hay borrador pendiente para enviar."}
-
-                        if state.memory_manager:
-                            try:
-                                ensure_instance_credentials(state.memory_manager, session_key)
-                            except Exception:
-                                pass
-
-                        sent = 0
+                        llm = getattr(state.superintendente_agent, "llm", None)
+                        updated: list[dict] = []
                         for draft in drafts:
                             guest_id = draft.get("guest_id")
-                            msg_raw = draft.get("message", "")
-                            if not guest_id:
-                                continue
-                            msg_to_send = _clean_wa_payload(msg_raw)
-                            msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
-                            await state.channel_manager.send_message(
-                                guest_id,
-                                msg_to_send,
-                                channel="whatsapp",
-                                context_id=session_key,
+                            base_msg = draft.get("message", "")
+                            rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                            updated.append(
+                                {
+                                    **draft,
+                                    "guest_id": guest_id,
+                                    "message": _ensure_guest_language(rewritten, guest_id),
+                                }
                             )
-                            try:
-                                if state.memory_manager:
-                                    state.memory_manager.save(guest_id, "assistant", msg_to_send, channel="whatsapp")
-                                    state.memory_manager.save(
-                                        session_key,
-                                        "system",
-                                        f"[WA_SENT]|{guest_id}|{msg_to_send}",
-                                        channel="superintendente",
-                                    )
-                            except Exception:
-                                pass
-                            sent += 1
-
-                        state.superintendente_pending_wa.pop(session_key, None)
+                        if not updated:
+                            return {"result": "⚠️ No hay borrador pendiente para ajustar."}
+                        pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
+                        state.superintendente_pending_wa[session_key] = pending_payload
                         if alt_key:
-                            state.superintendente_pending_wa.pop(alt_key, None)
-                        _persist_pending_wa(state, session_key, None)
+                            state.superintendente_pending_wa[alt_key] = pending_payload
+                        _persist_pending_wa(state, session_key, pending_payload)
                         if alt_key:
-                            _persist_pending_wa(state, alt_key, None)
-                        _persist_last_pending_wa(state, owner_id, None)
-                        _pop_last_pending_action(state, owner_id)
-                        guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")])
-                        return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
-
-                    drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
-                    drafts = drafts or []
-                    llm = getattr(state.superintendente_agent, "llm", None)
-                    updated: list[dict] = []
-                    for draft in drafts:
-                        guest_id = draft.get("guest_id")
-                        base_msg = draft.get("message", "")
-                        rewritten = await _rewrite_wa_draft(llm, base_msg, message)
-                        updated.append(
-                            {
-                                **draft,
-                                "guest_id": guest_id,
-                                "message": _ensure_guest_language(rewritten, guest_id),
-                            }
-                        )
-                    if not updated:
-                        return {"result": "⚠️ No hay borrador pendiente para ajustar."}
-                    pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
-                    state.superintendente_pending_wa[session_key] = pending_payload
-                    if alt_key:
-                        state.superintendente_pending_wa[alt_key] = pending_payload
-                    _persist_pending_wa(state, session_key, pending_payload)
-                    if alt_key:
-                        _persist_pending_wa(state, alt_key, pending_payload)
-                    _persist_last_pending_wa(state, owner_id, pending_payload)
-                    _update_last_pending_action(state, owner_id, pending_payload)
-                    return {"result": _format_wa_preview(updated)}
+                            _persist_pending_wa(state, alt_key, pending_payload)
+                        _persist_last_pending_wa(state, owner_id, pending_payload)
+                        _update_last_pending_action(state, owner_id, pending_payload)
+                        _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+                        return {"result": _format_wa_preview(updated)}
 
         result = await agent.ainvoke(
             user_input=message,
