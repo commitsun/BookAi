@@ -921,6 +921,24 @@ def register_superintendente_routes(app, state) -> None:
                         _persist_last_pending_wa(state, owner_id, pending_payload)
                         _update_last_pending_action(state, owner_id, pending_payload)
                         _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+                        try:
+                            if state.memory_manager and updated:
+                                draft = updated[0]
+                                state.memory_manager.save(
+                                    conversation_id=session_key,
+                                    role="system",
+                                    content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                    channel="superintendente",
+                                )
+                                if alt_key:
+                                    state.memory_manager.save(
+                                        conversation_id=alt_key,
+                                        role="system",
+                                        content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                        channel="superintendente",
+                                    )
+                        except Exception:
+                            pass
                         return {"result": _format_wa_preview(updated)}
 
         if (
@@ -978,6 +996,24 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_last_pending_wa(state, owner_id, new_payload)
                     _update_last_pending_action(state, owner_id, new_payload)
                     _record_pending_action(state, owner_id, "wa", new_payload, session_key)
+                    try:
+                        if state.memory_manager and updated:
+                            draft = updated[0]
+                            state.memory_manager.save(
+                                conversation_id=session_key,
+                                role="system",
+                                content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                channel="superintendente",
+                            )
+                            if alt_key:
+                                state.memory_manager.save(
+                                    conversation_id=alt_key,
+                                    role="system",
+                                    content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
+                                    channel="superintendente",
+                                )
+                    except Exception:
+                        pass
                     return {"result": _format_wa_preview(updated)}
 
         result = await agent.ainvoke(
