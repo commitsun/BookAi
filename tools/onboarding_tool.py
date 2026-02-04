@@ -62,12 +62,20 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
     if payload is None:
         return None
 
+    def _as_digits(val: Any) -> Optional[str]:
+        if isinstance(val, (int, float)) and int(val) == val:
+            return str(int(val))
+        if isinstance(val, str):
+            m = re.search(r"\b(\d{4,})\b", val)
+            return m.group(1) if m else None
+        return None
+
     if isinstance(payload, str):
         try:
             payload = json.loads(payload)
         except Exception:
-            match = re.search(r"folio[_\s-]*id\"?\s*[:=]\s*\"?(\d+)", payload, re.IGNORECASE)
-            return match.group(1) if match else None
+            match = re.search(r"(folio[_\s-]*id|localizador|reservation[_\s-]*locator)\"?\s*[:=]\s*\"?(\d+)", payload, re.IGNORECASE)
+            return match.group(2) if match else None
 
     if isinstance(payload, list):
         for item in payload:
@@ -77,15 +85,36 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
         return None
 
     if isinstance(payload, dict):
-        for key in ("folio_id", "folioId", "folio"):
+        # 1) Busca por claves conocidas
+        for key in (
+            "folio_id",
+            "folioId",
+            "folio",
+            "reservation_id",
+            "reservationId",
+            "reservation_locator",
+            "locator",
+        ):
             if key in payload:
                 val = payload.get(key)
                 if isinstance(val, dict):
                     nested = _extract_folio_id(val)
                     if nested:
                         return nested
-                if isinstance(val, (int, str)) and str(val).isdigit():
-                    return str(val)
+                digits = _as_digits(val)
+                if digits:
+                    return digits
+
+        # 2) Recorrido profundo por valores
+        for val in payload.values():
+            if isinstance(val, (dict, list)):
+                nested = _extract_folio_id(val)
+                if nested:
+                    return nested
+            else:
+                digits = _as_digits(val)
+                if digits:
+                    return digits
         return None
 
     return None

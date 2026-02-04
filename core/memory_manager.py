@@ -256,19 +256,32 @@ class MemoryManager:
                 checkout_flag = self.get_flag(conversation_id, "checkout")
                 if folio_flag:
                     try:
+                        resolved_chat_id = tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id
+                        original_chat_id = None
+                        if isinstance(conversation_id, str) and ":" in conversation_id:
+                            original_chat_id = conversation_id
+                        else:
+                            last_mem = self.get_flag(conversation_id, "last_memory_id")
+                            if isinstance(last_mem, str) and ":" in last_mem:
+                                original_chat_id = last_mem
+
+                        hotel_code = (
+                            self.get_flag(conversation_id, "property_name")
+                            or self.get_flag(conversation_id, "instance_hotel_code")
+                        )
                         upsert_chat_reservation(
-                            chat_id=tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id,
+                            chat_id=resolved_chat_id,
                             folio_id=str(folio_flag),
                             checkin=checkin_flag,
                             checkout=checkout_flag,
                             property_id=self.get_flag(conversation_id, "property_id"),
-                            hotel_code=self.get_flag(conversation_id, "property_name"),
-                            original_chat_id=conversation_id if isinstance(conversation_id, str) and ":" in conversation_id else None,
+                            hotel_code=hotel_code,
+                            original_chat_id=original_chat_id,
                             source="message",
                         )
                         log.info(
                             "🧾 memory upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s",
-                            tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id,
+                            resolved_chat_id,
                             folio_flag,
                             checkin_flag,
                             checkout_flag,
