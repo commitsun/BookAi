@@ -3,7 +3,7 @@ import re
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from core.db import get_conversation_history, save_message, get_last_property_id_for_conversation
+from core.db import get_conversation_history, save_message, get_last_property_id_for_conversation, upsert_chat_reservation
 
 log = logging.getLogger("MemoryManager")
 
@@ -251,6 +251,30 @@ class MemoryManager:
                 if m:
                     for target in targets:
                         self.set_flag(target, "checkout", m.group(2))
+                folio_flag = self.get_flag(conversation_id, "folio_id")
+                checkin_flag = self.get_flag(conversation_id, "checkin")
+                checkout_flag = self.get_flag(conversation_id, "checkout")
+                if folio_flag:
+                    try:
+                        upsert_chat_reservation(
+                            chat_id=tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id,
+                            folio_id=str(folio_flag),
+                            checkin=checkin_flag,
+                            checkout=checkout_flag,
+                            property_id=self.get_flag(conversation_id, "property_id"),
+                            hotel_code=self.get_flag(conversation_id, "property_name"),
+                            original_chat_id=conversation_id if isinstance(conversation_id, str) and ":" in conversation_id else None,
+                            source="message",
+                        )
+                        log.info(
+                            "🧾 memory upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s",
+                            tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id,
+                            folio_flag,
+                            checkin_flag,
+                            checkout_flag,
+                        )
+                    except Exception:
+                        pass
         except Exception:
             pass
 
