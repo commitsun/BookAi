@@ -1180,6 +1180,15 @@ def register_chatter_routes(app, state) -> None:
 
         if folio_id:
             try:
+                log.info(
+                    "🧾 chatter upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s hotel_code=%s",
+                    chat_id,
+                    folio_id,
+                    checkin,
+                    checkout,
+                    property_id,
+                    payload.hotel_code,
+                )
                 upsert_chat_reservation(
                     chat_id=chat_id,
                     folio_id=folio_id,

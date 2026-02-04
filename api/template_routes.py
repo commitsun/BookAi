@@ -328,6 +328,15 @@ def register_template_routes(app, state) -> None:
 
             if folio_id:
                 try:
+                    log.info(
+                        "🧾 template upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s hotel_code=%s",
+                        chat_id,
+                        folio_id,
+                        checkin,
+                        checkout,
+                        payload.meta.property_id if payload.meta else None,
+                        hotel_code,
+                    )
                     upsert_chat_reservation(
                         chat_id=chat_id,
                         folio_id=folio_id,

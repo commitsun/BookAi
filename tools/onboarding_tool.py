@@ -431,6 +431,14 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                         memory_manager.set_flag(target, "checkin", reservation_payload["reservations"][0]["checkin"])
                         memory_manager.set_flag(target, "checkout", reservation_payload["reservations"][0]["checkout"])
                     if folio_id:
+                        log.info(
+                            "🧾 onboarding upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s",
+                            chat_id,
+                            folio_id,
+                            reservation_payload["reservations"][0]["checkin"],
+                            reservation_payload["reservations"][0]["checkout"],
+                            pms_property_id,
+                        )
                         upsert_chat_reservation(
                             chat_id=chat_id,
                             folio_id=str(folio_id),
