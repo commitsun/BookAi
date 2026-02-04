@@ -376,6 +376,24 @@ def register_template_routes(app, state) -> None:
                         f"{k}: {v}" for k, v in payload.template.parameters.items()
                         if v is not None and str(v).strip() != ""
                     )
+                if rendered and not folio_id:
+                    try:
+                        f_id, ci, co = _extract_from_text(rendered)
+                        folio_id = folio_id or f_id
+                        checkin = checkin or ci
+                        checkout = checkout or co
+                        targets = [chat_id, context_id] if context_id else [chat_id]
+                        if folio_id:
+                            for target in targets:
+                                state.memory_manager.set_flag(target, "folio_id", folio_id)
+                        if checkin:
+                            for target in targets:
+                                state.memory_manager.set_flag(target, "checkin", checkin)
+                        if checkout:
+                            for target in targets:
+                                state.memory_manager.set_flag(target, "checkout", checkout)
+                    except Exception as exc:
+                        log.warning("No se pudo extraer folio/checkin/checkout desde rendered: %s", exc)
                 if rendered:
                     state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
                     state.memory_manager.save(

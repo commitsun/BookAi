@@ -1201,6 +1201,26 @@ def register_chatter_routes(app, state) -> None:
                     f"{k}: {v}" for k, v in payload.parameters.items()
                     if v is not None and str(v).strip() != ""
                 )
+            if rendered and not folio_id:
+                try:
+                    f_id, ci, co = _extract_from_text(rendered)
+                    folio_id = folio_id or f_id
+                    checkin = checkin or ci
+                    checkout = checkout or co
+                    if folio_id:
+                        for mem_id in [context_id, chat_id]:
+                            if mem_id:
+                                state.memory_manager.set_flag(mem_id, "folio_id", folio_id)
+                    if checkin:
+                        for mem_id in [context_id, chat_id]:
+                            if mem_id:
+                                state.memory_manager.set_flag(mem_id, "checkin", checkin)
+                    if checkout:
+                        for mem_id in [context_id, chat_id]:
+                            if mem_id:
+                                state.memory_manager.set_flag(mem_id, "checkout", checkout)
+                except Exception as exc:
+                    log.warning("No se pudo extraer folio/checkin/checkout desde rendered: %s", exc)
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
             if rendered:
                 if property_id is not None:
