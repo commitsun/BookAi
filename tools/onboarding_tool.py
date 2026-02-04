@@ -448,6 +448,9 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     from datetime import datetime
 
                     folio_id = _extract_folio_id(parsed)
+                    if folio_id and not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_id)):
+                        log.warning("Folio_id inválido en onboarding, se ignora: %s", folio_id)
+                        folio_id = None
                     targets = [chat_id]
                     if isinstance(chat_id, str) and ":" in chat_id:
                         tail = chat_id.split(":")[-1].strip()

@@ -144,6 +144,16 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
+def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in ("hotel_code", "hotel", "hotel_name", "property_name", "property"):
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
@@ -162,13 +172,15 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     if not folio_match:
-        folio_match = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+        folio_match = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     if folio_match:
         folio_id = folio_match.group(2) if folio_match.lastindex and folio_match.lastindex >= 2 else folio_match.group(1)
+        if not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", folio_id):
+            folio_id = None
     else:
         folio_id = None
     checkin = checkin_match.group(2) if checkin_match else None
@@ -1151,6 +1163,13 @@ def register_chatter_routes(app, state) -> None:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "property_name", payload.hotel_code)
                         state.memory_manager.set_flag(mem_id, "instance_hotel_code", payload.hotel_code)
+            elif payload.parameters:
+                inferred_hotel = _extract_hotel_code(payload.parameters)
+                if inferred_hotel:
+                    for mem_id in [context_id, chat_id]:
+                        if mem_id:
+                            state.memory_manager.set_flag(mem_id, "property_name", inferred_hotel)
+                            state.memory_manager.set_flag(mem_id, "instance_hotel_code", inferred_hotel)
             if folio_id:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
@@ -1195,7 +1214,7 @@ def register_chatter_routes(app, state) -> None:
                     checkin=checkin,
                     checkout=checkout,
                     property_id=property_id,
-                    hotel_code=payload.hotel_code,
+                    hotel_code=payload.hotel_code or (payload.parameters and _extract_hotel_code(payload.parameters)),
                     original_chat_id=context_id or None,
                     source="template",
                 )

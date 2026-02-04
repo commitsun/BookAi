@@ -234,12 +234,12 @@ class MemoryManager:
                     tail = conversation_id.split(":")[-1].strip()
                     if tail:
                         targets.append(tail)
-                m = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", content, re.IGNORECASE)
+                m = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
                 if m:
                     for target in targets:
                         self.set_flag(target, "folio_id", m.group(2))
                 else:
-                    m = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", content, re.IGNORECASE)
+                    m = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
                     if m:
                         for target in targets:
                             self.set_flag(target, "folio_id", m.group(1))
@@ -254,7 +254,7 @@ class MemoryManager:
                 folio_flag = self.get_flag(conversation_id, "folio_id")
                 checkin_flag = self.get_flag(conversation_id, "checkin")
                 checkout_flag = self.get_flag(conversation_id, "checkout")
-                if folio_flag:
+                if folio_flag and re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_flag)):
                     try:
                         resolved_chat_id = tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id
                         original_chat_id = None

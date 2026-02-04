@@ -1,5 +1,6 @@
 import os
 import logging
+import re
 from datetime import datetime
 
 import pytz
@@ -277,10 +278,14 @@ def upsert_chat_reservation(
     """
     if not chat_id or not folio_id:
         return
+    folio_id = str(folio_id).strip()
+    if not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", folio_id):
+        logging.warning("⚠️ folio_id inválido, se omite upsert: %s", folio_id)
+        return
 
     payload = {
         "chat_id": str(chat_id).replace("+", "").strip(),
-        "folio_id": str(folio_id).strip(),
+        "folio_id": folio_id,
         "updated_at": datetime.utcnow().isoformat(),
     }
     if checkin:

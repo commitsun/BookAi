@@ -137,6 +137,16 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
+def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in ("hotel_code", "hotel", "hotel_name", "property_name", "property"):
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
@@ -155,13 +165,15 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     if not folio_match:
-        folio_match = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+        folio_match = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     if folio_match:
         folio_id = folio_match.group(2) if folio_match.lastindex and folio_match.lastindex >= 2 else folio_match.group(1)
+        if not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", folio_id):
+            folio_id = None
     else:
         folio_id = None
     checkin = checkin_match.group(2) if checkin_match else None
@@ -263,6 +275,15 @@ def register_template_routes(app, state) -> None:
                     state.memory_manager.set_flag(chat_id, "instance_hotel_code", hotel_code)
                 except Exception as exc:
                     log.warning("No se pudo guardar hotel_code en memoria: %s", exc)
+            elif payload.template and payload.template.parameters:
+                inferred_hotel = _extract_hotel_code(payload.template.parameters)
+                if inferred_hotel:
+                    hotel_code = inferred_hotel
+                    try:
+                        state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                        state.memory_manager.set_flag(chat_id, "instance_hotel_code", hotel_code)
+                    except Exception:
+                        pass
 
             folio_id = None
             checkin = None
@@ -343,7 +364,7 @@ def register_template_routes(app, state) -> None:
                         checkin=checkin,
                         checkout=checkout,
                         property_id=payload.meta.property_id if payload.meta else None,
-                        hotel_code=hotel_code,
+                        hotel_code=hotel_code or (payload.template.parameters and _extract_hotel_code(payload.template.parameters)),
                         original_chat_id=context_id or None,
                         source="template",
                     )
