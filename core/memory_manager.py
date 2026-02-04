@@ -234,15 +234,14 @@ class MemoryManager:
                     tail = conversation_id.split(":")[-1].strip()
                     if tail:
                         targets.append(tail)
-                m = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
+                m = re.search(r"(localizador)\s*[:#]?\s*([A-Za-z0-9/\\-]{4,})", content, re.IGNORECASE)
+                if m:
+                    for target in targets:
+                        self.set_flag(target, "reservation_locator", m.group(2))
+                m = re.search(r"(folio(?:_id)?|folio id)\s*[:#]?\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
                 if m:
                     for target in targets:
                         self.set_flag(target, "folio_id", m.group(2))
-                else:
-                    m = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
-                    if m:
-                        for target in targets:
-                            self.set_flag(target, "folio_id", m.group(1))
                 m = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
                 if m:
                     for target in targets:
@@ -252,6 +251,7 @@ class MemoryManager:
                     for target in targets:
                         self.set_flag(target, "checkout", m.group(2))
                 folio_flag = self.get_flag(conversation_id, "folio_id")
+                locator_flag = self.get_flag(conversation_id, "reservation_locator")
                 checkin_flag = self.get_flag(conversation_id, "checkin")
                 checkout_flag = self.get_flag(conversation_id, "checkout")
                 if folio_flag and re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_flag)):
@@ -277,6 +277,7 @@ class MemoryManager:
                             property_id=self.get_flag(conversation_id, "property_id"),
                             hotel_code=hotel_code,
                             original_chat_id=original_chat_id,
+                            reservation_locator=locator_flag,
                             source="message",
                         )
                         log.info(

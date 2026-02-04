@@ -270,6 +270,7 @@ def upsert_chat_reservation(
     property_id: str | int | None = None,
     hotel_code: str | None = None,
     original_chat_id: str | None = None,
+    reservation_locator: str | None = None,
     source: str | None = None,
 ) -> None:
     """
@@ -298,6 +299,8 @@ def upsert_chat_reservation(
         payload["hotel_code"] = str(hotel_code).strip()
     if original_chat_id:
         payload["original_chat_id"] = str(original_chat_id).strip()
+    if reservation_locator:
+        payload["reservation_locator"] = str(reservation_locator).strip()
     if source:
         payload["source"] = str(source).strip()
 
@@ -336,7 +339,7 @@ def get_active_chat_reservation(
     try:
         resp = (
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
-            .select("chat_id, folio_id, checkin, checkout, property_id, hotel_code, original_chat_id, source, updated_at")
+            .select("chat_id, folio_id, reservation_locator, checkin, checkout, property_id, hotel_code, original_chat_id, source, updated_at")
             .eq("chat_id", clean_id)
             .order("updated_at", desc=True)
             .limit(limit)

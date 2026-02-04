@@ -74,7 +74,14 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
         try:
             payload = json.loads(payload)
         except Exception:
-            match = re.search(r"(folio[_\s-]*id|localizador|reservation[_\s-]*locator)\"?\s*[:=]\s*\"?(\d+)", payload, re.IGNORECASE)
+            match = re.search(r"\[(\d{4,})\]", payload)
+            if match:
+                return match.group(1)
+            match = re.search(
+                r"(folio[_\s-]*id|folio|reservation[_\s-]*id)\"?\s*[:=]\s*\"?(\d+)",
+                payload,
+                re.IGNORECASE,
+            )
             return match.group(2) if match else None
 
     if isinstance(payload, list):
@@ -92,8 +99,6 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
             "folio",
             "reservation_id",
             "reservationId",
-            "reservation_locator",
-            "locator",
         ):
             if key in payload:
                 val = payload.get(key)
@@ -117,6 +122,49 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
                     return digits
         return None
 
+    return None
+
+def _extract_reservation_locator(payload: Any) -> Optional[str]:
+    if payload is None:
+        return None
+    if isinstance(payload, str):
+        try:
+            payload = json.loads(payload)
+        except Exception:
+            match = re.search(
+                r"(localizador|reservation[_\s-]*locator|name|code)\"?\s*[:=]\s*\"?([A-Za-z0-9/\\-]{4,})",
+                payload,
+                re.IGNORECASE,
+            )
+            return match.group(2) if match else None
+    if isinstance(payload, list):
+        for item in payload:
+            found = _extract_reservation_locator(item)
+            if found:
+                return found
+        return None
+    if isinstance(payload, dict):
+        for key in ("reservation_locator", "locator", "name", "code"):
+            if key in payload:
+                val = payload.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
+        if isinstance(payload.get("response"), list) and payload["response"]:
+            item = payload["response"][0]
+            if isinstance(item, dict):
+                for key in ("name", "code", "reservation_locator", "locator"):
+                    val = item.get(key)
+                    if isinstance(val, str) and val.strip():
+                        return val.strip()
+        for val in payload.values():
+            if isinstance(val, (dict, list)):
+                nested = _extract_reservation_locator(val)
+                if nested:
+                    return nested
+            elif isinstance(val, str) and val.strip():
+                m = re.search(r"\b([A-Za-z0-9/\\-]{4,})\b", val)
+                if m:
+                    return m.group(1)
     return None
 
 
@@ -448,9 +496,21 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     from datetime import datetime
 
                     folio_id = _extract_folio_id(parsed)
+                    if not folio_id and isinstance(response_text, str):
+                        m = re.search(r"^\[(\d{4,})\]", response_text)
+                        if m:
+                            folio_id = m.group(1)
+                    reservation_locator = _extract_reservation_locator(parsed)
                     if folio_id and not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_id)):
                         log.warning("Folio_id inválido en onboarding, se ignora: %s", folio_id)
                         folio_id = None
+                    # Si el reservation_locator coincide con el folio_id, no lo consideramos válido.
+                    if reservation_locator and folio_id and str(reservation_locator).strip() == str(folio_id).strip():
+                        reservation_locator = None
+                    # Si el reservation_locator es solo dígitos (típico folio), intenta enriquecer luego vía PMS.
+                    locator_needs_pms = False
+                    if reservation_locator:
+                        locator_needs_pms = re.fullmatch(r"\d{4,}", str(reservation_locator)) is not None
                     targets = [chat_id]
                     if isinstance(chat_id, str) and ":" in chat_id:
                         tail = chat_id.split(":")[-1].strip()
@@ -459,6 +519,9 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     if folio_id:
                         for target in targets:
                             memory_manager.set_flag(target, "folio_id", str(folio_id))
+                    if reservation_locator:
+                        for target in targets:
+                            memory_manager.set_flag(target, "reservation_locator", reservation_locator)
                     for target in targets:
                         memory_manager.set_flag(target, "checkin", reservation_payload["reservations"][0]["checkin"])
                         memory_manager.set_flag(target, "checkout", reservation_payload["reservations"][0]["checkout"])
@@ -479,8 +542,76 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                             property_id=pms_property_id,
                             hotel_code=memory_manager.get_flag(chat_id, "property_name") if memory_manager else None,
                             original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
+                            reservation_locator=reservation_locator,
                             source="onboarding",
                         )
+                    # Enriquecer reservation_locator desde PMS si no vino o parece folio interno
+                    if folio_id and (not reservation_locator or locator_needs_pms):
+                        try:
+                            from tools.superintendente_tool import create_consulta_reserva_persona_tool
+
+                            consulta_tool = create_consulta_reserva_persona_tool(
+                                memory_manager=memory_manager,
+                                chat_id=chat_id,
+                            )
+                            log.info(
+                                "🧾 onboarding consulta_reserva_persona folio_id=%s property_id=%s",
+                                folio_id,
+                                pms_property_id,
+                            )
+                            raw = await consulta_tool.ainvoke(
+                                {"folio_id": str(folio_id), "property_id": pms_property_id}
+                            )
+                            parsed = None
+                            if isinstance(raw, str):
+                                try:
+                                    parsed = json.loads(raw)
+                                except Exception:
+                                    parsed = None
+                            elif isinstance(raw, dict):
+                                parsed = raw
+                            if parsed:
+                                reservation_locator = _extract_reservation_locator(parsed)
+                                if reservation_locator:
+                                    for target in targets:
+                                        memory_manager.set_flag(target, "reservation_locator", reservation_locator)
+                                    upsert_chat_reservation(
+                                        chat_id=chat_id,
+                                        folio_id=str(folio_id),
+                                        checkin=reservation_payload["reservations"][0]["checkin"],
+                                        checkout=reservation_payload["reservations"][0]["checkout"],
+                                        property_id=pms_property_id,
+                                        hotel_code=memory_manager.get_flag(chat_id, "property_name") if memory_manager else None,
+                                        original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
+                                        reservation_locator=reservation_locator,
+                                        source="pms",
+                                    )
+                                    if isinstance(response_text, str):
+                                        # Quita prefijo [folio] si viene del PMS
+                                        response_text = re.sub(r"^\[\d{4,}\]\s*", "", response_text).strip()
+                                        # Sustituye localizador numérico por el locator público
+                                        response_text = re.sub(
+                                            r"(Localizador:\s*)(\d{4,})",
+                                            rf"\\1{reservation_locator}",
+                                            response_text,
+                                            flags=re.IGNORECASE,
+                                        )
+                                        if "Localizador:" not in response_text:
+                                            response_text = f"{response_text}\nLocalizador: {reservation_locator}"
+                        except Exception as exc:
+                            log.warning("No se pudo enriquecer reservation_locator en onboarding: %s", exc)
+
+                    # Asegura que el output exponga el reservation_locator si existe.
+                    if reservation_locator and isinstance(response_text, str):
+                        response_text = re.sub(r"^\[\d{4,}\]\s*", "", response_text).strip()
+                        response_text = re.sub(
+                            r"(Localizador:\s*)(\d{4,})",
+                            rf"\\1{reservation_locator}",
+                            response_text,
+                            flags=re.IGNORECASE,
+                        )
+                        if "Localizador:" not in response_text:
+                            response_text = f"{response_text}\nLocalizador: {reservation_locator}"
                     memory_manager.set_flag(
                         chat_id,
                         "onboarding_last_reservation",

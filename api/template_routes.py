@@ -31,6 +31,7 @@ class SourceHotel(BaseModel):
 class OriginFolio(BaseModel):
     id: Optional[int] = Field(default=None, description="ID del folio en Roomdoo")
     code: Optional[str] = Field(default=None, description="Código del folio (ej: F2600107)")
+    name: Optional[str] = Field(default=None, description="Nombre público del folio (localizador)")
     min_checkin: Optional[str] = Field(
         default=None,
         description="Primera fecha de entrada dentro del folio (ISO 8601)",
@@ -137,6 +138,16 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
+def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in ("reservation_locator", "locator", "reservation_code", "code", "name"):
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -152,6 +163,8 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
         return None, None
     if payload.get("checkin") or payload.get("checkout"):
         return payload.get("checkin"), payload.get("checkout")
+    if payload.get("firstCheckin") or payload.get("lastCheckout"):
+        return payload.get("firstCheckin"), payload.get("lastCheckout")
     reservations = payload.get("reservations") or payload.get("reservation") or []
     if isinstance(reservations, dict):
         reservations = [reservations]
@@ -162,10 +175,20 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
     return None, None
 
 
+def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("reservation_locator", "locator", "name", "code"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     if not folio_match:
         folio_match = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
@@ -286,6 +309,7 @@ def register_template_routes(app, state) -> None:
                         pass
 
             folio_id = None
+            reservation_locator = None
             checkin = None
             checkout = None
             try:
@@ -296,6 +320,7 @@ def register_template_routes(app, state) -> None:
                     folio_id = folio_id or f_id
                     checkin = checkin or ci
                     checkout = checkout or co
+                    reservation_locator = reservation_locator or _extract_reservation_locator(payload.template.parameters)
                 if payload.template and payload.template.rendered_text:
                     f_id, ci, co = _extract_from_text(payload.template.rendered_text)
                     folio_id = folio_id or f_id
@@ -311,6 +336,9 @@ def register_template_routes(app, state) -> None:
                         state.memory_manager.set_flag(chat_id, "origin_folio_id", folio.id)
                     if folio.code:
                         state.memory_manager.set_flag(chat_id, "origin_folio_code", folio.code)
+                        reservation_locator = reservation_locator or folio.code
+                    if folio.name:
+                        reservation_locator = reservation_locator or folio.name
                     if folio.min_checkin:
                         state.memory_manager.set_flag(
                             chat_id,
@@ -338,6 +366,9 @@ def register_template_routes(app, state) -> None:
                 if folio_id:
                     for target in targets:
                         state.memory_manager.set_flag(target, "folio_id", folio_id)
+                if reservation_locator:
+                    for target in targets:
+                        state.memory_manager.set_flag(target, "reservation_locator", reservation_locator)
                 if checkin:
                     for target in targets:
                         state.memory_manager.set_flag(target, "checkin", checkin)
@@ -366,6 +397,7 @@ def register_template_routes(app, state) -> None:
                         property_id=payload.meta.property_id if payload.meta else None,
                         hotel_code=hotel_code or (payload.template.parameters and _extract_hotel_code(payload.template.parameters)),
                         original_chat_id=context_id or None,
+                        reservation_locator=reservation_locator,
                         source="template",
                     )
                 except Exception as exc:
@@ -408,10 +440,25 @@ def register_template_routes(app, state) -> None:
                         parsed = raw
                     if parsed:
                         ci, co = _extract_dates_from_reservation(parsed)
+                        locator = _extract_locator_from_reservation(parsed)
                         if ci:
                             state.memory_manager.set_flag(chat_id, "checkin", ci)
                         if co:
                             state.memory_manager.set_flag(chat_id, "checkout", co)
+                        if locator:
+                            state.memory_manager.set_flag(chat_id, "reservation_locator", locator)
+                        if folio_id:
+                            upsert_chat_reservation(
+                                chat_id=chat_id,
+                                folio_id=folio_id,
+                                checkin=ci or checkin,
+                                checkout=co or checkout,
+                                property_id=payload.meta.property_id if payload.meta else None,
+                                hotel_code=hotel_code,
+                                original_chat_id=context_id or None,
+                                reservation_locator=locator,
+                                source="pms",
+                            )
                 except Exception as exc:
                     log.warning("No se pudo enriquecer checkin/checkout via folio: %s", exc)
 
@@ -427,6 +474,27 @@ def register_template_routes(app, state) -> None:
                         f"{k}: {v}" for k, v in payload.template.parameters.items()
                         if v is not None and str(v).strip() != ""
                     )
+                if rendered and not reservation_locator:
+                    m = re.search(r"(localizador)\s*[:#]?\s*([A-Za-z0-9/\\-]{4,})", rendered, re.IGNORECASE)
+                    if m:
+                        reservation_locator = m.group(2)
+                        for target in [chat_id, context_id] if context_id else [chat_id]:
+                            state.memory_manager.set_flag(target, "reservation_locator", reservation_locator)
+                if reservation_locator and folio_id:
+                    try:
+                        upsert_chat_reservation(
+                            chat_id=chat_id,
+                            folio_id=folio_id,
+                            checkin=checkin,
+                            checkout=checkout,
+                            property_id=payload.meta.property_id if payload.meta else None,
+                            hotel_code=hotel_code,
+                            original_chat_id=context_id or None,
+                            reservation_locator=reservation_locator,
+                            source="rendered",
+                        )
+                    except Exception as exc:
+                        log.warning("No se pudo persistir reservation_locator desde rendered: %s", exc)
                 if rendered and not folio_id:
                     try:
                         f_id, ci, co = _extract_from_text(rendered)

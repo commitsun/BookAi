@@ -64,20 +64,58 @@ async def process_user_message(
             log.warning("⚠️ No se pudo obtener memoria: %s", exc)
             history = []
 
+        # Evitar duplicados: si el huésped confirma y ya se envió un resumen reciente con localizador.
+        response_raw = None
+        try:
+            recent_summary = False
+            raw_hist = state.memory_manager.get_memory(mem_id, limit=8) if state.memory_manager else []
+            for msg in raw_hist or []:
+                role = (msg.get("role") or "").lower()
+                if role not in {"assistant", "bookai"}:
+                    continue
+                content = str(msg.get("content") or "")
+                if re.search(r"Localizador\\s*[:#]?\\s*[A-Za-z0-9/\\-]{4,}", content, re.IGNORECASE):
+                    recent_summary = True
+                    break
+
+            confirmation = re.fullmatch(
+                r"\\s*(vale|ok|okay|perfecto|sí|si|de acuerdo|correcto|esa me va bien|me va bien|todo bien|confirmo|confirmada|est[aá] bien)\\s*[.!]*\\s*",
+                user_message,
+                re.IGNORECASE,
+            )
+            if recent_summary and confirmation:
+                response_raw = "¡Perfecto! Queda confirmada. Si necesitas algo más, dímelo."
+                try:
+                    state.memory_manager.save(
+                        mem_id,
+                        role="assistant",
+                        content=response_raw,
+                        channel=channel,
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo guardar respuesta corta de confirmación: %s", exc)
+        except Exception as exc:
+            log.debug("No se pudo aplicar regla anti-duplicados: %s", exc)
+
         # Respuesta rápida: si el huésped pide el localizador y ya está en historial.
         localizador = None
         if state.memory_manager:
             try:
+                localizador = state.memory_manager.get_flag(mem_id, "reservation_locator") or localizador
                 raw_hist = state.memory_manager.get_memory(mem_id, limit=30) or []
                 for msg in raw_hist:
                     content = (msg.get("content") or "")
                     if not isinstance(content, str):
                         continue
                     match = re.search(
-                        r"(localizador|folio(?:_id)?)\\s*[:#]?\\s*([A-Za-z0-9]{4,})",
+                        r"(localizador)\\s*[:#]?\\s*([A-Za-z0-9/\\-]{4,})",
                         content,
                         re.IGNORECASE,
                     )
+                    if match:
+                        localizador = match.group(2)
+                        continue
+                    match = re.search(r"(folio(?:_id)?)\\s*[:#]?\\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
                     if not match:
                         match = re.search(r"reserva\\s*[:#]?\\s*([A-Za-z0-9]{4,})", content, re.IGNORECASE)
                     if match:
@@ -88,7 +126,7 @@ async def process_user_message(
                 log.debug("No se pudo extraer localizador de historial: %s", exc)
 
         asks_localizador = bool(re.search(r"localizador|folio|n[uú]mero de reserva", user_message, re.IGNORECASE))
-        if asks_localizador and localizador:
+        if not response_raw and asks_localizador and localizador:
             response_raw = f"El localizador de tu reserva es {localizador}."
             try:
                 state.memory_manager.save(
@@ -99,8 +137,7 @@ async def process_user_message(
                 )
             except Exception as exc:
                 log.warning("No se pudo guardar respuesta rápida de localizador: %s", exc)
-        else:
-            response_raw = None
+        # response_raw ya puede venir de regla anti-duplicados o localizador rápido
 
         async def send_inciso_callback(msg: str):
             try:

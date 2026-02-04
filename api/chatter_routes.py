@@ -154,11 +154,23 @@ def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in ("reservation_locator", "locator", "reservation_code", "code", "name"):
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
     if payload.get("checkin") or payload.get("checkout"):
         return payload.get("checkin"), payload.get("checkout")
+    if payload.get("firstCheckin") or payload.get("lastCheckout"):
+        return payload.get("firstCheckin"), payload.get("lastCheckout")
     reservations = payload.get("reservations") or payload.get("reservation") or []
     if isinstance(reservations, dict):
         reservations = [reservations]
@@ -169,10 +181,20 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
     return None, None
 
 
+def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("reservation_locator", "locator", "name", "code"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     if not folio_match:
         folio_match = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
@@ -510,6 +532,7 @@ def register_chatter_routes(app, state) -> None:
             prop_id = last.get("property_id")
             phone = _clean_chat_id(cid)
             folio_id = None
+            reservation_locator = None
             checkin = None
             checkout = None
             reservation_status = None
@@ -517,6 +540,7 @@ def register_chatter_routes(app, state) -> None:
             if memory_manager and cid:
                 try:
                     folio_id = memory_manager.get_flag(cid, "folio_id") or memory_manager.get_flag(cid, "origin_folio_id")
+                    reservation_locator = memory_manager.get_flag(cid, "reservation_locator") or memory_manager.get_flag(cid, "origin_folio_code")
                     checkin = memory_manager.get_flag(cid, "checkin") or memory_manager.get_flag(cid, "origin_folio_min_checkin")
                     checkout = memory_manager.get_flag(cid, "checkout") or memory_manager.get_flag(cid, "origin_folio_max_checkout")
                     reservation_status = memory_manager.get_flag(cid, "reservation_status")
@@ -528,10 +552,13 @@ def register_chatter_routes(app, state) -> None:
                     active = get_active_chat_reservation(chat_id=cid)
                     if active:
                         folio_id = active.get("folio_id") or folio_id
+                        reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else None
                         checkin = active.get("checkin") or checkin
                         checkout = active.get("checkout") or checkout
                         if memory_manager and folio_id:
                             memory_manager.set_flag(cid, "folio_id", folio_id)
+                        if memory_manager and reservation_locator:
+                            memory_manager.set_flag(cid, "reservation_locator", reservation_locator)
                         if memory_manager and checkin:
                             memory_manager.set_flag(cid, "checkin", checkin)
                         if memory_manager and checkout:
@@ -543,6 +570,7 @@ def register_chatter_routes(app, state) -> None:
                     "chat_id": cid,
                     "property_id": prop_id,
                     "reservation_id": folio_id,
+                    "reservation_locator": reservation_locator,
                     "reservation_status": reservation_status,
                     "room_number": room_number,
                     "checkin": checkin,
@@ -1137,6 +1165,7 @@ def register_chatter_routes(app, state) -> None:
 
         context_id = _resolve_whatsapp_context_id(state, chat_id)
         folio_id = None
+        reservation_locator = None
         checkin = None
         checkout = None
         try:
@@ -1145,6 +1174,7 @@ def register_chatter_routes(app, state) -> None:
                 folio_id = f_id
                 checkin = ci
                 checkout = co
+                reservation_locator = _extract_reservation_locator(payload.parameters)
             if payload.rendered_text:
                 f_id, ci, co = _extract_from_text(payload.rendered_text)
                 folio_id = folio_id or f_id
@@ -1174,6 +1204,10 @@ def register_chatter_routes(app, state) -> None:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "folio_id", folio_id)
+            if reservation_locator:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "reservation_locator", reservation_locator)
             if checkin:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
@@ -1216,6 +1250,7 @@ def register_chatter_routes(app, state) -> None:
                     property_id=property_id,
                     hotel_code=payload.hotel_code or (payload.parameters and _extract_hotel_code(payload.parameters)),
                     original_chat_id=context_id or None,
+                    reservation_locator=reservation_locator,
                     source="template",
                 )
             except Exception as exc:
@@ -1246,10 +1281,13 @@ def register_chatter_routes(app, state) -> None:
                     parsed = raw
                 if parsed:
                     ci, co = _extract_dates_from_reservation(parsed)
+                    locator = _extract_locator_from_reservation(parsed)
                     if ci:
                         state.memory_manager.set_flag(chat_id, "checkin", ci)
                     if co:
                         state.memory_manager.set_flag(chat_id, "checkout", co)
+                    if locator:
+                        state.memory_manager.set_flag(chat_id, "reservation_locator", locator)
                     if folio_id:
                         upsert_chat_reservation(
                             chat_id=chat_id,
@@ -1259,6 +1297,7 @@ def register_chatter_routes(app, state) -> None:
                             property_id=property_id,
                             hotel_code=payload.hotel_code,
                             original_chat_id=context_id or None,
+                            reservation_locator=locator,
                             source="pms",
                         )
             except Exception as exc:
@@ -1276,6 +1315,13 @@ def register_chatter_routes(app, state) -> None:
                     f"{k}: {v}" for k, v in payload.parameters.items()
                     if v is not None and str(v).strip() != ""
                 )
+            if rendered and not reservation_locator:
+                m = re.search(r"(localizador)\s*[:#]?\s*([A-Za-z0-9/\\-]{4,})", rendered, re.IGNORECASE)
+                if m:
+                    reservation_locator = m.group(2)
+                    for mem_id in [context_id, chat_id]:
+                        if mem_id:
+                            state.memory_manager.set_flag(mem_id, "reservation_locator", reservation_locator)
             if rendered and not folio_id:
                 try:
                     f_id, ci, co = _extract_from_text(rendered)
@@ -1296,6 +1342,21 @@ def register_chatter_routes(app, state) -> None:
                                 state.memory_manager.set_flag(mem_id, "checkout", checkout)
                 except Exception as exc:
                     log.warning("No se pudo extraer folio/checkin/checkout desde rendered: %s", exc)
+            if reservation_locator and folio_id:
+                try:
+                    upsert_chat_reservation(
+                        chat_id=chat_id,
+                        folio_id=folio_id,
+                        checkin=checkin,
+                        checkout=checkout,
+                        property_id=property_id,
+                        hotel_code=payload.hotel_code or (payload.parameters and _extract_hotel_code(payload.parameters)),
+                        original_chat_id=context_id or None,
+                        reservation_locator=reservation_locator,
+                        source="rendered",
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo persistir reservation_locator desde rendered: %s", exc)
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
             if rendered:
                 if property_id is not None:
