@@ -17,6 +17,7 @@ from core.escalation_db import list_pending_escalations, resolve_latest_pending_
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
+from core.db import upsert_chat_reservation, get_active_chat_reservation
 
 log = logging.getLogger("ChatterRoutes")
 
@@ -161,10 +162,15 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+    if not folio_match:
+        folio_match = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
-    folio_id = folio_match.group(2) if folio_match else None
+    if folio_match:
+        folio_id = folio_match.group(2) if folio_match.lastindex and folio_match.lastindex >= 2 else folio_match.group(1)
+    else:
+        folio_id = None
     checkin = checkin_match.group(2) if checkin_match else None
     checkout = checkout_match.group(2) if checkout_match else None
     return folio_id, checkin, checkout
@@ -503,6 +509,21 @@ def register_chatter_routes(app, state) -> None:
                     checkout = memory_manager.get_flag(cid, "checkout") or memory_manager.get_flag(cid, "origin_folio_max_checkout")
                     reservation_status = memory_manager.get_flag(cid, "reservation_status")
                     room_number = memory_manager.get_flag(cid, "room_number")
+                except Exception:
+                    pass
+            if not folio_id:
+                try:
+                    active = get_active_chat_reservation(chat_id=cid)
+                    if active:
+                        folio_id = active.get("folio_id") or folio_id
+                        checkin = active.get("checkin") or checkin
+                        checkout = active.get("checkout") or checkout
+                        if memory_manager and folio_id:
+                            memory_manager.set_flag(cid, "folio_id", folio_id)
+                        if memory_manager and checkin:
+                            memory_manager.set_flag(cid, "checkin", checkin)
+                        if memory_manager and checkout:
+                            memory_manager.set_flag(cid, "checkout", checkout)
                 except Exception:
                     pass
             items.append(
@@ -1157,6 +1178,21 @@ def register_chatter_routes(app, state) -> None:
             log.error("Error enviando plantilla: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Error enviando plantilla")
 
+        if folio_id:
+            try:
+                upsert_chat_reservation(
+                    chat_id=chat_id,
+                    folio_id=folio_id,
+                    checkin=checkin,
+                    checkout=checkout,
+                    property_id=property_id,
+                    hotel_code=payload.hotel_code,
+                    original_chat_id=context_id or None,
+                    source="template",
+                )
+            except Exception as exc:
+                log.warning("No se pudo persistir reserva en tabla: %s", exc)
+
         if folio_id and (not checkin or not checkout):
             try:
                 consulta_tool = create_consulta_reserva_persona_tool(
@@ -1186,6 +1222,17 @@ def register_chatter_routes(app, state) -> None:
                         state.memory_manager.set_flag(chat_id, "checkin", ci)
                     if co:
                         state.memory_manager.set_flag(chat_id, "checkout", co)
+                    if folio_id:
+                        upsert_chat_reservation(
+                            chat_id=chat_id,
+                            folio_id=folio_id,
+                            checkin=ci or checkin,
+                            checkout=co or checkout,
+                            property_id=property_id,
+                            hotel_code=payload.hotel_code,
+                            original_chat_id=context_id or None,
+                            source="pms",
+                        )
             except Exception as exc:
                 log.warning("No se pudo enriquecer checkin/checkout via folio: %s", exc)
 

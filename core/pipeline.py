@@ -74,12 +74,14 @@ async def process_user_message(
                     if not isinstance(content, str):
                         continue
                     match = re.search(
-                        r"(localizador|folio(?:_id)?)\\s*[:#]?\\s*([A-Za-z0-9-]{4,})",
+                        r"(localizador|folio(?:_id)?)\\s*[:#]?\\s*([0-9]{4,})",
                         content,
                         re.IGNORECASE,
                     )
+                    if not match:
+                        match = re.search(r"reserva\\s*[:#]?\\s*([0-9]{4,})", content, re.IGNORECASE)
                     if match:
-                        localizador = match.group(2)
+                        localizador = match.group(2) if match.lastindex and match.lastindex >= 2 else match.group(1)
             except Exception as exc:
                 log.debug("No se pudo extraer localizador de historial: %s", exc)
 

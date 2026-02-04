@@ -234,10 +234,15 @@ class MemoryManager:
                     tail = conversation_id.split(":")[-1].strip()
                     if tail:
                         targets.append(tail)
-                m = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", content, re.IGNORECASE)
+                m = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", content, re.IGNORECASE)
                 if m:
                     for target in targets:
                         self.set_flag(target, "folio_id", m.group(2))
+                else:
+                    m = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", content, re.IGNORECASE)
+                    if m:
+                        for target in targets:
+                            self.set_flag(target, "folio_id", m.group(1))
                 m = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
                 if m:
                     for target in targets:

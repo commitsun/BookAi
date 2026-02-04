@@ -14,6 +14,7 @@ from core.config import Settings
 from core.template_registry import TemplateRegistry
 from core.instance_context import ensure_instance_credentials
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
+from core.db import upsert_chat_reservation
 
 log = logging.getLogger("TemplateRoutes")
 
@@ -154,10 +155,15 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
-    folio_match = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", text, re.IGNORECASE)
+    folio_match = re.search(r"(localizador|folio(?:_id)?)\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
+    if not folio_match:
+        folio_match = re.search(r"reserva\s*[:#]?\s*([0-9]{4,})", text, re.IGNORECASE)
     checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
     checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
-    folio_id = folio_match.group(2) if folio_match else None
+    if folio_match:
+        folio_id = folio_match.group(2) if folio_match.lastindex and folio_match.lastindex >= 2 else folio_match.group(1)
+    else:
+        folio_id = None
     checkin = checkin_match.group(2) if checkin_match else None
     checkout = checkout_match.group(2) if checkout_match else None
     return folio_id, checkin, checkout
@@ -319,6 +325,21 @@ def register_template_routes(app, state) -> None:
                         state.memory_manager.set_flag(target, "checkout", checkout)
             except Exception as exc:
                 log.warning("No se pudo guardar folio/checkin/checkout en memoria: %s", exc)
+
+            if folio_id:
+                try:
+                    upsert_chat_reservation(
+                        chat_id=chat_id,
+                        folio_id=folio_id,
+                        checkin=checkin,
+                        checkout=checkout,
+                        property_id=payload.meta.property_id if payload.meta else None,
+                        hotel_code=hotel_code,
+                        original_chat_id=context_id or None,
+                        source="template",
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo persistir reserva en tabla: %s", exc)
 
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 

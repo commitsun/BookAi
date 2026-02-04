@@ -83,6 +83,9 @@ class Settings:
     # Plantillas WhatsApp
     TEMPLATE_SUPABASE_TABLE = os.getenv("TEMPLATE_SUPABASE_TABLE", "whatsapp_templates")
 
+    # Reservas por chat
+    CHAT_RESERVATIONS_TABLE = os.getenv("CHAT_RESERVATIONS_TABLE", "chat_reservations")
+
 
 # =============================================================
 # ⚙️ ENUM DE TIER

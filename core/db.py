@@ -257,6 +257,112 @@ def get_last_property_id_for_conversation(
         return None
 
 
+# ======================================================
+# 📌 Reservas por chat (persistencia ligera)
+# ======================================================
+def upsert_chat_reservation(
+    *,
+    chat_id: str,
+    folio_id: str,
+    checkin: str | None = None,
+    checkout: str | None = None,
+    property_id: str | int | None = None,
+    hotel_code: str | None = None,
+    original_chat_id: str | None = None,
+    source: str | None = None,
+) -> None:
+    """
+    Inserta/actualiza una reserva asociada a un chat.
+    Requiere folio_id.
+    """
+    if not chat_id or not folio_id:
+        return
+
+    payload = {
+        "chat_id": str(chat_id).replace("+", "").strip(),
+        "folio_id": str(folio_id).strip(),
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if checkin:
+        payload["checkin"] = str(checkin).strip()
+    if checkout:
+        payload["checkout"] = str(checkout).strip()
+    if property_id is not None:
+        payload["property_id"] = property_id
+    if hotel_code:
+        payload["hotel_code"] = str(hotel_code).strip()
+    if original_chat_id:
+        payload["original_chat_id"] = str(original_chat_id).strip()
+    if source:
+        payload["source"] = str(source).strip()
+
+    try:
+        supabase.table(Settings.CHAT_RESERVATIONS_TABLE).upsert(
+            payload,
+            on_conflict="chat_id,folio_id",
+        ).execute()
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo upsert chat_reservation: %s", exc)
+
+
+def get_active_chat_reservation(
+    *,
+    chat_id: str,
+    limit: int = 20,
+) -> dict | None:
+    """
+    Devuelve la reserva "activa" para un chat.
+    Regla: checkin más próximo >= hoy; si no, la más reciente por updated_at.
+    """
+    if not chat_id:
+        return None
+
+    clean_id = str(chat_id).replace("+", "").strip()
+    try:
+        resp = (
+            supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+            .select("chat_id, folio_id, checkin, checkout, property_id, hotel_code, original_chat_id, source, updated_at")
+            .eq("chat_id", clean_id)
+            .order("updated_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = resp.data or []
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo leer chat_reservations: %s", exc)
+        return None
+
+    if not rows:
+        return None
+
+    def _parse_date(val):
+        if not val:
+            return None
+        try:
+            return datetime.fromisoformat(str(val)).date()
+        except Exception:
+            for fmt in ("%Y-%m-%d", "%d-%m-%Y", "%d/%m/%Y"):
+                try:
+                    return datetime.strptime(str(val), fmt).date()
+                except Exception:
+                    continue
+        return None
+
+    today = datetime.utcnow().date()
+    upcoming = []
+    for row in rows:
+        ci = _parse_date(row.get("checkin"))
+        if ci and ci >= today:
+            upcoming.append((ci, row))
+
+    if upcoming:
+        upcoming.sort(key=lambda item: item[0])
+        return upcoming[0][1]
+
+    # fallback: más reciente por updated_at (ya vienen ordenadas)
+    return rows[0]
+
+
 
 # ======================================================
 # 🧹 Borrar historial (útil para pruebas o depuración)

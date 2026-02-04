@@ -11,6 +11,7 @@ from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
 from core.mcp_client import get_tools
+from core.db import upsert_chat_reservation
 
 log = logging.getLogger("OnboardingTools")
 
@@ -429,6 +430,17 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     for target in targets:
                         memory_manager.set_flag(target, "checkin", reservation_payload["reservations"][0]["checkin"])
                         memory_manager.set_flag(target, "checkout", reservation_payload["reservations"][0]["checkout"])
+                    if folio_id:
+                        upsert_chat_reservation(
+                            chat_id=chat_id,
+                            folio_id=str(folio_id),
+                            checkin=reservation_payload["reservations"][0]["checkin"],
+                            checkout=reservation_payload["reservations"][0]["checkout"],
+                            property_id=pms_property_id,
+                            hotel_code=memory_manager.get_flag(chat_id, "property_name") if memory_manager else None,
+                            original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
+                            source="onboarding",
+                        )
                     memory_manager.set_flag(
                         chat_id,
                         "onboarding_last_reservation",
