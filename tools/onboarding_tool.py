@@ -418,6 +418,17 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     from datetime import datetime
 
                     folio_id = _extract_folio_id(parsed)
+                    targets = [chat_id]
+                    if isinstance(chat_id, str) and ":" in chat_id:
+                        tail = chat_id.split(":")[-1].strip()
+                        if tail:
+                            targets.append(tail)
+                    if folio_id:
+                        for target in targets:
+                            memory_manager.set_flag(target, "folio_id", str(folio_id))
+                    for target in targets:
+                        memory_manager.set_flag(target, "checkin", reservation_payload["reservations"][0]["checkin"])
+                        memory_manager.set_flag(target, "checkout", reservation_payload["reservations"][0]["checkout"])
                     memory_manager.set_flag(
                         chat_id,
                         "onboarding_last_reservation",

@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from core.config import Settings
 from core.template_registry import TemplateRegistry
 from core.instance_context import ensure_instance_credentials
+from tools.superintendente_tool import create_consulta_reserva_persona_tool
 
 log = logging.getLogger("TemplateRoutes")
 
@@ -112,6 +113,56 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    folio_keys = (
+        "folio_id",
+        "folioId",
+        "folio",
+        "localizador",
+        "reservation_id",
+        "reserva_id",
+        "id_reserva",
+        "locator",
+    )
+    checkin_keys = ("checkin", "check_in", "fecha_entrada", "entrada", "arrival", "checkin_date")
+    checkout_keys = ("checkout", "check_out", "fecha_salida", "salida", "departure", "checkout_date")
+
+    def _pick(keys):
+        for key in keys:
+            if key in params and params.get(key) not in (None, ""):
+                return str(params.get(key)).strip()
+        return None
+
+    return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
+
+
+def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(payload, dict):
+        return None, None
+    if payload.get("checkin") or payload.get("checkout"):
+        return payload.get("checkin"), payload.get("checkout")
+    reservations = payload.get("reservations") or payload.get("reservation") or []
+    if isinstance(reservations, dict):
+        reservations = [reservations]
+    if isinstance(reservations, list) and reservations:
+        res = reservations[0] or {}
+        if isinstance(res, dict):
+            return res.get("checkin"), res.get("checkout")
+    return None, None
+
+
+def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not text:
+        return None, None, None
+    folio_match = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", text, re.IGNORECASE)
+    checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
+    checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
+    folio_id = folio_match.group(2) if folio_match else None
+    checkin = checkin_match.group(2) if checkin_match else None
+    checkout = checkout_match.group(2) if checkout_match else None
+    return folio_id, checkin, checkout
+
+
 def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
     """Resuelve context_id (instancia:telefono) desde flags/memoria."""
     memory_manager = getattr(state, "memory_manager", None)
@@ -207,6 +258,25 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar hotel_code en memoria: %s", exc)
 
+            folio_id = None
+            checkin = None
+            checkout = None
+            try:
+                if payload.meta and payload.meta.folio_id is not None:
+                    folio_id = str(payload.meta.folio_id)
+                if payload.template and payload.template.parameters:
+                    f_id, ci, co = _extract_reservation_fields(payload.template.parameters)
+                    folio_id = folio_id or f_id
+                    checkin = checkin or ci
+                    checkout = checkout or co
+                if payload.template and payload.template.rendered_text:
+                    f_id, ci, co = _extract_from_text(payload.template.rendered_text)
+                    folio_id = folio_id or f_id
+                    checkin = checkin or ci
+                    checkout = checkout or co
+            except Exception as exc:
+                log.warning("No se pudo extraer folio/checkin/checkout desde parametros: %s", exc)
+
             if payload.source.origin_folio:
                 try:
                     folio = payload.source.origin_folio
@@ -226,10 +296,30 @@ def register_template_routes(app, state) -> None:
                             "origin_folio_max_checkout",
                             folio.max_checkout,
                         )
+                    if folio.id is not None:
+                        folio_id = folio_id or str(folio.id)
+                    if folio.min_checkin:
+                        checkin = checkin or folio.min_checkin
+                    if folio.max_checkout:
+                        checkout = checkout or folio.max_checkout
                 except Exception as exc:
                     log.warning("No se pudo guardar origin_folio en memoria: %s", exc)
 
             context_id = _resolve_whatsapp_context_id(state, chat_id)
+            try:
+                targets = [chat_id, context_id] if context_id else [chat_id]
+                if folio_id:
+                    for target in targets:
+                        state.memory_manager.set_flag(target, "folio_id", folio_id)
+                if checkin:
+                    for target in targets:
+                        state.memory_manager.set_flag(target, "checkin", checkin)
+                if checkout:
+                    for target in targets:
+                        state.memory_manager.set_flag(target, "checkout", checkout)
+            except Exception as exc:
+                log.warning("No se pudo guardar folio/checkin/checkout en memoria: %s", exc)
+
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
             await state.channel_manager.send_template_message(
@@ -240,6 +330,39 @@ def register_template_routes(app, state) -> None:
                 channel="whatsapp",
                 context_id=context_id,
             )
+
+            # Si falta checkin/checkout y hay folio_id, intenta enriquecer desde PMS.
+            if folio_id and (not checkin or not checkout):
+                try:
+                    consulta_tool = create_consulta_reserva_persona_tool(
+                        memory_manager=state.memory_manager,
+                        chat_id=chat_id,
+                    )
+                    raw = await consulta_tool.ainvoke(
+                        {
+                            "folio_id": folio_id,
+                            "property_id": payload.meta.property_id if payload.meta else None,
+                            "hotel_code": hotel_code,
+                        }
+                    )
+                    parsed = None
+                    if isinstance(raw, str):
+                        try:
+                            import json
+
+                            parsed = json.loads(raw)
+                        except Exception:
+                            parsed = None
+                    elif isinstance(raw, dict):
+                        parsed = raw
+                    if parsed:
+                        ci, co = _extract_dates_from_reservation(parsed)
+                        if ci:
+                            state.memory_manager.set_flag(chat_id, "checkin", ci)
+                        if co:
+                            state.memory_manager.set_flag(chat_id, "checkout", co)
+                except Exception as exc:
+                    log.warning("No se pudo enriquecer checkin/checkout via folio: %s", exc)
 
             # Registrar evento para contexto futuro
             try:

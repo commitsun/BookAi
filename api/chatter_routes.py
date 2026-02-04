@@ -16,6 +16,7 @@ from core.db import supabase
 from core.escalation_db import list_pending_escalations, resolve_latest_pending_escalation
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials
+from tools.superintendente_tool import create_consulta_reserva_persona_tool
 
 log = logging.getLogger("ChatterRoutes")
 
@@ -117,6 +118,56 @@ def _normalize_pending_key(guest_id: str) -> str:
     if clean:
         return clean
     return raw
+
+
+def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    folio_keys = (
+        "folio_id",
+        "folioId",
+        "folio",
+        "localizador",
+        "reservation_id",
+        "reserva_id",
+        "id_reserva",
+        "locator",
+    )
+    checkin_keys = ("checkin", "check_in", "fecha_entrada", "entrada", "arrival", "checkin_date")
+    checkout_keys = ("checkout", "check_out", "fecha_salida", "salida", "departure", "checkout_date")
+
+    def _pick(keys):
+        for key in keys:
+            if key in params and params.get(key) not in (None, ""):
+                return str(params.get(key)).strip()
+        return None
+
+    return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
+
+
+def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
+    if not isinstance(payload, dict):
+        return None, None
+    if payload.get("checkin") or payload.get("checkout"):
+        return payload.get("checkin"), payload.get("checkout")
+    reservations = payload.get("reservations") or payload.get("reservation") or []
+    if isinstance(reservations, dict):
+        reservations = [reservations]
+    if isinstance(reservations, list) and reservations:
+        res = reservations[0] or {}
+        if isinstance(res, dict):
+            return res.get("checkin"), res.get("checkout")
+    return None, None
+
+
+def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
+    if not text:
+        return None, None, None
+    folio_match = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", text, re.IGNORECASE)
+    checkin_match = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
+    checkout_match = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", text, re.IGNORECASE)
+    folio_id = folio_match.group(2) if folio_match else None
+    checkin = checkin_match.group(2) if checkin_match else None
+    checkout = checkout_match.group(2) if checkout_match else None
+    return folio_id, checkin, checkout
 
 
 def _pending_actions(limit: int = 200) -> Dict[str, str]:
@@ -434,20 +485,35 @@ def register_chatter_routes(app, state) -> None:
                     log.warning("No se pudo cargar client_name: %s", exc)
 
         items = []
+        memory_manager = getattr(state, "memory_manager", None)
         for key in page_keys:
             last = summaries.get(key, {})
             cid = str(last.get("conversation_id") or "").strip()
             prop_id = last.get("property_id")
             phone = _clean_chat_id(cid)
+            folio_id = None
+            checkin = None
+            checkout = None
+            reservation_status = None
+            room_number = None
+            if memory_manager and cid:
+                try:
+                    folio_id = memory_manager.get_flag(cid, "folio_id") or memory_manager.get_flag(cid, "origin_folio_id")
+                    checkin = memory_manager.get_flag(cid, "checkin") or memory_manager.get_flag(cid, "origin_folio_min_checkin")
+                    checkout = memory_manager.get_flag(cid, "checkout") or memory_manager.get_flag(cid, "origin_folio_max_checkout")
+                    reservation_status = memory_manager.get_flag(cid, "reservation_status")
+                    room_number = memory_manager.get_flag(cid, "room_number")
+                except Exception:
+                    pass
             items.append(
                 {
                     "chat_id": cid,
                     "property_id": prop_id,
-                    "reservation_id": None,
-                    "reservation_status": None,
-                    "room_number": None,
-                    "checkin": None,
-                    "checkout": None,
+                    "reservation_id": folio_id,
+                    "reservation_status": reservation_status,
+                    "room_number": room_number,
+                    "checkin": checkin,
+                    "checkout": checkout,
                     "channel": last.get("channel") or "whatsapp",
                     "last_message": last.get("content"),
                     "last_message_at": last.get("created_at"),
@@ -462,6 +528,7 @@ def register_chatter_routes(app, state) -> None:
                     "proposed_response": proposed_map.get(cid),
                     "is_final_response": bool(proposed_map.get(cid)),
                     "escalation_messages": pending_messages_map.get(cid),
+                    "folio_id": folio_id,
                 }
             )
 
@@ -1036,6 +1103,23 @@ def register_chatter_routes(app, state) -> None:
             parameters = list((payload.parameters or {}).values())
 
         context_id = _resolve_whatsapp_context_id(state, chat_id)
+        folio_id = None
+        checkin = None
+        checkout = None
+        try:
+            if payload.parameters:
+                f_id, ci, co = _extract_reservation_fields(payload.parameters)
+                folio_id = f_id
+                checkin = ci
+                checkout = co
+            if payload.rendered_text:
+                f_id, ci, co = _extract_from_text(payload.rendered_text)
+                folio_id = folio_id or f_id
+                checkin = checkin or ci
+                checkout = checkout or co
+        except Exception as exc:
+            log.warning("No se pudo extraer folio/checkin/checkout: %s", exc)
+
         if state.memory_manager:
             if property_id is not None:
                 for mem_id in [context_id, chat_id]:
@@ -1046,6 +1130,18 @@ def register_chatter_routes(app, state) -> None:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "property_name", payload.hotel_code)
                         state.memory_manager.set_flag(mem_id, "instance_hotel_code", payload.hotel_code)
+            if folio_id:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "folio_id", folio_id)
+            if checkin:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "checkin", checkin)
+            if checkout:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "checkout", checkout)
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
         try:
@@ -1060,6 +1156,38 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.error("Error enviando plantilla: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Error enviando plantilla")
+
+        if folio_id and (not checkin or not checkout):
+            try:
+                consulta_tool = create_consulta_reserva_persona_tool(
+                    memory_manager=state.memory_manager,
+                    chat_id=context_id or chat_id,
+                )
+                raw = await consulta_tool.ainvoke(
+                    {
+                        "folio_id": folio_id,
+                        "property_id": property_id,
+                        "hotel_code": payload.hotel_code,
+                    }
+                )
+                parsed = None
+                if isinstance(raw, str):
+                    try:
+                        import json
+
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = None
+                elif isinstance(raw, dict):
+                    parsed = raw
+                if parsed:
+                    ci, co = _extract_dates_from_reservation(parsed)
+                    if ci:
+                        state.memory_manager.set_flag(chat_id, "checkin", ci)
+                    if co:
+                        state.memory_manager.set_flag(chat_id, "checkout", co)
+            except Exception as exc:
+                log.warning("No se pudo enriquecer checkin/checkout via folio: %s", exc)
 
         rendered = None
         try:

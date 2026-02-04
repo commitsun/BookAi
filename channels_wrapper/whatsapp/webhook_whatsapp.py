@@ -136,6 +136,15 @@ def register_whatsapp_routes(app, state):
 
             try:
                 property_id = state.memory_manager.get_flag(memory_id, "property_id")
+                if property_id is None:
+                    property_id = state.memory_manager.get_flag(sender, "property_id")
+                    if property_id is not None:
+                        state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                for key in ("folio_id", "checkin", "checkout"):
+                    if state.memory_manager.get_flag(memory_id, key) is None:
+                        val = state.memory_manager.get_flag(sender, key)
+                        if val is not None:
+                            state.memory_manager.set_flag(memory_id, key, val)
             except Exception:
                 property_id = None
             if property_id is not None and sender:
