@@ -229,15 +229,23 @@ class MemoryManager:
         # Si el mensaje trae datos de reserva, actualiza flags (sobrescribe con lo mas reciente).
         try:
             if content:
+                targets = [conversation_id]
+                if isinstance(conversation_id, str) and ":" in conversation_id:
+                    tail = conversation_id.split(":")[-1].strip()
+                    if tail:
+                        targets.append(tail)
                 m = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", content, re.IGNORECASE)
                 if m:
-                    self.set_flag(conversation_id, "folio_id", m.group(2))
+                    for target in targets:
+                        self.set_flag(target, "folio_id", m.group(2))
                 m = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
                 if m:
-                    self.set_flag(conversation_id, "checkin", m.group(2))
+                    for target in targets:
+                        self.set_flag(target, "checkin", m.group(2))
                 m = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
                 if m:
-                    self.set_flag(conversation_id, "checkout", m.group(2))
+                    for target in targets:
+                        self.set_flag(target, "checkout", m.group(2))
         except Exception:
             pass
 
