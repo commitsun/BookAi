@@ -297,12 +297,22 @@ def upsert_chat_reservation(
         payload["source"] = str(source).strip()
 
     try:
+        logging.info(
+            "🧾 upsert_chat_reservation table=%s payload=%s",
+            Settings.CHAT_RESERVATIONS_TABLE,
+            payload,
+        )
         supabase.table(Settings.CHAT_RESERVATIONS_TABLE).upsert(
             payload,
             on_conflict="chat_id,folio_id",
         ).execute()
     except Exception as exc:
-        logging.warning("⚠️ No se pudo upsert chat_reservation: %s", exc)
+        logging.warning("⚠️ No se pudo upsert chat_reservation: %s", exc, exc_info=True)
+        try:
+            supabase.table(Settings.CHAT_RESERVATIONS_TABLE).insert(payload).execute()
+            logging.info("🧾 insert_chat_reservation ok (fallback) chat_id=%s folio_id=%s", payload.get("chat_id"), payload.get("folio_id"))
+        except Exception as exc2:
+            logging.warning("⚠️ No se pudo insertar chat_reservation (fallback): %s", exc2, exc_info=True)
 
 
 def get_active_chat_reservation(

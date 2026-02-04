@@ -29,6 +29,7 @@ warnings.filterwarnings("ignore", category=UserWarning)
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s | %(levelname)s | %(name)s | %(message)s",
+    force=True,
 )
 
 for noisy_logger in ("langsmith", "langsmith.client"):
