@@ -1006,6 +1006,13 @@ def register_chatter_routes(app, state) -> None:
         rendered = None
         try:
             rendered = template_def.render_content(payload.parameters) if template_def else None
+            if not rendered and template_def:
+                rendered = template_def.render_fallback_summary(payload.parameters)
+            if not rendered and payload.parameters:
+                rendered = "Parametros de plantilla:\n" + "\n".join(
+                    f"{k}: {v}" for k, v in payload.parameters.items()
+                    if v is not None and str(v).strip() != ""
+                )
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
             if rendered:
                 if property_id is not None:

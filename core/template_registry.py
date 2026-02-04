@@ -306,6 +306,32 @@ class TemplateDefinition:
 
         return text
 
+    def render_fallback_summary(self, provided: Dict[str, Any] | None) -> Optional[str]:
+        """
+        Genera un resumen minimo a partir de parametros si no hay content.
+        Ayuda a mantener contexto cuando la plantilla no trae texto base.
+        """
+        provided = provided or {}
+        if not provided:
+            return None
+
+        lines: List[str] = []
+        ordered_keys = list(self.parameter_order or [])
+        for key in provided.keys():
+            if key not in ordered_keys:
+                ordered_keys.append(key)
+
+        for key in ordered_keys:
+            val = provided.get(key)
+            if val is None or val == "":
+                continue
+            label = self.get_param_label(key)
+            lines.append(f"{label}: {val}")
+
+        if not lines:
+            return None
+        return "\n".join(lines)
+
 
 class TemplateRegistry:
     """Registro en memoria de plantillas (fuente Supabase)."""

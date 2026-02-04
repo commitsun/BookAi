@@ -201,6 +201,13 @@ def register_template_routes(app, state) -> None:
             # Registrar evento para contexto futuro
             try:
                 rendered = template_def.render_content(payload.template.parameters) if template_def else None
+                if not rendered and template_def:
+                    rendered = template_def.render_fallback_summary(payload.template.parameters)
+                if not rendered and payload.template.parameters:
+                    rendered = "Parametros de plantilla:\n" + "\n".join(
+                        f"{k}: {v}" for k, v in payload.template.parameters.items()
+                        if v is not None and str(v).strip() != ""
+                    )
                 if rendered:
                     state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
                     state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
