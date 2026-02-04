@@ -148,6 +148,36 @@ class MemoryManager:
             combined_sorted = sorted(combined, key=parse_ts)
             recent = combined_sorted[-limit:]
 
+            # Si faltan datos persistentes, intenta inferirlos del historial reciente.
+            try:
+                folio_flag = self.get_flag(conversation_id, "folio_id")
+                checkin_flag = self.get_flag(conversation_id, "checkin")
+                checkout_flag = self.get_flag(conversation_id, "checkout")
+                if not (folio_flag and checkin_flag and checkout_flag):
+                    for msg in reversed(recent):
+                        content = msg.get("content") or ""
+                        if not isinstance(content, str):
+                            continue
+                        if not folio_flag:
+                            m = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", content, re.IGNORECASE)
+                            if m:
+                                folio_flag = m.group(2)
+                                self.set_flag(conversation_id, "folio_id", folio_flag)
+                        if not checkin_flag:
+                            m = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
+                            if m:
+                                checkin_flag = m.group(2)
+                                self.set_flag(conversation_id, "checkin", checkin_flag)
+                        if not checkout_flag:
+                            m = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
+                            if m:
+                                checkout_flag = m.group(2)
+                                self.set_flag(conversation_id, "checkout", checkout_flag)
+                        if folio_flag and checkin_flag and checkout_flag:
+                            break
+            except Exception:
+                pass
+
             log.info(
                 f"🧠 Contexto cargado para {cid}: {len(recent)} mensajes "
                 f"(RAM={len(local_msgs)}, DB={len(db_msgs)})"

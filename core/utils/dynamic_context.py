@@ -24,6 +24,9 @@ def build_dynamic_context_block(
     origin_folio_code: Optional[str] = None,
     origin_folio_min_checkin: Optional[str] = None,
     origin_folio_max_checkout: Optional[str] = None,
+    folio_id: Optional[Any] = None,
+    checkin: Optional[str] = None,
+    checkout: Optional[str] = None,
 ) -> str:
     """Return formatted dynamic context block or empty string when unused."""
     return (
@@ -38,7 +41,10 @@ def build_dynamic_context_block(
         f"Origin_folio_id: {_stringify(origin_folio_id)},\n"
         f"Origin_folio_code: {_stringify(origin_folio_code)},\n"
         f"Origin_folio_min_checkin: {_stringify(origin_folio_min_checkin)},\n"
-        f"Origin_folio_max_checkout: {_stringify(origin_folio_max_checkout)}"
+        f"Origin_folio_max_checkout: {_stringify(origin_folio_max_checkout)},\n"
+        f"Folio_id: {_stringify(folio_id)},\n"
+        f"Checkin: {_stringify(checkin)},\n"
+        f"Checkout: {_stringify(checkout)}"
     )
 
 
@@ -62,6 +68,9 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
     origin_folio_code = memory_manager.get_flag(chat_id, "origin_folio_code")
     origin_folio_min_checkin = memory_manager.get_flag(chat_id, "origin_folio_min_checkin")
     origin_folio_max_checkout = memory_manager.get_flag(chat_id, "origin_folio_max_checkout")
+    folio_id = memory_manager.get_flag(chat_id, "folio_id")
+    checkin = memory_manager.get_flag(chat_id, "checkin")
+    checkout = memory_manager.get_flag(chat_id, "checkout")
 
     base_block = build_dynamic_context_block(
         instance_url=instance_url,
@@ -75,6 +84,9 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
         origin_folio_code=origin_folio_code,
         origin_folio_min_checkin=origin_folio_min_checkin,
         origin_folio_max_checkout=origin_folio_max_checkout,
+        folio_id=folio_id,
+        checkin=checkin,
+        checkout=checkout,
     )
 
     temp_block = ""
