@@ -64,6 +64,40 @@ async def process_user_message(
             log.warning("⚠️ No se pudo obtener memoria: %s", exc)
             history = []
 
+        # Respuesta rápida: si el huésped pide el localizador y ya está en historial.
+        localizador = None
+        if state.memory_manager:
+            try:
+                raw_hist = state.memory_manager.get_memory(mem_id, limit=30) or []
+                for msg in raw_hist:
+                    content = (msg.get("content") or "")
+                    if not isinstance(content, str):
+                        continue
+                    match = re.search(
+                        r"(localizador|folio(?:_id)?)\\s*[:#]?\\s*([A-Za-z0-9-]{4,})",
+                        content,
+                        re.IGNORECASE,
+                    )
+                    if match:
+                        localizador = match.group(2)
+            except Exception as exc:
+                log.debug("No se pudo extraer localizador de historial: %s", exc)
+
+        asks_localizador = bool(re.search(r"localizador|folio|n[uú]mero de reserva", user_message, re.IGNORECASE))
+        if asks_localizador and localizador:
+            response_raw = f"El localizador de tu reserva es {localizador}."
+            try:
+                state.memory_manager.save(
+                    mem_id,
+                    role="assistant",
+                    content=response_raw,
+                    channel=channel,
+                )
+            except Exception as exc:
+                log.warning("No se pudo guardar respuesta rápida de localizador: %s", exc)
+        else:
+            response_raw = None
+
         async def send_inciso_callback(msg: str):
             try:
                 await state.channel_manager.send_message(
@@ -84,18 +118,19 @@ async def process_user_message(
         except Exception as exc:
             log.warning("No se pudo hidratar contexto dinamico: %s", exc)
 
-        main_agent = create_main_agent(
-            memory_manager=state.memory_manager,
-            send_callback=send_inciso_callback,
-            interno_agent=state.interno_agent,
-        )
+        if not response_raw:
+            main_agent = create_main_agent(
+                memory_manager=state.memory_manager,
+                send_callback=send_inciso_callback,
+                interno_agent=state.interno_agent,
+            )
 
-        response_raw = await main_agent.ainvoke(
-            user_input=user_message,
-            chat_id=mem_id,
-            hotel_name=hotel_name,
-            chat_history=history,
-        )
+            response_raw = await main_agent.ainvoke(
+                user_input=user_message,
+                chat_id=mem_id,
+                hotel_name=hotel_name,
+                chat_history=history,
+            )
 
         if not response_raw:
             await state.interno_agent.escalate(

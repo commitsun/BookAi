@@ -67,6 +67,10 @@ class TemplatePayload(BaseModel):
     code: str = Field(..., description="Código interno de la plantilla (BookAi/Odoo)")
     language: str = Field(default="es", description="Código ISO del idioma")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parámetros nominales de la plantilla")
+    rendered_text: Optional[str] = Field(
+        default=None,
+        description="Texto renderizado de la plantilla (opcional, para contexto)",
+    )
 
 
 class MetaInfo(BaseModel):
@@ -239,7 +243,9 @@ def register_template_routes(app, state) -> None:
 
             # Registrar evento para contexto futuro
             try:
-                rendered = template_def.render_content(payload.template.parameters) if template_def else None
+                rendered = (payload.template.rendered_text or "").strip() or None
+                if not rendered:
+                    rendered = template_def.render_content(payload.template.parameters) if template_def else None
                 if not rendered and template_def:
                     rendered = template_def.render_fallback_summary(payload.template.parameters)
                 if not rendered and payload.template.parameters:

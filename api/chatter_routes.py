@@ -42,6 +42,10 @@ class SendTemplateRequest(BaseModel):
     hotel_code: Optional[str] = Field(default=None, description="Codigo del hotel (opcional)")
     language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
+    rendered_text: Optional[str] = Field(
+        default=None,
+        description="Texto renderizado de la plantilla (opcional, para contexto)",
+    )
     channel: str = Field(default="whatsapp", description="Canal de salida")
     property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
@@ -1059,7 +1063,9 @@ def register_chatter_routes(app, state) -> None:
 
         rendered = None
         try:
-            rendered = template_def.render_content(payload.parameters) if template_def else None
+            rendered = (payload.rendered_text or "").strip() or None
+            if not rendered:
+                rendered = template_def.render_content(payload.parameters) if template_def else None
             if not rendered and template_def:
                 rendered = template_def.render_fallback_summary(payload.parameters)
             if not rendered and payload.parameters:
