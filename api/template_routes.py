@@ -12,6 +12,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from core.config import Settings
 from core.template_registry import TemplateRegistry
+from core.instance_context import ensure_instance_credentials
 
 log = logging.getLogger("TemplateRoutes")
 
@@ -107,6 +108,33 @@ def _normalize_phone(phone: str) -> str:
     return digits
 
 
+def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
+    """Resuelve context_id (instancia:telefono) desde flags/memoria."""
+    memory_manager = getattr(state, "memory_manager", None)
+    if not memory_manager or not chat_id:
+        return None
+
+    clean = _normalize_phone(chat_id) or str(chat_id).strip()
+    if clean:
+        last_mem = memory_manager.get_flag(clean, "last_memory_id")
+        if isinstance(last_mem, str) and last_mem.strip():
+            return last_mem.strip()
+
+    suffix = f":{clean}" if clean else ""
+    if not suffix:
+        return None
+
+    for store_name in ("state_flags", "runtime_memory"):
+        store = getattr(memory_manager, store_name, None)
+        if isinstance(store, dict):
+            for key in list(store.keys()):
+                if isinstance(key, str) and key.endswith(suffix):
+                    memory_manager.set_flag(clean, "last_memory_id", key.strip())
+                    return key.strip()
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -168,6 +196,13 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
 
+            if hotel_code:
+                try:
+                    state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                    state.memory_manager.set_flag(chat_id, "instance_hotel_code", hotel_code)
+                except Exception as exc:
+                    log.warning("No se pudo guardar hotel_code en memoria: %s", exc)
+
             if payload.source.origin_folio:
                 try:
                     folio = payload.source.origin_folio
@@ -190,12 +225,16 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar origin_folio en memoria: %s", exc)
 
+            context_id = _resolve_whatsapp_context_id(state, chat_id)
+            ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+
             await state.channel_manager.send_template_message(
                 chat_id,
                 wa_template,
                 parameters=parameters,
                 language=language,
                 channel="whatsapp",
+                context_id=context_id,
             )
 
             # Registrar evento para contexto futuro
@@ -210,7 +249,13 @@ def register_template_routes(app, state) -> None:
                     )
                 if rendered:
                     state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
-                    state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
+                    state.memory_manager.save(
+                        chat_id,
+                        role="bookai",
+                        content=rendered,
+                        channel="whatsapp",
+                        original_chat_id=context_id or None,
+                    )
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = hotel_code or payload.source.instance_url
                 state.memory_manager.save(
@@ -221,6 +266,7 @@ def register_template_routes(app, state) -> None:
                         f"origen={source_tag} {meta_excerpt}"
                     ).strip(),
                     channel="whatsapp",
+                    original_chat_id=context_id or None,
                 )
             except Exception as exc:
                 log.warning("No se pudo registrar el envío en memoria: %s", exc)

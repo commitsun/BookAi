@@ -15,6 +15,7 @@ from core.config import Settings, ModelConfig, ModelTier
 from core.db import supabase
 from core.escalation_db import list_pending_escalations, resolve_latest_pending_escalation
 from core.template_registry import TemplateRegistry, TemplateDefinition
+from core.instance_context import ensure_instance_credentials
 
 log = logging.getLogger("ChatterRoutes")
 
@@ -293,6 +294,31 @@ def _related_memory_ids(state, chat_id: str) -> list[str]:
     return list(ids)
 
 
+def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
+    """Resuelve el context_id (ej. instancia:telefono) para enrutar WhatsApp."""
+    if not state or not chat_id:
+        return None
+
+    memory_manager = getattr(state, "memory_manager", None)
+    clean = _clean_chat_id(chat_id) or str(chat_id).strip()
+    if memory_manager and clean:
+        last_mem = memory_manager.get_flag(clean, "last_memory_id")
+        if isinstance(last_mem, str) and last_mem.strip():
+            return last_mem.strip()
+
+    related = _related_memory_ids(state, chat_id)
+    for mem_id in related:
+        if not isinstance(mem_id, str) or ":" not in mem_id:
+            continue
+        tail = mem_id.split(":")[-1]
+        if _clean_chat_id(tail) == clean or tail.strip() == clean:
+            if memory_manager and clean:
+                memory_manager.set_flag(clean, "last_memory_id", mem_id.strip())
+            return mem_id.strip()
+
+    return None
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -509,7 +535,20 @@ def register_chatter_routes(app, state) -> None:
         if not payload.message.strip():
             raise HTTPException(status_code=422, detail="Mensaje vacio")
 
-        await state.channel_manager.send_message(chat_id, payload.message, channel="whatsapp")
+        context_id = _resolve_whatsapp_context_id(state, chat_id)
+        if state.memory_manager and property_id is not None:
+            for mem_id in [context_id, chat_id]:
+                if mem_id:
+                    state.memory_manager.set_flag(mem_id, "property_id", property_id)
+        if state.memory_manager:
+            ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+
+        await state.channel_manager.send_message(
+            chat_id,
+            payload.message,
+            channel="whatsapp",
+            context_id=context_id,
+        )
         try:
             sender = (payload.sender or "bookai").strip().lower()
             if sender in {"user", "hotel", "staff"}:
@@ -546,6 +585,7 @@ def register_chatter_routes(app, state) -> None:
                 role,
                 payload.message,
                 channel=payload.channel.lower(),
+                original_chat_id=context_id or None,
                 bypass_force_guest_role=role == "user",
             )
             for mem_id in related_ids:
@@ -991,6 +1031,19 @@ def register_chatter_routes(app, state) -> None:
             template_name = template_code
             parameters = list((payload.parameters or {}).values())
 
+        context_id = _resolve_whatsapp_context_id(state, chat_id)
+        if state.memory_manager:
+            if property_id is not None:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "property_id", property_id)
+            if payload.hotel_code:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "property_name", payload.hotel_code)
+                        state.memory_manager.set_flag(mem_id, "instance_hotel_code", payload.hotel_code)
+            ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+
         try:
             await state.channel_manager.send_template_message(
                 chat_id,
@@ -998,6 +1051,7 @@ def register_chatter_routes(app, state) -> None:
                 parameters=parameters,
                 language=language,
                 channel="whatsapp",
+                context_id=context_id,
             )
         except Exception as exc:
             log.error("Error enviando plantilla: %s", exc, exc_info=True)
@@ -1017,7 +1071,13 @@ def register_chatter_routes(app, state) -> None:
             if rendered:
                 if property_id is not None:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
-                state.memory_manager.save(chat_id, role="bookai", content=rendered, channel="whatsapp")
+                state.memory_manager.save(
+                    chat_id,
+                    role="bookai",
+                    content=rendered,
+                    channel="whatsapp",
+                    original_chat_id=context_id or None,
+                )
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.save(
@@ -1025,6 +1085,7 @@ def register_chatter_routes(app, state) -> None:
                 role="system",
                 content=f"[TEMPLATE_SENT] plantilla={template_name} lang={language}",
                 channel="whatsapp",
+                original_chat_id=context_id or None,
             )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)

@@ -117,6 +117,18 @@ class MemoryManager:
                 )
                 or []
             )
+            if property_id is not None and not db_msgs:
+                # Fallback: si no hay mensajes con property_id, reintenta sin filtro.
+                db_msgs = (
+                    get_conversation_history(
+                        db_conversation_id,
+                        limit=limit,
+                        since=since,
+                        property_id=None,
+                        table=history_table,
+                    )
+                    or []
+                )
 
             # Fusionar ambos
             combined = db_msgs + local_msgs
@@ -201,6 +213,22 @@ class MemoryManager:
         if len(self.runtime_memory[cid]) > self.max_runtime_messages:
             self.runtime_memory[cid] = self.runtime_memory[cid][-self.max_runtime_messages:]
 
+        # Resolver original_chat_id (preferir el huesped si existe).
+        resolved_original = original_chat_id
+        if not resolved_original:
+            last_mem = self.get_flag(conversation_id, "last_memory_id")
+            if isinstance(last_mem, str) and ":" in last_mem:
+                resolved_original = last_mem.strip()
+        if not resolved_original and ":" in str(conversation_id or ""):
+            resolved_original = str(conversation_id).strip()
+        if not resolved_original:
+            guest_number = (
+                self.get_flag(conversation_id, "guest_number")
+                or self.get_flag(conversation_id, "whatsapp_number")
+            )
+            if guest_number:
+                resolved_original = self._normalize_phone(str(guest_number))
+
         # Guardar en Supabase
         try:
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
@@ -213,7 +241,7 @@ class MemoryManager:
                 client_name=client_name if is_guest else None,
                 channel=channel_to_store,
                 property_id=property_id,
-                original_chat_id=original_chat_id or cid,
+                original_chat_id=resolved_original or cid,
                 table=self._resolve_history_table(conversation_id),
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
