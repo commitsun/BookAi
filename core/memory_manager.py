@@ -226,6 +226,21 @@ class MemoryManager:
         if not client_name and is_guest:
             client_name = self.get_flag(cid, "client_name")
 
+        # Si el mensaje trae datos de reserva, actualiza flags (sobrescribe con lo mas reciente).
+        try:
+            if content:
+                m = re.search(r"(localizador|folio(?:_id)?|reserva)\s*[:#]?\s*([A-Za-z0-9-]{4,})", content, re.IGNORECASE)
+                if m:
+                    self.set_flag(conversation_id, "folio_id", m.group(2))
+                m = re.search(r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
+                if m:
+                    self.set_flag(conversation_id, "checkin", m.group(2))
+                m = re.search(r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})", content, re.IGNORECASE)
+                if m:
+                    self.set_flag(conversation_id, "checkout", m.group(2))
+        except Exception:
+            pass
+
         entry = {
             "role": normalized_role,
             "content": content.strip(),
