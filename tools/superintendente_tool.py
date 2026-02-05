@@ -146,6 +146,10 @@ class ConsultaReservaGeneralInput(BaseModel):
         default=None,
         description="Codigo o nombre del hotel (opcional).",
     )
+    enrich_contact: bool = Field(
+        default=False,
+        description="Si es true, completa teléfono/email consultando detalle por folio.",
+    )
 
 
 class ConsultaReservaPersonaInput(BaseModel):
@@ -1608,6 +1612,7 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
         pms_property_id: int = 38,
         instance_url: Optional[str] = None,
         hotel_code: Optional[str] = None,
+        enrich_contact: bool = False,
     ) -> str:
         """
         Consulta folios/reservas en un rango de fechas vía MCP → n8n.
@@ -1782,8 +1787,8 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             else:
                 simplified = filtered
 
-            # 🔎 Enriquecer con contacto (teléfono/email) si falta en el listado general
-            if isinstance(simplified, list) and simplified:
+            # 🔎 Enriquecer con contacto (teléfono/email) solo si se solicita explícitamente
+            if enrich_contact and isinstance(simplified, list) and simplified:
                 consulta_persona_tool = create_consulta_reserva_persona_tool(
                     memory_manager=memory_manager,
                     chat_id=chat_id,
