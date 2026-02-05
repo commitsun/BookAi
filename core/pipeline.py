@@ -126,7 +126,14 @@ async def process_user_message(
                 log.debug("No se pudo extraer localizador de historial: %s", exc)
 
         asks_localizador = bool(re.search(r"localizador|folio|n[uú]mero de reserva", user_message, re.IGNORECASE))
-        if not response_raw and asks_localizador and localizador:
+        wants_details = bool(
+            re.search(
+                r"(mirame|mu[eé]strame|ver|consultar|detalles|m[aá]s info|informaci[oó]n|sobre esta)",
+                user_message,
+                re.IGNORECASE,
+            )
+        )
+        if not response_raw and asks_localizador and localizador and not wants_details:
             response_raw = f"El localizador de tu reserva es {localizador}."
             try:
                 state.memory_manager.save(

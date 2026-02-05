@@ -23,6 +23,7 @@ from tools.onboarding_tool import (
     create_room_type_tool,
     create_reservation_tool,
     create_token_tool,
+    create_multireserva_tool,
 )
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 
@@ -44,10 +45,11 @@ class OnboardingAgent:
             "- Usa siempre las tools disponibles (token -> tipo de habitacion -> reserva) en ese orden logico.\n"
             "- Pide al huesped solo los datos faltantes: fechas (checkin/checkout), adultos/ninos, tipo de habitacion o preferencia, nombre, email y telefono.\n"
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
-            "- Tras crear la reserva, comparte el folio_id con el huesped si viene en la respuesta.\n"
+            "- Tras crear la reserva, comparte el reservation_locator con el huesped si viene en la respuesta. Nunca muestres folio_id.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
             "- Si el huesped pide consultar su reserva, solicita el folio_id y usa consulta_reserva_persona.\n"
+            "- Si el huesped pregunta por sus reservas, usa multireserva para listar las reservas del chat.\n"
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
@@ -83,10 +85,11 @@ class OnboardingAgent:
             "- Usa siempre las tools disponibles (token -> tipo de habitacion -> reserva) en ese orden logico.\n"
             "- Pide al huesped solo los datos faltantes: fechas (checkin/checkout), adultos/ninos, tipo de habitacion o preferencia, nombre, email y telefono.\n"
             "- Una vez tengas los datos, llama a crear_reserva_onboarding. Nunca inventes.\n"
-            "- Tras crear la reserva, comparte el folio_id con el huesped si viene en la respuesta.\n"
+            "- Tras crear la reserva, comparte el reservation_locator con el huesped si viene en la respuesta. Nunca muestres folio_id.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
             "- Si el huesped pide consultar su reserva, solicita el folio_id y usa consulta_reserva_persona.\n"
+            "- Si el huesped pregunta por sus reservas, usa multireserva para listar las reservas del chat.\n"
         )
         dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
         if dynamic_context:
@@ -97,6 +100,7 @@ class OnboardingAgent:
             create_token_tool(),
             create_room_type_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
+            create_multireserva_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_consulta_reserva_persona_tool(
                 memory_manager=self.memory_manager,
                 chat_id=chat_id,

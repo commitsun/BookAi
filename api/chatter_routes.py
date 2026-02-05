@@ -549,7 +549,7 @@ def register_chatter_routes(app, state) -> None:
                     pass
             if not folio_id:
                 try:
-                    active = get_active_chat_reservation(chat_id=cid)
+                    active = get_active_chat_reservation(chat_id=cid, property_id=prop_id)
                     if active:
                         folio_id = active.get("folio_id") or folio_id
                         reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else None

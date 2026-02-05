@@ -326,6 +326,8 @@ def upsert_chat_reservation(
 def get_active_chat_reservation(
     *,
     chat_id: str,
+    property_id: str | int | None = None,
+    hotel_code: str | None = None,
     limit: int = 20,
 ) -> dict | None:
     """
@@ -337,14 +339,18 @@ def get_active_chat_reservation(
 
     clean_id = str(chat_id).replace("+", "").strip()
     try:
-        resp = (
+        query = (
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
             .select("chat_id, folio_id, reservation_locator, checkin, checkout, property_id, hotel_code, original_chat_id, source, updated_at")
             .eq("chat_id", clean_id)
             .order("updated_at", desc=True)
             .limit(limit)
-            .execute()
         )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        if hotel_code:
+            query = query.eq("hotel_code", hotel_code)
+        resp = query.execute()
         rows = resp.data or []
     except Exception as exc:
         logging.warning("⚠️ No se pudo leer chat_reservations: %s", exc)
