@@ -81,6 +81,7 @@ class MetaInfo(BaseModel):
     reservation_id: Optional[int] = None
     folio_id: Optional[int] = None
     property_id: Optional[int] = None
+    instance_id: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 
@@ -242,6 +243,11 @@ def register_template_routes(app, state) -> None:
     async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
         try:
             hotel_code = payload.source.hotel.external_code
+            instance_id = (
+                (payload.meta.instance_id if payload.meta else None)
+                or payload.source.instance_id
+                or payload.source.instance_url
+            )
             language = (payload.template.language or "es").lower()
             template_code = payload.template.code
             idempotency_key = (payload.meta.idempotency_key if payload.meta else "") or ""
@@ -279,6 +285,12 @@ def register_template_routes(app, state) -> None:
                     state.memory_manager.set_flag(chat_id, "instance_url", payload.source.instance_url)
                 except Exception as exc:
                     log.warning("No se pudo guardar instance_url en memoria: %s", exc)
+            if instance_id:
+                try:
+                    state.memory_manager.set_flag(chat_id, "instance_id", instance_id)
+                    state.memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
+                except Exception as exc:
+                    log.warning("No se pudo guardar instance_id en memoria: %s", exc)
 
             if payload.recipient.display_name:
                 try:
@@ -295,7 +307,7 @@ def register_template_routes(app, state) -> None:
             if hotel_code:
                 try:
                     state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
-                    state.memory_manager.set_flag(chat_id, "instance_hotel_code", hotel_code)
+                    # property_name es nombre/label; instance_id se guarda aparte
                 except Exception as exc:
                     log.warning("No se pudo guardar hotel_code en memoria: %s", exc)
             elif payload.template and payload.template.parameters:
@@ -304,7 +316,6 @@ def register_template_routes(app, state) -> None:
                     hotel_code = inferred_hotel
                     try:
                         state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
-                        state.memory_manager.set_flag(chat_id, "instance_hotel_code", hotel_code)
                     except Exception:
                         pass
 
@@ -381,13 +392,13 @@ def register_template_routes(app, state) -> None:
             if folio_id:
                 try:
                     log.info(
-                        "🧾 template upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s hotel_code=%s",
+                        "🧾 template upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s instance_id=%s",
                         chat_id,
                         folio_id,
                         checkin,
                         checkout,
                         payload.meta.property_id if payload.meta else None,
-                        hotel_code,
+                        instance_id,
                     )
                     upsert_chat_reservation(
                         chat_id=chat_id,
@@ -395,7 +406,7 @@ def register_template_routes(app, state) -> None:
                         checkin=checkin,
                         checkout=checkout,
                         property_id=payload.meta.property_id if payload.meta else None,
-                        hotel_code=hotel_code or (payload.template.parameters and _extract_hotel_code(payload.template.parameters)),
+                        instance_id=instance_id,
                         original_chat_id=context_id or None,
                         reservation_locator=reservation_locator,
                         source="template",
@@ -425,7 +436,7 @@ def register_template_routes(app, state) -> None:
                         {
                             "folio_id": folio_id,
                             "property_id": payload.meta.property_id if payload.meta else None,
-                            "hotel_code": hotel_code,
+                            "instance_id": instance_id,
                         }
                     )
                     parsed = None
@@ -454,7 +465,7 @@ def register_template_routes(app, state) -> None:
                                 checkin=ci or checkin,
                                 checkout=co or checkout,
                                 property_id=payload.meta.property_id if payload.meta else None,
-                                hotel_code=hotel_code,
+                                instance_id=instance_id,
                                 original_chat_id=context_id or None,
                                 reservation_locator=locator,
                                 source="pms",
@@ -488,7 +499,7 @@ def register_template_routes(app, state) -> None:
                             checkin=checkin,
                             checkout=checkout,
                             property_id=payload.meta.property_id if payload.meta else None,
-                            hotel_code=hotel_code,
+                            instance_id=instance_id,
                             original_chat_id=context_id or None,
                             reservation_locator=reservation_locator,
                             source="rendered",
@@ -523,12 +534,12 @@ def register_template_routes(app, state) -> None:
                         original_chat_id=context_id or None,
                     )
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
-                source_tag = hotel_code or payload.source.instance_url
+                source_tag = instance_id or payload.source.instance_url or hotel_code
                 state.memory_manager.save(
                     chat_id,
                     role="system",
                     content=(
-                        f"[TEMPLATE_SENT] plantilla={wa_template} lang={language} hotel={hotel_code} "
+                        f"[TEMPLATE_SENT] plantilla={wa_template} lang={language} instance={instance_id or ''} "
                         f"origen={source_tag} {meta_excerpt}"
                     ).strip(),
                     channel="whatsapp",
@@ -542,6 +553,7 @@ def register_template_routes(app, state) -> None:
                 "template": wa_template,
                 "chat_id": chat_id,
                 "hotel_code": hotel_code,
+                "instance_id": instance_id,
                 "language": language,
             }
         except HTTPException:

@@ -41,7 +41,8 @@ class ToggleBookAiRequest(BaseModel):
 class SendTemplateRequest(BaseModel):
     chat_id: str = Field(..., description="ID del chat (telefono)")
     template_code: str = Field(..., description="Codigo interno de la plantilla")
-    hotel_code: Optional[str] = Field(default=None, description="Codigo del hotel (opcional)")
+    hotel_code: Optional[str] = Field(default=None, description="Codigo del hotel (opcional, legado)")
+    instance_id: Optional[str] = Field(default=None, description="ID de instancia (opcional)")
     language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
     rendered_text: Optional[str] = Field(
@@ -668,6 +669,12 @@ def register_chatter_routes(app, state) -> None:
             raise HTTPException(status_code=422, detail="Mensaje vacio")
 
         context_id = _resolve_whatsapp_context_id(state, chat_id)
+        instance_id = None
+        if state.memory_manager:
+            try:
+                instance_id = state.memory_manager.get_flag(context_id or chat_id, "instance_id") or state.memory_manager.get_flag(context_id or chat_id, "instance_hotel_code")
+            except Exception:
+                instance_id = None
         if state.memory_manager and property_id is not None:
             for mem_id in [context_id, chat_id]:
                 if mem_id:
@@ -1146,6 +1153,7 @@ def register_chatter_routes(app, state) -> None:
         registry = _template_registry(state)
         template_code = payload.template_code
         language = (payload.language or "es").lower()
+        instance_id = (payload.instance_id or "").strip() or None
 
         template_def = None
         if registry:
@@ -1188,18 +1196,21 @@ def register_chatter_routes(app, state) -> None:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "property_id", property_id)
+            if instance_id:
+                for mem_id in [context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "instance_id", instance_id)
+                        state.memory_manager.set_flag(mem_id, "instance_hotel_code", instance_id)
             if payload.hotel_code:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "property_name", payload.hotel_code)
-                        state.memory_manager.set_flag(mem_id, "instance_hotel_code", payload.hotel_code)
             elif payload.parameters:
                 inferred_hotel = _extract_hotel_code(payload.parameters)
                 if inferred_hotel:
                     for mem_id in [context_id, chat_id]:
                         if mem_id:
                             state.memory_manager.set_flag(mem_id, "property_name", inferred_hotel)
-                            state.memory_manager.set_flag(mem_id, "instance_hotel_code", inferred_hotel)
             if folio_id:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
@@ -1217,6 +1228,11 @@ def register_chatter_routes(app, state) -> None:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "checkout", checkout)
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+            if not instance_id:
+                try:
+                    instance_id = state.memory_manager.get_flag(context_id or chat_id, "instance_id") or state.memory_manager.get_flag(context_id or chat_id, "instance_hotel_code")
+                except Exception:
+                    instance_id = None
 
         try:
             await state.channel_manager.send_template_message(
@@ -1234,13 +1250,13 @@ def register_chatter_routes(app, state) -> None:
         if folio_id:
             try:
                 log.info(
-                    "🧾 chatter upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s hotel_code=%s",
+                    "🧾 chatter upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s instance_id=%s",
                     chat_id,
                     folio_id,
                     checkin,
                     checkout,
                     property_id,
-                    payload.hotel_code,
+                    instance_id,
                 )
                 upsert_chat_reservation(
                     chat_id=chat_id,
@@ -1248,7 +1264,7 @@ def register_chatter_routes(app, state) -> None:
                     checkin=checkin,
                     checkout=checkout,
                     property_id=property_id,
-                    hotel_code=payload.hotel_code or (payload.parameters and _extract_hotel_code(payload.parameters)),
+                    instance_id=instance_id,
                     original_chat_id=context_id or None,
                     reservation_locator=reservation_locator,
                     source="template",
@@ -1266,7 +1282,7 @@ def register_chatter_routes(app, state) -> None:
                     {
                         "folio_id": folio_id,
                         "property_id": property_id,
-                        "hotel_code": payload.hotel_code,
+                        "instance_id": instance_id,
                     }
                 )
                 parsed = None
@@ -1295,7 +1311,7 @@ def register_chatter_routes(app, state) -> None:
                             checkin=ci or checkin,
                             checkout=co or checkout,
                             property_id=property_id,
-                            hotel_code=payload.hotel_code,
+                            instance_id=instance_id,
                             original_chat_id=context_id or None,
                             reservation_locator=locator,
                             source="pms",
@@ -1350,11 +1366,11 @@ def register_chatter_routes(app, state) -> None:
                         checkin=checkin,
                         checkout=checkout,
                         property_id=property_id,
-                        hotel_code=payload.hotel_code or (payload.parameters and _extract_hotel_code(payload.parameters)),
-                        original_chat_id=context_id or None,
-                        reservation_locator=reservation_locator,
-                        source="rendered",
-                    )
+                    instance_id=instance_id,
+                    original_chat_id=context_id or None,
+                    reservation_locator=reservation_locator,
+                    source="rendered",
+                )
                 except Exception as exc:
                     log.warning("No se pudo persistir reservation_locator desde rendered: %s", exc)
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
@@ -1413,6 +1429,7 @@ def register_chatter_routes(app, state) -> None:
             "chat_id": chat_id,
             "template": template_name,
             "language": language,
+            "instance_id": instance_id,
         }
 
     @router.get("/chats/{chat_id}/window")

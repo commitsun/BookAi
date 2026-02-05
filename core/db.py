@@ -261,6 +261,19 @@ def get_last_property_id_for_conversation(
 # ======================================================
 # 📌 Reservas por chat (persistencia ligera)
 # ======================================================
+def _normalize_chat_id(value: str | None) -> str:
+    if not value:
+        return ""
+    text = str(value).strip()
+    if ":" in text:
+        text = text.split(":")[-1]
+    groups = re.findall(r"\d{6,}", text)
+    if groups:
+        return groups[-1]
+    cleaned = re.sub(r"\D+", "", text)
+    return cleaned or text
+
+
 def upsert_chat_reservation(
     *,
     chat_id: str,
@@ -268,7 +281,7 @@ def upsert_chat_reservation(
     checkin: str | None = None,
     checkout: str | None = None,
     property_id: str | int | None = None,
-    hotel_code: str | None = None,
+    instance_id: str | None = None,
     original_chat_id: str | None = None,
     reservation_locator: str | None = None,
     source: str | None = None,
@@ -284,8 +297,9 @@ def upsert_chat_reservation(
         logging.warning("⚠️ folio_id inválido, se omite upsert: %s", folio_id)
         return
 
+    normalized_chat = _normalize_chat_id(chat_id)
     payload = {
-        "chat_id": str(chat_id).replace("+", "").strip(),
+        "chat_id": normalized_chat,
         "folio_id": folio_id,
         "updated_at": datetime.utcnow().isoformat(),
     }
@@ -295,8 +309,8 @@ def upsert_chat_reservation(
         payload["checkout"] = str(checkout).strip()
     if property_id is not None:
         payload["property_id"] = property_id
-    if hotel_code:
-        payload["hotel_code"] = str(hotel_code).strip()
+    if instance_id:
+        payload["instance_id"] = str(instance_id).strip()
     if original_chat_id:
         payload["original_chat_id"] = str(original_chat_id).strip()
     if reservation_locator:
@@ -327,7 +341,7 @@ def get_active_chat_reservation(
     *,
     chat_id: str,
     property_id: str | int | None = None,
-    hotel_code: str | None = None,
+    instance_id: str | None = None,
     limit: int = 20,
 ) -> dict | None:
     """
@@ -337,19 +351,19 @@ def get_active_chat_reservation(
     if not chat_id:
         return None
 
-    clean_id = str(chat_id).replace("+", "").strip()
+    clean_id = _normalize_chat_id(chat_id)
     try:
         query = (
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
-            .select("chat_id, folio_id, reservation_locator, checkin, checkout, property_id, hotel_code, original_chat_id, source, updated_at")
+            .select("chat_id, folio_id, reservation_locator, checkin, checkout, property_id, instance_id, original_chat_id, source, updated_at")
             .eq("chat_id", clean_id)
             .order("updated_at", desc=True)
             .limit(limit)
         )
         if property_id is not None:
             query = query.eq("property_id", property_id)
-        if hotel_code:
-            query = query.eq("hotel_code", hotel_code)
+        if instance_id:
+            query = query.eq("instance_id", instance_id)
         resp = query.execute()
         rows = resp.data or []
     except Exception as exc:

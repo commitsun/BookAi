@@ -86,7 +86,11 @@ async def get_filtered_tools(server_name: str):
             elif server_name == "DispoPreciosAgent" and any(k in n for k in ["disponibilidad", "precio", "token"]):
                 filtered.append(t)
 
-            elif server_name == "OnboardingAgent" and any(k in n for k in ["token", "habitacion", "reserva"]):
+            elif server_name == "OnboardingAgent" and any(
+                k in n for k in ["token", "habitacion", "reserva", "reserv", "booking", "crear"]
+            ):
+                if "multireserva" in n:
+                    continue
                 filtered.append(t)
 
         logger.info(f"[MCP] Tools para {server_name}: {[t.name for t in filtered]}")

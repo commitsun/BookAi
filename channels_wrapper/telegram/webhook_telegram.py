@@ -533,7 +533,7 @@ def register_telegram_routes(app, state):
                         state.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
                     )
                     prop_payload = fetch_property_by_id(property_table, property_id_hint)
-                    prop_name = prop_payload.get("hotel_code") or prop_payload.get("name")
+                    prop_name = prop_payload.get("name")
                     if prop_name:
                         state.memory_manager.set_flag(chat_id, "property_name", prop_name)
                 except Exception:

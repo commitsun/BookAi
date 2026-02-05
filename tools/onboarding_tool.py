@@ -18,9 +18,26 @@ log = logging.getLogger("OnboardingTools")
 
 def _find_tool(tools: list[Any], candidates: list[str]) -> Optional[Any]:
     """Localiza una tool MCP por coincidencia parcial de nombre."""
+    normalized = []
+    for candidate in candidates:
+        c = (candidate or "").replace(" ", "_").lower().strip()
+        if c:
+            normalized.append(c)
+
+    # 1) Preferir match exacto
+    for tool in tools or []:
+        name = (tool.name or "").replace(" ", "_").lower().strip()
+        if not name:
+            continue
+        if name in normalized:
+            return tool
+
+    # 2) Match parcial con guardas (evita colisiones tipo "reserva" vs "multireserva")
     for tool in tools or []:
         name = (tool.name or "").replace(" ", "_").lower()
-        for candidate in candidates:
+        for candidate in normalized:
+            if candidate == "reserva" and "multireserva" in name:
+                continue
             if candidate in name:
                 return tool
     return None
@@ -233,7 +250,8 @@ def create_room_type_tool(memory_manager=None, chat_id: str = ""):
 
         if property_id is not None:
             pms_property_id = property_id
-        pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
+        else:
+            pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
         instance_url = None
         if memory_manager and chat_id:
             try:
@@ -316,6 +334,18 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         property_id: Optional[int] = Field(default=None, description="Propiedad (property_id)")
         pms_property_id: int = Field(default=38, description="Propiedad PMS (compatibilidad)")
         pricelist_id: int = Field(default=3, description="Lista de precios (siempre 3)")
+
+    def _normalize_chat_id(val: Optional[str]) -> Optional[str]:
+        if not val:
+            return None
+        text = str(val)
+        if ":" in text:
+            text = text.split(":")[-1]
+        groups = re.findall(r"\d{6,}", text)
+        if groups:
+            return groups[-1]
+        cleaned = re.sub(r"\D+", "", text)
+        return cleaned or text.strip() or None
 
     async def _resolve_room_type_id(
         tools: list[Any],
@@ -474,6 +504,10 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                 **reservation_payload,
                 "key": token,
             }
+            # MCP schema ahora requiere chat_id para la tool de reserva.
+            normalized_chat = _normalize_chat_id(chat_id)
+            if normalized_chat:
+                payload["chat_id"] = str(normalized_chat)
             raw = await reserva_tool.ainvoke(payload)
             if raw is None:
                 log.error("Reserva devolvio respuesta vacia")
@@ -490,6 +524,10 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                     response_text = json.dumps(parsed, ensure_ascii=False)
             else:
                 response_text = json.dumps(parsed, ensure_ascii=False)
+
+            if parsed in ([], {}, None):
+                log.error("Reserva devolvio respuesta vacia/invalidada: %s", parsed)
+                return "❌ No se obtuvo confirmación del PMS."
 
             if memory_manager and chat_id and "❌" not in response_text:
                 try:
@@ -540,7 +578,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                             checkin=reservation_payload["reservations"][0]["checkin"],
                             checkout=reservation_payload["reservations"][0]["checkout"],
                             property_id=pms_property_id,
-                            hotel_code=memory_manager.get_flag(chat_id, "property_name") if memory_manager else None,
+                            instance_id=memory_manager.get_flag(chat_id, "instance_id") if memory_manager else None,
                             original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
                             reservation_locator=reservation_locator,
                             source="onboarding",
@@ -581,7 +619,7 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                                         checkin=reservation_payload["reservations"][0]["checkin"],
                                         checkout=reservation_payload["reservations"][0]["checkout"],
                                         property_id=pms_property_id,
-                                        hotel_code=memory_manager.get_flag(chat_id, "property_name") if memory_manager else None,
+                                        instance_id=memory_manager.get_flag(chat_id, "instance_id") if memory_manager else None,
                                         original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
                                         reservation_locator=reservation_locator,
                                         source="pms",
@@ -678,6 +716,10 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
             default=None,
             description="Localizador público de la reserva (opcional).",
         )
+        listar: Optional[bool] = Field(
+            default=False,
+            description="Si es True, lista las reservas del huésped (multireserva).",
+        )
         fecha_inicio: Optional[str] = Field(
             default=None,
             description="Fecha inicio (YYYY-MM-DD) si no hay folio_id.",
@@ -704,9 +746,22 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
     def _normalize_phone(val: Optional[str]) -> str:
         return re.sub(r"\D+", "", val or "")
 
+    def _normalize_chat_id(val: Optional[str]) -> Optional[str]:
+        if not val:
+            return None
+        text = str(val)
+        if ":" in text:
+            text = text.split(":")[-1]
+        groups = re.findall(r"\d{6,}", text)
+        if groups:
+            return groups[-1]
+        cleaned = re.sub(r"\D+", "", text)
+        return cleaned or text.strip() or None
+
     async def _consulta_reserva_propia(
         folio_id: Optional[str] = None,
         reservation_locator: Optional[str] = None,
+        listar: Optional[bool] = False,
         fecha_inicio: Optional[str] = None,
         fecha_fin: Optional[str] = None,
         partner_name: Optional[str] = None,
@@ -715,58 +770,77 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
         property_id: Optional[int] = None,
         pms_property_id: int = 38,
     ) -> str:
+        if not any(
+            [
+                folio_id,
+                reservation_locator,
+                listar,
+                fecha_inicio,
+                fecha_fin,
+                partner_name,
+                partner_email,
+                partner_phone,
+            ]
+        ):
+            return (
+                "Para consultar tus reservas necesito el localizador o, si quieres, "
+                "pídeme que te liste tus reservas."
+            )
         if property_id is not None:
             pms_property_id = property_id
         pms_property_id = _resolve_property_id(memory_manager, chat_id, pms_property_id)
 
-        # Primero: intenta multireserva en chat_reservations (si existe tool MCP)
-        try:
-            multireserva_tool = create_multireserva_tool(memory_manager=memory_manager, chat_id=chat_id)
-            raw_multi = await multireserva_tool.ainvoke(
-                {
-                    "chat_id": chat_id,
-                    "property_id": pms_property_id,
-                }
-            )
-            parsed_multi = _safe_parse_json(raw_multi, "multireserva")
-            items = None
-            if isinstance(parsed_multi, dict):
-                items = parsed_multi.get("response") or parsed_multi.get("items")
-            elif isinstance(parsed_multi, list):
-                items = parsed_multi
-            if isinstance(items, list) and items:
-                # Si recibimos un localizador, mapear a folio_id
-                locator_candidate = (reservation_locator or folio_id or "").strip()
-                if locator_candidate:
+        # Primero: intenta multireserva SOLO si el usuario pide listar o aporta localizador
+        if listar or reservation_locator or (folio_id and "/" in str(folio_id)):
+            try:
+                multireserva_tool = create_multireserva_tool(memory_manager=memory_manager, chat_id=chat_id)
+                normalized_chat = _normalize_chat_id(chat_id)
+                raw_multi = await multireserva_tool.ainvoke(
+                    {
+                        "chat_id": normalized_chat or chat_id,
+                        "property_id": pms_property_id,
+                        "allow": True,
+                    }
+                )
+                parsed_multi = _safe_parse_json(raw_multi, "multireserva")
+                items = None
+                if isinstance(parsed_multi, dict):
+                    items = parsed_multi.get("response") or parsed_multi.get("items")
+                elif isinstance(parsed_multi, list):
+                    items = parsed_multi
+                if isinstance(items, list) and items:
+                    # Si recibimos un localizador, mapear a folio_id
+                    locator_candidate = (reservation_locator or folio_id or "").strip()
+                    if locator_candidate:
+                        for item in items:
+                            if not isinstance(item, dict):
+                                continue
+                            if str(item.get("reservation_locator") or "").strip() == locator_candidate:
+                                mapped_folio = item.get("folio_id")
+                                if mapped_folio:
+                                    tool = create_consulta_reserva_persona_tool(
+                                        memory_manager=memory_manager, chat_id=chat_id
+                                    )
+                                    return await tool.ainvoke(
+                                        {"folio_id": str(mapped_folio), "property_id": pms_property_id}
+                                    )
+                    simplified = []
                     for item in items:
                         if not isinstance(item, dict):
                             continue
-                        if str(item.get("reservation_locator") or "").strip() == locator_candidate:
-                            mapped_folio = item.get("folio_id")
-                            if mapped_folio:
-                                tool = create_consulta_reserva_persona_tool(
-                                    memory_manager=memory_manager, chat_id=chat_id
-                                )
-                                return await tool.ainvoke(
-                                    {"folio_id": str(mapped_folio), "property_id": pms_property_id}
-                                )
-                simplified = []
-                for item in items:
-                    if not isinstance(item, dict):
-                        continue
-                    simplified.append(
-                        {
-                            "reservation_locator": item.get("reservation_locator"),
-                            "folio_id": item.get("folio_id"),
-                            "checkin": item.get("checkin"),
-                            "checkout": item.get("checkout"),
-                            "hotel_code": item.get("hotel_code"),
-                        }
-                    )
-                if simplified:
-                    return json.dumps(simplified, ensure_ascii=False)
-        except Exception:
-            pass
+                        simplified.append(
+                            {
+                                "reservation_locator": item.get("reservation_locator"),
+                                "folio_id": item.get("folio_id"),
+                                "checkin": item.get("checkin"),
+                                "checkout": item.get("checkout"),
+                                "instance_id": item.get("instance_id"),
+                            }
+                        )
+                    if simplified:
+                        return json.dumps(simplified, ensure_ascii=False)
+            except Exception:
+                pass
 
         last_flag = None
         if memory_manager and chat_id:
@@ -858,20 +932,32 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
     class MultiReservaInput(BaseModel):
         chat_id: Optional[str] = Field(default=None, description="Chat ID del huésped.")
         property_id: Optional[int] = Field(default=None, description="Propiedad (property_id).")
-        hotel_code: Optional[str] = Field(default=None, description="Código de hotel (opcional).")
+        instance_id: Optional[str] = Field(default=None, description="Instance ID (opcional).")
+        allow: Optional[bool] = Field(
+            default=False,
+            description="Permiso explícito para ejecutar multireserva.",
+        )
 
     def _normalize_chat(val: Optional[str]) -> Optional[str]:
         if not val:
             return None
-        if isinstance(val, str) and ":" in val:
-            val = val.split(":")[-1]
-        return re.sub(r"\D+", "", val) or val
+        text = str(val)
+        if ":" in text:
+            text = text.split(":")[-1]
+        groups = re.findall(r"\d{6,}", text)
+        if groups:
+            return groups[-1]
+        cleaned = re.sub(r"\D+", "", text)
+        return cleaned or text.strip() or None
 
     async def _multireserva(
         chat_id: Optional[str] = None,
         property_id: Optional[int] = None,
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
+        allow: Optional[bool] = False,
     ) -> str:
+        if not allow:
+            return "Multireserva solo está permitido cuando el huésped solicita listar sus reservas o aporta un localizador."
         tools, err = await _get_mcp_tools()
         if err:
             return err
@@ -908,12 +994,12 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
                 resolved_property = memory_manager.get_flag(chat_id, "property_id")
             except Exception:
                 resolved_property = None
-        resolved_hotel = hotel_code
-        if not resolved_hotel and memory_manager and chat_id:
+        resolved_instance = instance_id
+        if not resolved_instance and memory_manager and chat_id:
             try:
-                resolved_hotel = memory_manager.get_flag(chat_id, "property_name")
+                resolved_instance = memory_manager.get_flag(chat_id, "instance_id")
             except Exception:
-                resolved_hotel = None
+                resolved_instance = None
 
         filtered = []
         for item in items:
@@ -921,7 +1007,7 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
                 continue
             if resolved_property is not None and item.get("property_id") != resolved_property:
                 continue
-            if resolved_hotel and str(item.get("hotel_code") or "").upper() != str(resolved_hotel).upper():
+            if resolved_instance and str(item.get("instance_id") or "").upper() != str(resolved_instance).upper():
                 continue
             filtered.append(item)
 
@@ -931,7 +1017,7 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
         name="multireserva",
         description=(
             "Obtiene todas las reservas asociadas a un chat_id desde chat_reservations. "
-            "Filtra por property_id/hotel_code si se indica."
+            "Filtra por property_id/instance_id si se indica."
         ),
         coroutine=_multireserva,
         args_schema=MultiReservaInput,

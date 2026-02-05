@@ -102,8 +102,10 @@ def _mcp_tool_matches(name: str) -> bool:
     return False
 
 
-def _fetch_properties_by_code_mcp(table: str, hotel_code: str) -> list[Dict[str, Any]]:
+def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str, Any]]:
     if not get_tools:
+        return []
+    if not instance_id:
         return []
 
     async def _load_tools():
@@ -125,7 +127,8 @@ def _fetch_properties_by_code_mcp(table: str, hotel_code: str) -> list[Dict[str,
     if not tool:
         return []
 
-    payload = {"tabla": table, "hotel_code": hotel_code}
+    # MCP schema sigue esperando hotel_code como campo requerido.
+    payload = {"tabla": table, "instance_id": instance_id, "hotel_code": str(instance_id)}
     try:
         raw = _run_async(tool.ainvoke(payload))
     except Exception as exc:
@@ -173,24 +176,24 @@ def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
     return {}
 
 
-def fetch_instance_by_code(hotel_code: str) -> Dict[str, Any]:
-    payload = {"hotel_code": hotel_code}
+def fetch_instance_by_code(instance_id: str) -> Dict[str, Any]:
+    payload = {"instance_id": instance_id}
     data = _post_json(INSTANCE_BY_CODE_WEBHOOK, payload)
     if data:
         return data
-    log.info("🔎 Instance fallback by code via Supabase: hotel_code=%s", hotel_code)
+    log.info("🔎 Instance fallback by code via Supabase: instance_id=%s", instance_id)
     if supabase:
         try:
             resp = (
                 supabase.table("instances")
                 .select("*")
-                .eq("hotel_code", hotel_code)
+                .eq("instance_id", instance_id)
                 .limit(1)
                 .execute()
             )
             rows = resp.data or []
             if rows:
-                log.info("✅ Instance found in Supabase: hotel_code=%s", hotel_code)
+                log.info("✅ Instance found in Supabase: instance_id=%s", instance_id)
             return rows[0] if rows else {}
         except Exception as exc:
             log.warning("Fallback supabase instances fallo: %s", exc)
@@ -212,42 +215,42 @@ def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
                 return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_name fallo: %s", exc)
-    payload = {"tabla": table, "name": name, "hotel_code": name}
+    payload = {"tabla": table, "name": name}
     data = _post_json(PROPERTY_BY_NAME_WEBHOOK, payload)
     if data:
         return data
     return {}
 
 
-def fetch_property_by_code(table: str, hotel_code: str) -> Dict[str, Any]:
+def fetch_property_by_code(table: str, instance_id: str) -> Dict[str, Any]:
     if supabase:
         try:
             resp = (
                 supabase.table(table)
                 .select("*")
-                .eq("hotel_code", hotel_code)
+                .eq("instance_id", instance_id)
                 .limit(1)
                 .execute()
             )
             rows = resp.data or []
             if rows:
-                log.info("✅ Property found in Supabase: table=%s hotel_code=%s", table, hotel_code)
+                log.info("✅ Property found in Supabase: table=%s instance_id=%s", table, instance_id)
                 return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_code fallo: %s", exc)
-    payload = {"tabla": table, "hotel_code": hotel_code}
+    payload = {"tabla": table, "instance_id": instance_id}
     data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
     if data:
         return data
     return {}
 
 
-def fetch_properties_by_code(table: str, hotel_code: str) -> list[Dict[str, Any]]:
+def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any]]:
     """
-    Devuelve multiples properties por hotel_code si existen.
+    Devuelve multiples properties por instance_id si existen.
     Usa MCP como fuente principal.
     """
-    mcp_rows = _fetch_properties_by_code_mcp(table, hotel_code)
+    mcp_rows = _fetch_properties_by_code_mcp(table, instance_id)
     if mcp_rows:
         return mcp_rows
     if supabase:
@@ -255,7 +258,7 @@ def fetch_properties_by_code(table: str, hotel_code: str) -> list[Dict[str, Any]
             resp = (
                 supabase.table(table)
                 .select("*")
-                .eq("hotel_code", hotel_code)
+                .eq("instance_id", instance_id)
                 .execute()
             )
             rows = resp.data or []
@@ -268,7 +271,7 @@ def fetch_properties_by_code(table: str, hotel_code: str) -> list[Dict[str, Any]
 
 def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
     """
-    Busca properties por coincidencia parcial en name/hotel_code/property_name.
+    Busca properties por coincidencia parcial en name/property_name.
     """
     if not query:
         return []
@@ -282,7 +285,7 @@ def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
                 supabase.table(table)
                 .select("*")
                 .or_(
-                    f"name.ilike.{pattern},hotel_code.ilike.{pattern}"
+                    f"name.ilike.{pattern},property_name.ilike.{pattern}"
                 )
                 .limit(10)
                 .execute()
@@ -322,7 +325,7 @@ def ensure_instance_credentials(
     chat_id: str,
 ) -> None:
     """
-    Asegura credenciales de WhatsApp en memoria usando property_id/hotel_code.
+    Asegura credenciales de WhatsApp en memoria usando property_id/instance_id.
     Útil en flujos donde no se invocó la tool de envío.
     """
     if not memory_manager or not chat_id:
@@ -331,9 +334,9 @@ def ensure_instance_credentials(
     try:
         property_table = memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
         property_id = memory_manager.get_flag(chat_id, "property_id")
-        hotel_code = memory_manager.get_flag(chat_id, "property_name")
+        instance_id = memory_manager.get_flag(chat_id, "instance_id") or memory_manager.get_flag(chat_id, "instance_hotel_code")
         last_property_id = memory_manager.get_flag(chat_id, "wa_context_property_id")
-        last_hotel_code = memory_manager.get_flag(chat_id, "wa_context_hotel_code")
+        last_instance_id = memory_manager.get_flag(chat_id, "wa_context_instance_id")
 
         existing_phone = memory_manager.get_flag(chat_id, "whatsapp_phone_id")
         existing_token = memory_manager.get_flag(chat_id, "whatsapp_token")
@@ -347,23 +350,25 @@ def ensure_instance_credentials(
         if (
             existing_phone
             and existing_token
-            and hotel_code
-            and last_hotel_code
-            and str(last_hotel_code).strip().lower() == str(hotel_code).strip().lower()
+            and instance_id
+            and last_instance_id
+            and str(last_instance_id).strip().lower() == str(instance_id).strip().lower()
         ):
             return
 
         if property_id:
             prop_payload = fetch_property_by_id(property_table, property_id)
-            hotel_code = prop_payload.get("hotel_code") or prop_payload.get("name") or hotel_code
+            instance_id = prop_payload.get("instance_id") or instance_id
+            if not instance_id:
+                instance_id = prop_payload.get("name") or instance_id
 
-        if not hotel_code:
-            log.info("🏨 [WA_CTX] no hotel_code/property_id for chat_id=%s", chat_id)
+        if not instance_id:
+            log.info("🏨 [WA_CTX] no instance_id/property_id for chat_id=%s", chat_id)
             return
 
-        inst_payload = fetch_instance_by_code(str(hotel_code))
+        inst_payload = fetch_instance_by_code(str(instance_id))
         if not inst_payload:
-            log.info("🏨 [WA_CTX] no instance for hotel_code=%s (chat_id=%s)", hotel_code, chat_id)
+            log.info("🏨 [WA_CTX] no instance for instance_id=%s (chat_id=%s)", instance_id, chat_id)
             return
 
         for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
@@ -372,13 +377,13 @@ def ensure_instance_credentials(
                 memory_manager.set_flag(chat_id, key, val)
 
         memory_manager.set_flag(chat_id, "wa_context_property_id", property_id)
-        if hotel_code:
-            memory_manager.set_flag(chat_id, "wa_context_hotel_code", str(hotel_code))
+        if instance_id:
+            memory_manager.set_flag(chat_id, "wa_context_instance_id", str(instance_id))
 
         log.info(
-            "🏨 [WA_CTX] creds set via ensure_instance_credentials chat_id=%s hotel_code=%s phone_id=%s",
+            "🏨 [WA_CTX] creds set via ensure_instance_credentials chat_id=%s instance_id=%s phone_id=%s",
             chat_id,
-            hotel_code,
+            instance_id,
             memory_manager.get_flag(chat_id, "whatsapp_phone_id"),
         )
     except Exception as exc:
@@ -447,9 +452,10 @@ def hydrate_dynamic_context(
         memory_manager.set_flag(chat_id, "instance_url", instance_url)
         log.info("🔗 instance_url=%s (chat_id=%s)", instance_url, chat_id)
 
-    instance_hotel_code = instance_payload.get("hotel_code")
-    if instance_hotel_code:
-        memory_manager.set_flag(chat_id, "instance_hotel_code", instance_hotel_code)
+    instance_id = instance_payload.get("instance_id") or instance_payload.get("instance_url")
+    if instance_id:
+        memory_manager.set_flag(chat_id, "instance_id", instance_id)
+        memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
 
     property_table = memory_manager.get_flag(chat_id, "property_table") or _resolve_property_table(instance_payload)
     if not property_table and DEFAULT_PROPERTY_TABLE:
@@ -467,7 +473,7 @@ def hydrate_dynamic_context(
     if property_id:
         should_set_property_id = True
         if not memory_manager.get_flag(chat_id, "property_id"):
-            instance_code = instance_payload.get("hotel_code")
+            instance_code = instance_payload.get("instance_id") or instance_payload.get("instance_url")
             if instance_code and property_table:
                 try:
                     rows = fetch_properties_by_code(property_table, str(instance_code))
@@ -481,11 +487,12 @@ def hydrate_dynamic_context(
 
     if not property_id and property_table:
         property_name = memory_manager.get_flag(chat_id, "property_name")
-        instance_code = memory_manager.get_flag(chat_id, "instance_hotel_code") or instance_payload.get("hotel_code")
+        instance_code = memory_manager.get_flag(chat_id, "instance_id") or instance_payload.get("instance_id") or instance_payload.get("instance_url")
         if instance_code:
+            memory_manager.set_flag(chat_id, "instance_id", instance_code)
             memory_manager.set_flag(chat_id, "instance_hotel_code", instance_code)
         if property_name:
-            prop_rows = fetch_properties_by_code(property_table, str(property_name))
+            prop_rows = fetch_properties_by_query(property_table, str(property_name))
         elif instance_code:
             prop_rows = fetch_properties_by_code(property_table, str(instance_code))
         else:
@@ -497,16 +504,16 @@ def hydrate_dynamic_context(
                     {
                         "property_id": row.get("property_id"),
                         "name": row.get("name") or row.get("property_name"),
-                        "hotel_code": row.get("hotel_code"),
+                        "instance_id": row.get("instance_id"),
                     }
                 )
             memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
             if property_name:
-                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(property_name))
+                memory_manager.set_flag(chat_id, "property_disambiguation_instance_id", str(property_name))
             elif instance_code:
-                memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(instance_code))
+                memory_manager.set_flag(chat_id, "property_disambiguation_instance_id", str(instance_code))
             log.info(
-                "🏨 property disambiguation needed hotel_code=%s candidates=%s",
+                "🏨 property disambiguation needed instance_id=%s candidates=%s",
                 property_name or instance_code,
                 len(candidates),
             )
@@ -523,9 +530,9 @@ def hydrate_dynamic_context(
                 memory_manager.set_flag(chat_id, "property_id", resolved_id)
 
     if not instance_url:
-        hotel_code = memory_manager.get_flag(chat_id, "property_name")
-        if hotel_code:
-            inst_by_code = fetch_instance_by_code(str(hotel_code))
+        instance_code = memory_manager.get_flag(chat_id, "instance_id")
+        if instance_code:
+            inst_by_code = fetch_instance_by_code(str(instance_code))
             instance_url = inst_by_code.get("instance_url")
             if instance_url:
                 memory_manager.set_flag(chat_id, "instance_url", instance_url)
@@ -539,9 +546,8 @@ def hydrate_dynamic_context(
         if kb_name:
             memory_manager.set_flag(chat_id, "kb", kb_name)
             memory_manager.set_flag(chat_id, "knowledge_base", kb_name)
-        prop_code = prop_details.get("hotel_code")
         prop_display = prop_details.get("name") or prop_details.get("property_name")
-        prop_name = prop_code or prop_display
+        prop_name = prop_display
         if prop_name:
             memory_manager.set_flag(chat_id, "property_name", prop_name)
         if prop_display:

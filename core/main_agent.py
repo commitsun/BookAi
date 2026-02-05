@@ -259,7 +259,7 @@ class MainAgent:
         if existing:
             log.info("[PROPERTY_CANDIDATES] reuse existing chat_id=%s count=%s", chat_id, len(existing))
             return existing
-        instance_code = self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+        instance_code = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
         if not instance_code:
             instance_code = self.memory_manager.get_flag(chat_id, "property_name")
         if not instance_code:
@@ -284,7 +284,7 @@ class MainAgent:
             {
                 "property_id": row.get("property_id"),
                 "name": row.get("name") or row.get("property_name"),
-                "hotel_code": row.get("hotel_code"),
+                "instance_id": row.get("instance_id"),
                 "city": row.get("city"),
                 "street": row.get("street"),
             }
@@ -405,11 +405,7 @@ class MainAgent:
         best_cand = None
         for cand in candidates:
             name = (cand or {}).get("name") or ""
-            code = (cand or {}).get("hotel_code") or ""
             if name and (name.lower() in lowered or lowered in name.lower()):
-                selected = cand
-                break
-            if code and (code.lower() in lowered or lowered in code.lower()):
                 selected = cand
                 break
             if name and raw_tokens:
@@ -443,15 +439,13 @@ class MainAgent:
         # Fija flags básicos de inmediato para evitar repetir la pregunta.
         try:
             prop_id = selected.get("property_id")
-            prop_name = selected.get("name") or selected.get("hotel_code")
+            prop_name = selected.get("name")
             if prop_id is not None:
                 self.memory_manager.set_flag(chat_id, "property_id", prop_id)
                 self.memory_manager.set_flag(chat_id, "wa_context_property_id", prop_id)
             if prop_name:
                 self.memory_manager.set_flag(chat_id, "property_name", prop_name)
                 self.memory_manager.set_flag(chat_id, "property_display_name", prop_name)
-            if selected.get("hotel_code"):
-                self.memory_manager.set_flag(chat_id, "wa_context_hotel_code", str(selected.get("hotel_code")))
         except Exception:
             return False
 
@@ -460,7 +454,7 @@ class MainAgent:
             tool = create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id)
             tool.invoke(
                 {
-                    "hotel_code": selected.get("name") or selected.get("hotel_code"),
+                    "hotel_code": selected.get("name"),
                     "property_id": selected.get("property_id"),
                 }
             )
@@ -473,7 +467,7 @@ class MainAgent:
             "[PROPERTY_MATCH] matched chat_id=%s property_id=%s name=%s",
             chat_id,
             selected.get("property_id"),
-            selected.get("name") or selected.get("hotel_code"),
+            selected.get("name"),
         )
         return bool(
             self.memory_manager.get_flag(chat_id, "property_id")
@@ -673,7 +667,7 @@ class MainAgent:
         candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
         if isinstance(candidates, list) and len(candidates) > 1:
             return True
-        instance_code = self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+        instance_code = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
         if not instance_code:
             return False
         table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
@@ -688,7 +682,7 @@ class MainAgent:
         if len(rows) == 1:
             row = rows[0] or {}
             prop_id = row.get("property_id")
-            prop_code = row.get("hotel_code") or row.get("name")
+            prop_code = row.get("name")
             if prop_id or prop_code:
                 try:
                     tool = create_property_context_tool(
@@ -712,7 +706,7 @@ class MainAgent:
         try:
             table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
             payload = fetch_property_by_id(table, prop_id) if table else {}
-            prop_label = payload.get("name") or payload.get("property_name") or payload.get("hotel_code")
+            prop_label = payload.get("name") or payload.get("property_name")
         except Exception:
             prop_label = None
         return prop_id, prop_label

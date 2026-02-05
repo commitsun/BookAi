@@ -1,7 +1,7 @@
 """
 Property Context Tool
 =====================
-Resuelve y fija el contexto de property (property_id + hotel_code) usando
+Resuelve y fija el contexto de property (property_id + instance_id) usando
 los webhooks de n8n/Supabase. Deja el contexto en MemoryManager para que
 otras tools lo usen.
 """
@@ -147,6 +147,7 @@ class PropertyContextTool:
         hotel_code: Optional[str],
         property_table: Optional[str] = None,
         display_name: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> None:
         if not self.memory_manager or not self.chat_id:
             return
@@ -157,7 +158,11 @@ class PropertyContextTool:
         if property_id is not None:
             self.memory_manager.set_flag(self.chat_id, "property_id", property_id)
             self.memory_manager.set_flag(self.chat_id, "wa_context_property_id", property_id)
-        if hotel_code:
+        if instance_id:
+            self.memory_manager.set_flag(self.chat_id, "instance_id", str(instance_id))
+            self.memory_manager.set_flag(self.chat_id, "instance_hotel_code", str(instance_id))
+            self.memory_manager.set_flag(self.chat_id, "wa_context_instance_id", str(instance_id))
+        elif hotel_code:
             self.memory_manager.set_flag(self.chat_id, "wa_context_hotel_code", str(hotel_code))
         if display_name:
             self.memory_manager.set_flag(self.chat_id, "property_display_name", str(display_name))
@@ -189,6 +194,7 @@ class PropertyContextTool:
         resolved_property_id: Optional[Any] = property_id
         resolved_hotel_code = _clean_hotel_input(hotel_code) or None
         resolved_display_name: Optional[str] = None
+        resolved_instance_id: Optional[str] = None
 
         log.info(
             "PropertyContextTool start chat_id=%s property_id=%s hotel_code=%s table=%s",
@@ -198,10 +204,11 @@ class PropertyContextTool:
             table,
         )
 
-        # Preferir lista MCP por instance code (si existe) para resolver nombres parciales
+        # Preferir lista MCP por instance_id (si existe) para resolver nombres parciales
         if resolved_property_id is None and resolved_hotel_code and self.memory_manager and self.chat_id:
-            instance_code = self.memory_manager.get_flag(self.chat_id, "instance_hotel_code")
+            instance_code = self.memory_manager.get_flag(self.chat_id, "instance_id") or self.memory_manager.get_flag(self.chat_id, "instance_hotel_code")
             if instance_code:
+                resolved_instance_id = str(instance_code)
                 inst_candidates = fetch_properties_by_code(table, str(instance_code))
                 log.info(
                     "PropertyContextTool MCP fallback chat_id=%s instance_code=%s candidates=%s",
@@ -213,14 +220,15 @@ class PropertyContextTool:
                     target = _normalize_match_text(resolved_hotel_code)
                     matched = []
                     for row in inst_candidates:
-                        name = row.get("name") or row.get("property_name") or row.get("hotel_code") or ""
+                        name = row.get("name") or row.get("property_name") or ""
                         name_norm = _normalize_match_text(name)
                         if target and target in name_norm:
                             matched.append(row)
                     if len(matched) == 1:
                         payload = matched[0]
                         resolved_property_id = payload.get("property_id")
-                        resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or resolved_hotel_code
+                        resolved_hotel_code = payload.get("name") or payload.get("property_name") or resolved_hotel_code
+                        resolved_instance_id = payload.get("instance_id") or resolved_instance_id
                         resolved_display_name = payload.get("name") or payload.get("property_name")
                         log.info(
                             "PropertyContextTool MCP fallback matched chat_id=%s property_id=%s name=%s",
@@ -236,7 +244,7 @@ class PropertyContextTool:
                                 {
                                     "property_id": row.get("property_id"),
                                     "name": row.get("name") or row.get("property_name"),
-                                    "hotel_code": row.get("hotel_code"),
+                                    "instance_id": row.get("instance_id"),
                                     "city": row.get("city"),
                                     "street": row.get("street"),
                                 }
@@ -245,7 +253,7 @@ class PropertyContextTool:
                         )
                         self.memory_manager.set_flag(
                             self.chat_id,
-                            "property_disambiguation_hotel_code",
+                            "property_disambiguation_instance_id",
                             resolved_hotel_code,
                         )
                         return (
@@ -262,7 +270,8 @@ class PropertyContextTool:
                     prop_id = payload.get("property_id") if payload else None
                 if prop_id is not None:
                     resolved_property_id = prop_id
-                    resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or variant
+                    resolved_hotel_code = payload.get("name") or payload.get("property_name") or variant
+                    resolved_instance_id = payload.get("instance_id") or resolved_instance_id
                     resolved_display_name = payload.get("name") or payload.get("property_name")
                     break
 
@@ -272,7 +281,8 @@ class PropertyContextTool:
                 if len(candidates) == 1:
                     payload = candidates[0]
                     resolved_property_id = payload.get("property_id")
-                    resolved_hotel_code = payload.get("hotel_code") or payload.get("name") or resolved_hotel_code
+                    resolved_hotel_code = payload.get("name") or payload.get("property_name") or resolved_hotel_code
+                    resolved_instance_id = payload.get("instance_id") or resolved_instance_id
                     resolved_display_name = payload.get("name") or payload.get("property_name")
                 else:
                     if self.memory_manager and self.chat_id:
@@ -283,7 +293,7 @@ class PropertyContextTool:
                                 {
                                     "property_id": row.get("property_id"),
                                     "name": row.get("name") or row.get("property_name"),
-                                    "hotel_code": row.get("hotel_code"),
+                                    "instance_id": row.get("instance_id"),
                                     "city": row.get("city"),
                                     "street": row.get("street"),
                                 }
@@ -292,13 +302,13 @@ class PropertyContextTool:
                         )
                         self.memory_manager.set_flag(
                             self.chat_id,
-                            "property_disambiguation_hotel_code",
+                            "property_disambiguation_instance_id",
                             resolved_hotel_code,
                         )
                     preview = candidates[:5]
                     lines = []
                     for row in preview:
-                        name = row.get("name") or row.get("property_name") or row.get("hotel_code") or "Hotel"
+                        name = row.get("name") or row.get("property_name") or "Hotel"
                         city = row.get("city") or ""
                         street = row.get("street") or ""
                         address = ", ".join([part for part in [street, city] if part])
@@ -320,12 +330,14 @@ class PropertyContextTool:
             payload = fetch_property_by_id(table, resolved_property_id)
             if payload:
                 resolved_display_name = payload.get("name") or payload.get("property_name")
-                resolved_hotel_code = resolved_display_name or payload.get("hotel_code")
+                resolved_hotel_code = resolved_display_name
+                resolved_instance_id = payload.get("instance_id") or resolved_instance_id
 
-        if resolved_hotel_code:
+        if resolved_instance_id or resolved_hotel_code:
             # Intentar fijar credenciales de instancia si existen
             try:
-                inst_payload = fetch_instance_by_code(str(resolved_hotel_code))
+                instance_key = resolved_instance_id or resolved_hotel_code
+                inst_payload = fetch_instance_by_code(str(instance_key)) if instance_key else None
                 for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
                     val = inst_payload.get(key) if inst_payload else None
                     if val:
@@ -342,7 +354,7 @@ class PropertyContextTool:
             if not _is_valid_hotel_label(resolved_hotel_code):
                 return "Necesito el codigo o nombre del hotel para identificar la propiedad."
             # Guardar al menos el hotel_code como contexto si parece válido
-            self._set_flags(None, resolved_hotel_code, table, display_name=resolved_display_name)
+            self._set_flags(None, resolved_hotel_code, table, display_name=resolved_display_name, instance_id=resolved_instance_id)
             return (
                 f"Listo, ya tengo el contexto del hotel {resolved_hotel_code}."
                 if resolved_hotel_code
@@ -356,7 +368,13 @@ class PropertyContextTool:
             resolved_hotel_code,
             resolved_display_name,
         )
-        self._set_flags(resolved_property_id, resolved_hotel_code, table, display_name=resolved_display_name)
+        self._set_flags(
+            resolved_property_id,
+            resolved_hotel_code,
+            table,
+            display_name=resolved_display_name,
+            instance_id=resolved_instance_id,
+        )
         if resolved_hotel_code:
             label = resolved_display_name or resolved_hotel_code
             return f"Perfecto, ya identifique el hotel {label}."

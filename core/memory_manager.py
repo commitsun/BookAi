@@ -265,8 +265,8 @@ class MemoryManager:
                             if isinstance(last_mem, str) and ":" in last_mem:
                                 original_chat_id = last_mem
 
-                        hotel_code = (
-                            self.get_flag(conversation_id, "property_name")
+                        instance_id = (
+                            self.get_flag(conversation_id, "instance_id")
                             or self.get_flag(conversation_id, "instance_hotel_code")
                         )
                         upsert_chat_reservation(
@@ -275,7 +275,7 @@ class MemoryManager:
                             checkin=checkin_flag,
                             checkout=checkout_flag,
                             property_id=self.get_flag(conversation_id, "property_id"),
-                            hotel_code=hotel_code,
+                            instance_id=instance_id,
                             original_chat_id=original_chat_id,
                             reservation_locator=locator_flag,
                             source="message",

@@ -466,6 +466,7 @@ def _set_instance_context(
 
     resolved_property_id = property_id
     resolved_hotel_code = (hotel_code or "").strip() or None
+    resolved_instance_id = None
     property_table = _resolve_property_table(memory_manager, chat_id)
 
     log.info(
@@ -478,50 +479,53 @@ def _set_instance_context(
 
     if resolved_property_id is None and resolved_hotel_code:
         for variant in _hotel_code_variants(resolved_hotel_code):
-            log.info("🏨 [WA_CTX] resolve property_id via hotel_code variant=%s", variant)
-            prop_payload = fetch_property_by_code(property_table, variant)
+            log.info("🏨 [WA_CTX] resolve property_id via name variant=%s", variant)
+            prop_payload = fetch_property_by_name(property_table, variant)
             prop_id = prop_payload.get("property_id")
             if prop_id is not None:
                 resolved_property_id = prop_id
-                resolved_hotel_code = prop_payload.get("hotel_code") or variant
+                resolved_hotel_code = prop_payload.get("name") or variant
+                resolved_instance_id = prop_payload.get("instance_id") or resolved_instance_id
                 break
 
     if resolved_property_id is not None:
-        log.info("🏨 [WA_CTX] resolve hotel_code via property_id=%s", resolved_property_id)
+        log.info("🏨 [WA_CTX] resolve property_name via property_id=%s", resolved_property_id)
         prop_payload = fetch_property_by_id(property_table, resolved_property_id)
-        prop_code = prop_payload.get("hotel_code") or prop_payload.get("name")
-        if prop_code:
-            resolved_hotel_code = prop_code
+        prop_name = prop_payload.get("name")
+        if prop_name:
+            resolved_hotel_code = prop_name
+        resolved_instance_id = prop_payload.get("instance_id") or resolved_instance_id
 
     if resolved_property_id is not None:
         memory_manager.set_flag(chat_id, "property_id", resolved_property_id)
     if resolved_hotel_code:
         memory_manager.set_flag(chat_id, "property_name", resolved_hotel_code)
+    if resolved_instance_id:
+        memory_manager.set_flag(chat_id, "instance_id", resolved_instance_id)
+        memory_manager.set_flag(chat_id, "instance_hotel_code", resolved_instance_id)
 
-    if resolved_hotel_code:
-        for variant in _hotel_code_variants(resolved_hotel_code):
-            log.info("🏨 [WA_CTX] fetch instance by code variant=%s", variant)
-            inst_payload = fetch_instance_by_code(variant)
-            if not inst_payload:
-                log.info("🏨 [WA_CTX] no instance for variant=%s", variant)
-                continue
+    if resolved_instance_id:
+        log.info("🏨 [WA_CTX] fetch instance by instance_id=%s", resolved_instance_id)
+        inst_payload = fetch_instance_by_code(str(resolved_instance_id))
+        if not inst_payload:
+            log.info("🏨 [WA_CTX] no instance for instance_id=%s", resolved_instance_id)
+        else:
             for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
                 val = inst_payload.get(key)
                 if val:
                     memory_manager.set_flag(chat_id, key, val)
                     log.info("🏨 [WA_CTX] set %s=%s", key, "set" if key != "whatsapp_phone_id" else val)
-            break
 
     if resolved_property_id is not None:
         memory_manager.set_flag(chat_id, "wa_context_property_id", resolved_property_id)
-    if resolved_hotel_code:
-        memory_manager.set_flag(chat_id, "wa_context_hotel_code", str(resolved_hotel_code))
+    if resolved_instance_id:
+        memory_manager.set_flag(chat_id, "wa_context_instance_id", str(resolved_instance_id))
 
     log.info(
-        "🏨 [WA_CTX] done chat_id=%s property_id=%s hotel_code=%s",
+        "🏨 [WA_CTX] done chat_id=%s property_id=%s instance_id=%s",
         chat_id,
         memory_manager.get_flag(chat_id, "property_id"),
-        memory_manager.get_flag(chat_id, "property_name"),
+        memory_manager.get_flag(chat_id, "instance_id"),
     )
 
 
@@ -1646,36 +1650,39 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
 
         if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
             for variant in _hotel_code_variants(hotel_code):
-                inst_payload = fetch_instance_by_code(variant)
-                inst_url = inst_payload.get("instance_url")
-                if inst_url:
-                    payload["instance_url"] = inst_url
-                    if memory_manager and chat_id:
-                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                        memory_manager.set_flag(chat_id, "property_name", variant)
-
-                prop_payload = fetch_property_by_code(DEFAULT_PROPERTY_TABLE, variant)
+                prop_payload = fetch_property_by_name(DEFAULT_PROPERTY_TABLE, variant)
                 prop_id = prop_payload.get("property_id")
                 if prop_id is not None:
                     pms_property_id = prop_id
+                    instance_id = prop_payload.get("instance_id")
                     if memory_manager and chat_id:
                         memory_manager.set_flag(chat_id, "property_id", prop_id)
-                        memory_manager.set_flag(chat_id, "property_name", variant)
-
+                        memory_manager.set_flag(chat_id, "property_name", prop_payload.get("name") or variant)
+                        if instance_id:
+                            memory_manager.set_flag(chat_id, "instance_id", instance_id)
+                            memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
+                    if instance_id:
+                        inst_payload = fetch_instance_by_code(str(instance_id))
+                        inst_url = inst_payload.get("instance_url")
+                        if inst_url:
+                            payload["instance_url"] = inst_url
+                            if memory_manager and chat_id:
+                                memory_manager.set_flag(chat_id, "instance_url", inst_url)
                 if payload.get("instance_url") and pms_property_id is not None:
                     break
 
         if (not payload.get("instance_url")) and pms_property_id is not None:
             prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)
-            prop_code = prop_payload.get("hotel_code")
-            if prop_code:
-                inst_payload = fetch_instance_by_code(prop_code)
+            instance_id = prop_payload.get("instance_id")
+            if instance_id:
+                inst_payload = fetch_instance_by_code(str(instance_id))
                 inst_url = inst_payload.get("instance_url")
                 if inst_url:
                     payload["instance_url"] = inst_url
                     if memory_manager and chat_id:
                         memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                        memory_manager.set_flag(chat_id, "property_name", prop_code)
+                        memory_manager.set_flag(chat_id, "instance_id", instance_id)
+                        memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
         if pms_property_id is not None:
             payload["property_id"] = pms_property_id
             payload["pmsPropertyId"] = pms_property_id
@@ -1900,36 +1907,39 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
 
         if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
             for variant in _hotel_code_variants(hotel_code):
-                inst_payload = fetch_instance_by_code(variant)
-                inst_url = inst_payload.get("instance_url")
-                if inst_url:
-                    payload["instance_url"] = inst_url
-                    if memory_manager and chat_id:
-                        memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                        memory_manager.set_flag(chat_id, "property_name", variant)
-
-                prop_payload = fetch_property_by_code(DEFAULT_PROPERTY_TABLE, variant)
+                prop_payload = fetch_property_by_name(DEFAULT_PROPERTY_TABLE, variant)
                 prop_id = prop_payload.get("property_id")
                 if prop_id is not None:
                     pms_property_id = prop_id
+                    instance_id = prop_payload.get("instance_id")
                     if memory_manager and chat_id:
                         memory_manager.set_flag(chat_id, "property_id", prop_id)
-                        memory_manager.set_flag(chat_id, "property_name", variant)
-
+                        memory_manager.set_flag(chat_id, "property_name", prop_payload.get("name") or variant)
+                        if instance_id:
+                            memory_manager.set_flag(chat_id, "instance_id", instance_id)
+                            memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
+                    if instance_id:
+                        inst_payload = fetch_instance_by_code(str(instance_id))
+                        inst_url = inst_payload.get("instance_url")
+                        if inst_url:
+                            payload["instance_url"] = inst_url
+                            if memory_manager and chat_id:
+                                memory_manager.set_flag(chat_id, "instance_url", inst_url)
                 if payload.get("instance_url") and pms_property_id is not None:
                     break
 
         if (not payload.get("instance_url")) and pms_property_id is not None:
             prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)
-            prop_code = prop_payload.get("hotel_code")
-            if prop_code:
-                inst_payload = fetch_instance_by_code(prop_code)
+            instance_id = prop_payload.get("instance_id")
+            if instance_id:
+                inst_payload = fetch_instance_by_code(str(instance_id))
                 inst_url = inst_payload.get("instance_url")
                 if inst_url:
                     payload["instance_url"] = inst_url
                     if memory_manager and chat_id:
                         memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                        memory_manager.set_flag(chat_id, "property_name", prop_code)
+                        memory_manager.set_flag(chat_id, "instance_id", instance_id)
+                        memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
         if pms_property_id is not None:
             payload["property_id"] = pms_property_id
             payload["pmsPropertyId"] = pms_property_id

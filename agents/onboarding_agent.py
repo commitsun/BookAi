@@ -23,7 +23,7 @@ from tools.onboarding_tool import (
     create_room_type_tool,
     create_reservation_tool,
     create_token_tool,
-    create_multireserva_tool,
+    create_consulta_reserva_propia_tool,
 )
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 
@@ -48,8 +48,8 @@ class OnboardingAgent:
             "- Tras crear la reserva, comparte el reservation_locator con el huesped si viene en la respuesta. Nunca muestres folio_id.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
-            "- Si el huesped pide consultar su reserva, solicita el folio_id y usa consulta_reserva_persona.\n"
-            "- Si el huesped pregunta por sus reservas, usa multireserva para listar las reservas del chat.\n"
+            "- Si el huesped pide consultar su reserva, solicita el folio_id o localizador y usa consultar_reserva_propia.\n"
+            "- Si el huesped pregunta por sus reservas, usa consultar_reserva_propia con listar=true.\n"
         )
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
@@ -88,8 +88,8 @@ class OnboardingAgent:
             "- Tras crear la reserva, comparte el reservation_locator con el huesped si viene en la respuesta. Nunca muestres folio_id.\n"
             "- Si falta roomTypeId, llama primero a listar_tipos_habitacion y elige el id mas cercano al nombre solicitado.\n"
             "- Responde de forma clara y breve en el idioma que use el huesped. No multipliques ni recalcules importes (los da el PMS).\n"
-            "- Si el huesped pide consultar su reserva, solicita el folio_id y usa consulta_reserva_persona.\n"
-            "- Si el huesped pregunta por sus reservas, usa multireserva para listar las reservas del chat.\n"
+            "- Si el huesped pide consultar su reserva, solicita el folio_id o localizador y usa consultar_reserva_propia.\n"
+            "- Si el huesped pregunta por sus reservas, usa consultar_reserva_propia con listar=true.\n"
         )
         dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
         if dynamic_context:
@@ -100,7 +100,10 @@ class OnboardingAgent:
             create_token_tool(),
             create_room_type_tool(memory_manager=self.memory_manager, chat_id=chat_id),
             create_reservation_tool(memory_manager=self.memory_manager, chat_id=chat_id),
-            create_multireserva_tool(memory_manager=self.memory_manager, chat_id=chat_id),
+            create_consulta_reserva_propia_tool(
+                memory_manager=self.memory_manager,
+                chat_id=chat_id,
+            ),
             create_consulta_reserva_persona_tool(
                 memory_manager=self.memory_manager,
                 chat_id=chat_id,
