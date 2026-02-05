@@ -547,24 +547,24 @@ def register_chatter_routes(app, state) -> None:
                     room_number = memory_manager.get_flag(cid, "room_number")
                 except Exception:
                     pass
-            if not folio_id:
-                try:
-                    active = get_active_chat_reservation(chat_id=cid, property_id=prop_id)
-                    if active:
-                        folio_id = active.get("folio_id") or folio_id
-                        reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else None
-                        checkin = active.get("checkin") or checkin
-                        checkout = active.get("checkout") or checkout
-                        if memory_manager and folio_id:
-                            memory_manager.set_flag(cid, "folio_id", folio_id)
-                        if memory_manager and reservation_locator:
-                            memory_manager.set_flag(cid, "reservation_locator", reservation_locator)
-                        if memory_manager and checkin:
-                            memory_manager.set_flag(cid, "checkin", checkin)
-                        if memory_manager and checkout:
-                            memory_manager.set_flag(cid, "checkout", checkout)
-                except Exception:
-                    pass
+            # Siempre prioriza la reserva más próxima por checkin para la property actual.
+            try:
+                active = get_active_chat_reservation(chat_id=cid, property_id=prop_id)
+                if active:
+                    folio_id = active.get("folio_id") or folio_id
+                    reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else reservation_locator
+                    checkin = active.get("checkin") or checkin
+                    checkout = active.get("checkout") or checkout
+                    if memory_manager and folio_id:
+                        memory_manager.set_flag(cid, "folio_id", folio_id)
+                    if memory_manager and reservation_locator:
+                        memory_manager.set_flag(cid, "reservation_locator", reservation_locator)
+                    if memory_manager and checkin:
+                        memory_manager.set_flag(cid, "checkin", checkin)
+                    if memory_manager and checkout:
+                        memory_manager.set_flag(cid, "checkout", checkout)
+            except Exception:
+                pass
             items.append(
                 {
                     "chat_id": cid,
