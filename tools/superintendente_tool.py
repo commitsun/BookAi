@@ -20,6 +20,7 @@ from core.instance_context import (
     fetch_instance_by_code,
     fetch_property_by_code,
     fetch_property_by_id,
+    fetch_property_by_name,
     DEFAULT_PROPERTY_TABLE,
 )
 from core.config import Settings
