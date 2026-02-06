@@ -46,6 +46,8 @@ FLAG_PROPERTY_CONFIRMATION_PENDING = "property_confirmation_pending"
 FLAG_PROPERTY_DISAMBIGUATION_PENDING = "property_disambiguation_pending"
 FLAG_PROPERTY_SWITCH_PENDING = "property_switch_pending"
 FLAG_PROPERTY_SWITCH_ASKED = "property_switch_asked"
+FLAG_PROPERTY_CITY_FILTER_PENDING = "property_city_filter_pending"
+FLAG_PROPERTY_ZONE_FILTER_PENDING = "property_zone_filter_pending"
 
 
 class MainAgent:
@@ -281,16 +283,29 @@ class MainAgent:
                 instance_code,
             )
             return []
-        candidates = [
-            {
-                "property_id": row.get("property_id"),
-                "name": row.get("name") or row.get("property_name"),
-                "instance_id": row.get("instance_id"),
-                "city": row.get("city"),
-                "street": row.get("street"),
-            }
-            for row in rows
-        ]
+        candidates = []
+        for row in rows:
+            if not isinstance(row, dict):
+                continue
+            address = (
+                row.get("address")
+                or row.get("direccion")
+                or row.get("full_address")
+                or row.get("address_line")
+                or row.get("address1")
+            )
+            street = row.get("street") or row.get("street_address") or address
+            city = row.get("city") or row.get("ciudad") or row.get("town") or row.get("locality")
+            candidates.append(
+                {
+                    "property_id": row.get("property_id"),
+                    "name": row.get("name") or row.get("property_name"),
+                    "instance_id": row.get("instance_id"),
+                    "city": city,
+                    "street": street,
+                    "address": address,
+                }
+            )
         self.memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
         self.memory_manager.set_flag(chat_id, "property_disambiguation_instance_id", str(instance_code))
         log.info(
@@ -366,15 +381,172 @@ class MainAgent:
 
     def _build_disambiguation_question(self, candidates: list[dict]) -> str:
         prompt = self._load_embedded_prompt("PROPERTY_DISAMBIGUATION")
-        if prompt:
-            return prompt
-        return "¿En cuál de nuestros hoteles estarías interesado? Puedes darme un nombre aproximado."
+        base = prompt or "¿En cuál de nuestros hoteles estarías interesado? Puedes darme un nombre aproximado."
+        listing = self._format_property_candidates(candidates or [])
+        if listing:
+            return f"{base}\n{listing}"
+        return base
 
     def _build_property_not_in_instance(self) -> str:
         prompt = self._load_embedded_prompt("PROPERTY_NOT_IN_INSTANCE")
         if prompt:
             return prompt
         return "No encuentro ese hotel en esta instancia. ¿Puedes indicarme otro nombre (aprox)?"
+
+    def _format_property_candidates(self, candidates: list[dict]) -> str:
+        if not candidates:
+            return ""
+        lines = []
+        for cand in candidates:
+            if not isinstance(cand, dict):
+                continue
+            name = (cand.get("name") or "").strip()
+            if not name:
+                continue
+            address = (cand.get("address") or "").strip()
+            street = (cand.get("street") or "").strip()
+            city = (cand.get("city") or "").strip()
+            if not street and address:
+                street = address
+            if street and city:
+                addr = f"{street}, {city}"
+            elif street:
+                addr = street
+            elif city:
+                addr = city
+            else:
+                addr = ""
+            if addr:
+                lines.append(f"- {name} ({addr})")
+            else:
+                lines.append(f"- {name}")
+        if not lines:
+            return ""
+        return "Los hoteles disponibles son:\n" + "\n".join(lines)
+
+    def _should_ask_city_filter(self, chat_id: str, candidates: list[dict], threshold: int = 10) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        if len(candidates or []) <= threshold:
+            return False
+        if self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING):
+            return False
+        if self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING):
+            return False
+        return True
+
+    def _is_uncertain_location(self, text: str) -> bool:
+        t = self._normalize_text(text or "")
+        if not t:
+            return True
+        phrases = {
+            "no se",
+            "no sé",
+            "no tengo",
+            "no importa",
+            "cualquiera",
+            "me da igual",
+            "me es igual",
+            "da igual",
+        }
+        for p in phrases:
+            if p in t:
+                return True
+        return False
+
+    def _filter_candidates_by_city(self, candidates: list[dict], city_text: str) -> list[dict]:
+        target_raw = (city_text or "").strip()
+        lowered = target_raw.lower()
+        for prefix in ("en el ", "en la ", "en los ", "en las ", "en ", "para el ", "para la ", "para ", "a ", "en"):
+            if lowered.startswith(prefix):
+                target_raw = target_raw[len(prefix):].strip()
+                break
+        target = self._normalize_text(target_raw)
+        if not target:
+            return []
+        target_tokens = [t for t in target.split() if t]
+        filtered = []
+        for cand in candidates or []:
+            city = self._normalize_text(str(cand.get("city") or ""))
+            if not city:
+                continue
+            if target in city or city in target:
+                filtered.append(cand)
+                continue
+            city_tokens = [t for t in city.split() if t]
+            if target_tokens and all(tok in city_tokens for tok in target_tokens):
+                filtered.append(cand)
+        return filtered
+
+    def _filter_candidates_by_text(self, candidates: list[dict], text: str) -> list[dict]:
+        target = self._normalize_text(text or "")
+        if not target:
+            return []
+        filtered = []
+        for cand in candidates or []:
+            combined = " ".join(
+                [
+                    str(cand.get("name") or ""),
+                    str(cand.get("street") or ""),
+                    str(cand.get("city") or ""),
+                    str(cand.get("address") or ""),
+                ]
+            )
+            combined_norm = self._normalize_text(combined)
+            if target and target in combined_norm:
+                filtered.append(cand)
+        return filtered
+
+    def _maybe_ask_city_filter(self, chat_id: str, candidates: list[dict], original_message: str) -> Optional[str]:
+        if not self._should_ask_city_filter(chat_id, candidates):
+            return None
+        self.memory_manager.set_flag(
+            chat_id,
+            FLAG_PROPERTY_CITY_FILTER_PENDING,
+            {"original_message": original_message},
+        )
+        return "¿En qué ciudad te gustaría alojarte?"
+
+    def _is_city_list_intent(self, text: str) -> bool:
+        t = self._normalize_text(text or "")
+        if not t:
+            return False
+        keywords = (
+            "ciudades",
+            "en que ciudades",
+            "en cuales ciudades",
+            "que ciudades",
+            "donde teneis hoteles",
+            "donde tienen hoteles",
+            "ciudades teneis",
+            "ciudades tienen",
+            "ciudades hay hoteles",
+        )
+        return any(k in t for k in keywords)
+
+    def _extract_unique_cities(self, candidates: list[dict]) -> list[str]:
+        seen = set()
+        cities = []
+        for cand in candidates or []:
+            city = (cand.get("city") or "").strip()
+            if not city:
+                continue
+            key = self._normalize_text(city)
+            if key in seen:
+                continue
+            seen.add(key)
+            cities.append(city)
+        return cities
+
+    def _build_city_list_reply(self, cities: list[str]) -> str:
+        if not cities:
+            return "No tengo ciudades cargadas para esta instancia. ¿En qué ciudad te gustaría alojarte?"
+        cities_sorted = sorted(cities, key=lambda c: self._normalize_text(c))
+        if len(cities_sorted) <= 12:
+            body = ", ".join(cities_sorted)
+        else:
+            body = ", ".join(cities_sorted[:12]) + f" y {len(cities_sorted) - 12} más"
+        return f"Tenemos hoteles en estas ciudades: {body}. ¿Te interesa alguna en concreto?"
 
     def _hydrate_context_from_active_reservation(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
@@ -661,6 +833,18 @@ class MainAgent:
         current_name = self.memory_manager.get_flag(chat_id, "property_name")
         instance_name = self.memory_manager.get_flag(chat_id, "instance_hotel_code")
         property_id = self.memory_manager.get_flag(chat_id, "property_id")
+        if property_id and not self._is_valid_property_label(current_display or current_name):
+            try:
+                table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                payload = fetch_property_by_id(table, property_id) if table else {}
+                fetched_name = (payload.get("name") or payload.get("property_name") or "").strip()
+                if fetched_name:
+                    current_display = fetched_name
+                    current_name = fetched_name
+                    self.memory_manager.set_flag(chat_id, "property_display_name", fetched_name)
+                    self.memory_manager.set_flag(chat_id, "property_name", fetched_name)
+            except Exception:
+                pass
         if instance_name and current_name and str(instance_name).strip().lower() == str(current_name).strip().lower():
             current_name = None
         if instance_name and property_id:
@@ -906,6 +1090,122 @@ class MainAgent:
                             self.memory_manager.save(chat_id, "assistant", question)
                             return question
 
+                # Responder con ciudades de la instancia si el usuario lo pide explícitamente
+                if self._is_city_list_intent(user_input):
+                    candidates = self._ensure_property_candidates(chat_id)
+                    cities = self._extract_unique_cities(candidates)
+                    reply = self._build_city_list_reply(cities)
+                    # Mantener/activar espera de ciudad para el siguiente turno
+                    if not self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING):
+                        self.memory_manager.set_flag(
+                            chat_id,
+                            FLAG_PROPERTY_CITY_FILTER_PENDING,
+                            {"original_message": None},
+                        )
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    self.memory_manager.save(chat_id, "assistant", reply)
+                    return reply
+
+                pending_city = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
+                if pending_city:
+                    original_message = (
+                        pending_city.get("original_message")
+                        if isinstance(pending_city, dict)
+                        else None
+                    )
+                    candidates = self._get_property_candidates(chat_id)
+                    if self._is_uncertain_location(user_input):
+                        self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
+                        self.memory_manager.set_flag(
+                            chat_id,
+                            FLAG_PROPERTY_ZONE_FILTER_PENDING,
+                            {"original_message": original_message},
+                        )
+                        question = "¿Prefieres playa, centro o aeropuerto?"
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+                    filtered = self._filter_candidates_by_city(candidates, user_input)
+                    if not filtered:
+                        question = "No encuentro hoteles en esa ciudad. ¿Qué otra ciudad prefieres?"
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+                    self.memory_manager.set_flag(chat_id, "property_disambiguation_candidates", filtered)
+                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
+                    if len(filtered) == 1 and filtered[0].get("property_id"):
+                        try:
+                            tool = create_property_context_tool(
+                                memory_manager=self.memory_manager,
+                                chat_id=chat_id,
+                            )
+                            tool.invoke({"property_id": filtered[0].get("property_id")})
+                        except Exception as exc:
+                            log.warning("No se pudo fijar property desde ciudad: %s", exc)
+                        # Confirmación breve sin volver a pedir hotel
+                        single_text = self._format_property_candidates(filtered)
+                        reply = (
+                            f"Perfecto, en esa ciudad tenemos:\n{single_text}\n"
+                            "¿Quieres reservar en este hotel?"
+                        )
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", reply)
+                        return reply
+                    question = self._build_disambiguation_question(filtered)
+                    self.memory_manager.set_flag(
+                        chat_id,
+                        FLAG_PROPERTY_DISAMBIGUATION_PENDING,
+                        {"original_message": original_message or user_input},
+                    )
+                    self.memory_manager.save(chat_id, "user", user_input)
+                    self.memory_manager.save(chat_id, "assistant", question)
+                    return question
+
+                pending_zone = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING)
+                if pending_zone:
+                    original_message = (
+                        pending_zone.get("original_message")
+                        if isinstance(pending_zone, dict)
+                        else None
+                    )
+                    candidates = self._get_property_candidates(chat_id)
+                    filtered = self._filter_candidates_by_text(candidates, user_input)
+                    if not filtered:
+                        self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING)
+                        self.memory_manager.set_flag(
+                            chat_id,
+                            FLAG_PROPERTY_CITY_FILTER_PENDING,
+                            {"original_message": original_message},
+                        )
+                        question = "No encuentro hoteles con esa preferencia. ¿En qué ciudad te gustaría alojarte?"
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+                    self.memory_manager.set_flag(chat_id, "property_disambiguation_candidates", filtered)
+                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING)
+                    if len(filtered) == 1 and filtered[0].get("property_id"):
+                        try:
+                            tool = create_property_context_tool(
+                                memory_manager=self.memory_manager,
+                                chat_id=chat_id,
+                            )
+                            tool.invoke({"property_id": filtered[0].get("property_id")})
+                        except Exception as exc:
+                            log.warning("No se pudo fijar property desde preferencia: %s", exc)
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        if original_message:
+                            user_input = original_message
+                    else:
+                        question = self._build_disambiguation_question(filtered)
+                        self.memory_manager.set_flag(
+                            chat_id,
+                            FLAG_PROPERTY_DISAMBIGUATION_PENDING,
+                            {"original_message": original_message or user_input},
+                        )
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
+
                 # Si ya preguntamos “mismo u otro hotel” y el huésped dio un nombre, no repetir la pregunta.
                 if self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_SWITCH_ASKED) and self._is_valid_property_label(user_input):
                     candidate_name = (user_input or "").strip()
@@ -1017,7 +1317,8 @@ class MainAgent:
                                 self.memory_manager.save(chat_id, "user", user_input)
                                 self.memory_manager.save(chat_id, "assistant", question)
                                 return question
-                            question = self._build_disambiguation_question(candidates)
+                            city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
+                            question = city_question or self._build_disambiguation_question(candidates)
                             self.memory_manager.save(chat_id, "user", user_input)
                             self.memory_manager.save(chat_id, "assistant", question)
                             return question
@@ -1085,7 +1386,8 @@ class MainAgent:
                             self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
                             self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                         else:
-                            question = self._build_disambiguation_question(candidates)
+                            city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
+                            question = city_question or self._build_disambiguation_question(candidates)
                         self.memory_manager.set_flag(
                             chat_id,
                             FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1142,7 +1444,8 @@ class MainAgent:
                                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
                                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                                 else:
-                                    question = self._build_disambiguation_question(candidates)
+                                    city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
+                                    question = city_question or self._build_disambiguation_question(candidates)
                                 self.memory_manager.set_flag(
                                     chat_id,
                                     FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1154,10 +1457,25 @@ class MainAgent:
 
                 if self._needs_property_context(chat_id):
                     if not (has_active_res_context and not self._is_new_reservation_intent(user_input)):
-                        question = self._request_property_context(chat_id, user_input)
-                        self.memory_manager.save(chat_id, "user", user_input)
-                        self.memory_manager.save(chat_id, "assistant", question)
-                        return question
+                        candidates = self._ensure_property_candidates(chat_id)
+                        if len(candidates or []) == 1 and candidates[0].get("property_id"):
+                            try:
+                                tool = create_property_context_tool(
+                                    memory_manager=self.memory_manager,
+                                    chat_id=chat_id,
+                                )
+                                tool.invoke({"property_id": candidates[0].get("property_id")})
+                            except Exception as exc:
+                                log.warning("No se pudo fijar property unica desde candidates: %s", exc)
+                            # Ya hay contexto fijo: continuar flujo sin preguntar hotel/ciudad
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            # seguir sin return para que procese el resto del flujo
+                        else:
+                            city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
+                            question = city_question or self._request_property_context(chat_id, user_input)
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", question)
+                            return question
 
                 base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
                 dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)

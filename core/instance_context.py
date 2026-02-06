@@ -93,11 +93,16 @@ def _run_async(coro):
     return loop.run_until_complete(coro)
 
 
-def _mcp_tool_matches(name: str) -> bool:
+def _mcp_tool_matches(name: str, description: str | None = None) -> bool:
     n = (name or "").strip().lower()
+    d = (description or "").strip().lower()
     if n in {"property id", "property_id", "propertyid"}:
         return True
     if "property" in n and "id" in n:
+        return True
+    if d and ("property" in d and "id" in d):
+        return True
+    if d and ("properties" in d and "instance" in d):
         return True
     return False
 
@@ -115,7 +120,13 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
             except Exception:
                 continue
             for tool in tools or []:
-                if _mcp_tool_matches(getattr(tool, "name", "")):
+                if _mcp_tool_matches(getattr(tool, "name", ""), getattr(tool, "description", None)):
+                    return tool
+            # Fallback: si hay alguna tool relacionada con property, úsala.
+            for tool in tools or []:
+                name = (getattr(tool, "name", "") or "").lower()
+                desc = (getattr(tool, "description", "") or "").lower()
+                if "property" in name or "properties" in name or "property" in desc or "properties" in desc:
                     return tool
         return None
 
@@ -125,14 +136,37 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
         tool = None
 
     if not tool:
+        try:
+            for server in ("DispoPreciosAgent", "OnboardingAgent", "InfoAgent"):
+                tools = _run_async(get_tools(server_name=server))
+                if tools:
+                    log.warning(
+                        "MCP property tool no encontrado en %s. Tools disponibles: %s",
+                        server,
+                        [getattr(t, "name", "") for t in tools],
+                    )
+        except Exception:
+            pass
         return []
 
-    # MCP schema sigue esperando hotel_code como campo requerido.
-    payload = {"tabla": table, "instance_id": instance_id, "hotel_code": str(instance_id)}
-    try:
-        raw = _run_async(tool.ainvoke(payload))
-    except Exception as exc:
-        log.warning("MCP property tool fallo: %s", exc)
+    log.info("MCP property tool seleccionado: %s", getattr(tool, "name", ""))
+    payloads = [
+        {"instance_id": instance_id},
+        {"instance_id": instance_id, "hotel_code": str(instance_id)},
+        {"tabla": table, "instance_id": instance_id, "hotel_code": str(instance_id)},
+    ]
+    raw = None
+    last_exc = None
+    for payload in payloads:
+        try:
+            raw = _run_async(tool.ainvoke(payload))
+            if raw:
+                break
+        except Exception as exc:
+            last_exc = exc
+            continue
+    if raw is None and last_exc:
+        log.warning("MCP property tool fallo: %s", last_exc)
         return []
 
     if isinstance(raw, str):
@@ -500,11 +534,23 @@ def hydrate_dynamic_context(
         if len(prop_rows) > 1:
             candidates = []
             for row in prop_rows:
+                address = (
+                    row.get("address")
+                    or row.get("direccion")
+                    or row.get("full_address")
+                    or row.get("address_line")
+                    or row.get("address1")
+                )
+                street = row.get("street") or row.get("street_address") or address
+                city = row.get("city") or row.get("ciudad") or row.get("town") or row.get("locality")
                 candidates.append(
                     {
                         "property_id": row.get("property_id"),
                         "name": row.get("name") or row.get("property_name"),
                         "instance_id": row.get("instance_id"),
+                        "city": city,
+                        "street": street,
+                        "address": address,
                     }
                 )
             memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
