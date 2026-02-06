@@ -329,23 +329,27 @@ def upsert_chat_reservation(
 
     normalized_chat = _normalize_chat_id(chat_id)
 
-    def _exists_duplicate(chat_key: str, folio: str | None, locator: str | None) -> bool:
+    def _locator_conflict(chat_key: str, folio: str | None, locator: str | None) -> bool:
+        if not locator:
+            return False
         try:
-            table = supabase.table(Settings.CHAT_RESERVATIONS_TABLE).select("id").eq("chat_id", chat_key)
-            if folio:
-                resp = table.eq("folio_id", folio).limit(1).execute()
-                if resp.data:
-                    return True
-            if locator:
-                resp = table.eq("reservation_locator", locator).limit(1).execute()
-                if resp.data:
-                    return True
+            resp = (
+                supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+                .select("folio_id, reservation_locator")
+                .eq("chat_id", chat_key)
+                .eq("reservation_locator", locator)
+                .limit(1)
+                .execute()
+            )
+            if resp.data:
+                existing_folio = str(resp.data[0].get("folio_id") or "").strip()
+                return bool(existing_folio and folio and existing_folio != str(folio).strip())
         except Exception as exc:
             logging.warning("⚠️ No se pudo verificar duplicados de chat_reservation: %s", exc)
         return False
-    if _exists_duplicate(normalized_chat, folio_id, reservation_locator):
+    if _locator_conflict(normalized_chat, folio_id, reservation_locator):
         logging.info(
-            "🧾 chat_reservation duplicada omitida chat_id=%s folio_id=%s locator=%s",
+            "🧾 chat_reservation duplicada por locator omitida chat_id=%s folio_id=%s locator=%s",
             normalized_chat,
             folio_id,
             reservation_locator,
