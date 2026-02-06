@@ -304,16 +304,19 @@ class SuperintendenteAgent:
             return None
 
         property_id = None
-        hotel_code = None
+        instance_id = None
         if self.memory_manager and encargado_id:
             try:
                 property_id = self.memory_manager.get_flag(encargado_id, "property_id")
             except Exception:
                 property_id = None
             try:
-                hotel_code = self.memory_manager.get_flag(encargado_id, "property_name")
+                instance_id = (
+                    self.memory_manager.get_flag(encargado_id, "instance_id")
+                    or self.memory_manager.get_flag(encargado_id, "instance_hotel_code")
+                )
             except Exception:
-                hotel_code = None
+                instance_id = None
 
         if _looks_like_phone(guest_label):
             guest_id = _clean_phone(guest_label)
@@ -378,7 +381,7 @@ class SuperintendenteAgent:
                     self.memory_manager,
                     encargado_id,
                     property_id=property_id,
-                    hotel_code=hotel_code,
+                    instance_id=instance_id,
                 )
             except Exception:
                 pass
@@ -614,7 +617,7 @@ class SuperintendenteAgent:
             "1. agregar_a_base_conocimientos - Agrega información vectorizada a Supabase\n"
             "2. eliminar_de_base_conocimientos - Prepara borrador de eliminación en la base Variable (muestra registros o conteo, requiere confirmación)\n"
             "3. revisar_conversaciones - Revisa conversaciones recientes de huéspedes (pide modo: resumen u original)\n"
-            "4. listar_plantillas_whatsapp - Lista las plantillas disponibles en Supabase por idioma/hotel\n"
+            "4. listar_plantillas_whatsapp - Lista las plantillas disponibles en Supabase por idioma/instancia\n"
             "5. enviar_broadcast - Envía plantillas masivas a múltiples huéspedes\n"
             "6. preparar_envio_plantilla - Prepara borrador de envío individual a uno o varios huéspedes (pide parámetros faltantes y espera confirmación)\n"
             "7. enviar_mensaje_main - Envía respuesta del encargado al MainAgent\n"

@@ -596,7 +596,7 @@ def register_telegram_routes(app, state):
                         "date": pending.get("date"),
                         "parameters": parameters,
                         "language": pending.get("language") or "es",
-                        "hotel_code": pending.get("hotel_code"),
+                        "instance_id": pending.get("instance_id"),
                         "property_id": pending.get("property_id"),
                     }
                     result = await tool.ainvoke(payload)
@@ -1029,11 +1029,12 @@ def register_telegram_routes(app, state):
                     if state.memory_manager:
                         first = drafts[0] if drafts else {}
                         ctx_prop = first.get("property_id")
-                        ctx_hotel = first.get("hotel_code")
+                        ctx_instance_id = first.get("instance_id")
                         if ctx_prop is not None:
                             state.memory_manager.set_flag(chat_id, "property_id", ctx_prop)
-                        if ctx_hotel:
-                            state.memory_manager.set_flag(chat_id, "property_name", ctx_hotel)
+                        if ctx_instance_id:
+                            state.memory_manager.set_flag(chat_id, "instance_id", ctx_instance_id)
+                            state.memory_manager.set_flag(chat_id, "instance_hotel_code", ctx_instance_id)
                         ensure_instance_credentials(state.memory_manager, chat_id)
                     sent = 0
                     for draft in drafts:
@@ -1041,11 +1042,12 @@ def register_telegram_routes(app, state):
                         msg_raw = draft.get("message", "")
                         if state.memory_manager and gid:
                             ctx_prop = draft.get("property_id")
-                            ctx_hotel = draft.get("hotel_code")
+                            ctx_instance_id = draft.get("instance_id")
                             if ctx_prop is not None:
                                 state.memory_manager.set_flag(gid, "property_id", ctx_prop)
-                            if ctx_hotel:
-                                state.memory_manager.set_flag(gid, "property_name", ctx_hotel)
+                            if ctx_instance_id:
+                                state.memory_manager.set_flag(gid, "instance_id", ctx_instance_id)
+                                state.memory_manager.set_flag(gid, "instance_hotel_code", ctx_instance_id)
                         final_msg = _ensure_guest_language(msg_raw, gid)
                         await state.channel_manager.send_message(
                             gid,
@@ -1128,11 +1130,12 @@ def register_telegram_routes(app, state):
                         if state.memory_manager:
                             first = drafts[0] if drafts else {}
                             ctx_prop = first.get("property_id")
-                            ctx_hotel = first.get("hotel_code")
+                            ctx_instance_id = first.get("instance_id")
                             if ctx_prop is not None:
                                 state.memory_manager.set_flag(chat_id, "property_id", ctx_prop)
-                            if ctx_hotel:
-                                state.memory_manager.set_flag(chat_id, "property_name", ctx_hotel)
+                            if ctx_instance_id:
+                                state.memory_manager.set_flag(chat_id, "instance_id", ctx_instance_id)
+                                state.memory_manager.set_flag(chat_id, "instance_hotel_code", ctx_instance_id)
                             ensure_instance_credentials(state.memory_manager, chat_id)
                         sent = 0
                         for draft in drafts:
@@ -1140,11 +1143,12 @@ def register_telegram_routes(app, state):
                             msg_raw = draft.get("message", "")
                             if state.memory_manager and guest_id:
                                 ctx_prop = draft.get("property_id")
-                                ctx_hotel = draft.get("hotel_code")
+                                ctx_instance_id = draft.get("instance_id")
                                 if ctx_prop is not None:
                                     state.memory_manager.set_flag(guest_id, "property_id", ctx_prop)
-                                if ctx_hotel:
-                                    state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel)
+                                if ctx_instance_id:
+                                    state.memory_manager.set_flag(guest_id, "instance_id", ctx_instance_id)
+                                    state.memory_manager.set_flag(guest_id, "instance_hotel_code", ctx_instance_id)
                             msg_to_send = _clean_wa_payload(msg_raw)
                             msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
                             await state.channel_manager.send_message(
@@ -1379,18 +1383,22 @@ def register_telegram_routes(app, state):
                             if state.memory_manager:
                                 try:
                                     ctx_property_id = state.memory_manager.get_flag(chat_id, "property_id")
-                                    ctx_hotel_code = state.memory_manager.get_flag(chat_id, "property_name")
+                                    ctx_instance_id = (
+                                        state.memory_manager.get_flag(chat_id, "instance_id")
+                                        or state.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                                    )
                                     for draft in wa_drafts:
                                         if ctx_property_id is not None:
                                             draft["property_id"] = ctx_property_id
-                                        if ctx_hotel_code:
-                                            draft["hotel_code"] = ctx_hotel_code
+                                        if ctx_instance_id:
+                                            draft["instance_id"] = ctx_instance_id
                                         guest_id = draft.get("guest_id")
                                         if guest_id:
                                             if ctx_property_id is not None:
                                                 state.memory_manager.set_flag(guest_id, "property_id", ctx_property_id)
-                                            if ctx_hotel_code:
-                                                state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel_code)
+                                            if ctx_instance_id:
+                                                state.memory_manager.set_flag(guest_id, "instance_id", ctx_instance_id)
+                                                state.memory_manager.set_flag(guest_id, "instance_hotel_code", ctx_instance_id)
                                 except Exception:
                                     pass
                             pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]

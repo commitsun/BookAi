@@ -254,7 +254,12 @@ class MemoryManager:
                 locator_flag = self.get_flag(conversation_id, "reservation_locator")
                 checkin_flag = self.get_flag(conversation_id, "checkin")
                 checkout_flag = self.get_flag(conversation_id, "checkout")
-                if folio_flag and re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_flag)):
+                if (
+                    folio_flag
+                    and re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_flag))
+                    and channel_to_store == "whatsapp"
+                    and normalized_role == "guest"
+                ):
                     try:
                         resolved_chat_id = tail if isinstance(conversation_id, str) and ":" in conversation_id else conversation_id
                         original_chat_id = None

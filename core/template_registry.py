@@ -28,10 +28,10 @@ def _norm_code(code: Optional[str]) -> str:
     return (code or "").strip().lower()
 
 
-def _norm_hotel(hotel_code: Optional[str]) -> Optional[str]:
-    if hotel_code is None:
+def _norm_instance(instance_id: Optional[str]) -> Optional[str]:
+    if instance_id is None:
         return None
-    clean = str(hotel_code).strip()
+    clean = str(instance_id).strip()
     return clean.upper() or None
 
 
@@ -173,7 +173,7 @@ class TemplateDefinition:
 
     code: str
     language: str = "es"
-    hotel_code: Optional[str] = None
+    instance_id: Optional[str] = None
     whatsapp_name: Optional[str] = None
     parameter_order: List[str] = field(default_factory=list)
     parameter_format: str = "ORDINAL"  # ORDINAL o NAMED
@@ -185,7 +185,7 @@ class TemplateDefinition:
 
     def key(self) -> str:
         return TemplateRegistry.build_key(
-            hotel_code=self.hotel_code,
+            instance_id=self.instance_id,
             template_code=self.code,
             language=self.language,
         )
@@ -224,7 +224,7 @@ class TemplateDefinition:
         return cls(
             code=_norm_code(data.get("code")),
             language=_norm_lang(data.get("language")),
-            hotel_code=_norm_hotel(data.get("hotel_code")),
+            instance_id=_norm_instance(data.get("instance_id")),
             whatsapp_name=(data.get("whatsapp_name") or data.get("code") or "").strip(),
             parameter_order=order,
             description=data.get("description"),
@@ -343,8 +343,8 @@ class TemplateRegistry:
 
     # ------------------------------------------------------------------
     @staticmethod
-    def build_key(hotel_code: Optional[str], template_code: str, language: str | None) -> str:
-        return f"{_norm_hotel(hotel_code) or '*'}|{_norm_code(template_code)}|{_norm_lang(language)}"
+    def build_key(instance_id: Optional[str], template_code: str, language: str | None) -> str:
+        return f"{_norm_instance(instance_id) or '*'}|{_norm_code(template_code)}|{_norm_lang(language)}"
 
     # ------------------------------------------------------------------
     @classmethod
@@ -394,10 +394,10 @@ class TemplateRegistry:
         self._templates[key] = template
 
     # ------------------------------------------------------------------
-    def resolve(self, hotel_code: Optional[str], template_code: str, language: str | None = None) -> Optional[TemplateDefinition]:
+    def resolve(self, instance_id: Optional[str], template_code: str, language: str | None = None) -> Optional[TemplateDefinition]:
         """Busca plantilla por hotel + código + idioma con varios fallbacks."""
         lang = _norm_lang(language)
-        hotel = _norm_hotel(hotel_code)
+        hotel = _norm_instance(instance_id)
         code = _norm_code(template_code)
 
         candidates = [

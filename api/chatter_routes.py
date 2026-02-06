@@ -41,7 +41,6 @@ class ToggleBookAiRequest(BaseModel):
 class SendTemplateRequest(BaseModel):
     chat_id: str = Field(..., description="ID del chat (telefono)")
     template_code: str = Field(..., description="Codigo interno de la plantilla")
-    hotel_code: Optional[str] = Field(default=None, description="Codigo del hotel (opcional, legado)")
     instance_id: Optional[str] = Field(default=None, description="ID de instancia (opcional)")
     language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
@@ -145,10 +144,10 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
-def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
+def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
-    for key in ("hotel_code", "hotel", "hotel_name", "property_name", "property"):
+    for key in ("hotel", "hotel_name", "property_name", "property"):
         val = params.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -1112,7 +1111,7 @@ def register_chatter_routes(app, state) -> None:
 
     @router.get("/templates")
     async def list_templates(
-        hotel_code: Optional[str] = Query(default=None),
+        instance_id: Optional[str] = Query(default=None),
         language: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
@@ -1123,7 +1122,7 @@ def register_chatter_routes(app, state) -> None:
         items: List[TemplateDefinition] = registry.list_templates()
         results = []
         for tpl in items:
-            if hotel_code and (tpl.hotel_code or "").upper() != hotel_code.upper():
+            if instance_id and (tpl.instance_id or "").upper() != instance_id.upper():
                 continue
             if language and (tpl.language or "").lower() != language.lower():
                 continue
@@ -1132,7 +1131,7 @@ def register_chatter_routes(app, state) -> None:
                     "code": tpl.code,
                     "whatsapp_name": tpl.whatsapp_name,
                     "language": tpl.language,
-                    "hotel_code": tpl.hotel_code,
+                    "instance_id": tpl.instance_id,
                     "description": tpl.description,
                     "content": tpl.content,
                     "parameter_format": tpl.parameter_format,
@@ -1158,7 +1157,7 @@ def register_chatter_routes(app, state) -> None:
         template_def = None
         if registry:
             template_def = registry.resolve(
-                hotel_code=payload.hotel_code,
+                instance_id=instance_id,
                 template_code=template_code,
                 language=language,
             )
@@ -1176,10 +1175,12 @@ def register_chatter_routes(app, state) -> None:
         reservation_locator = None
         checkin = None
         checkout = None
+        folio_from_params = False
         try:
             if payload.parameters:
                 f_id, ci, co = _extract_reservation_fields(payload.parameters)
                 folio_id = f_id
+                folio_from_params = bool(f_id)
                 checkin = ci
                 checkout = co
                 reservation_locator = _extract_reservation_locator(payload.parameters)
@@ -1201,16 +1202,12 @@ def register_chatter_routes(app, state) -> None:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "instance_id", instance_id)
                         state.memory_manager.set_flag(mem_id, "instance_hotel_code", instance_id)
-            if payload.hotel_code:
-                for mem_id in [context_id, chat_id]:
-                    if mem_id:
-                        state.memory_manager.set_flag(mem_id, "property_name", payload.hotel_code)
-            elif payload.parameters:
-                inferred_hotel = _extract_hotel_code(payload.parameters)
-                if inferred_hotel:
+            if payload.parameters:
+                inferred_name = _extract_property_name(payload.parameters)
+                if inferred_name:
                     for mem_id in [context_id, chat_id]:
                         if mem_id:
-                            state.memory_manager.set_flag(mem_id, "property_name", inferred_hotel)
+                            state.memory_manager.set_flag(mem_id, "property_name", inferred_name)
             if folio_id:
                 for mem_id in [context_id, chat_id]:
                     if mem_id:
@@ -1247,7 +1244,7 @@ def register_chatter_routes(app, state) -> None:
             log.error("Error enviando plantilla: %s", exc, exc_info=True)
             raise HTTPException(status_code=500, detail="Error enviando plantilla")
 
-        if folio_id:
+        if folio_id and folio_from_params:
             try:
                 log.info(
                     "🧾 chatter upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s instance_id=%s",
@@ -1272,7 +1269,7 @@ def register_chatter_routes(app, state) -> None:
             except Exception as exc:
                 log.warning("No se pudo persistir reserva en tabla: %s", exc)
 
-        if folio_id and (not checkin or not checkout):
+        if folio_id and folio_from_params and (not checkin or not checkout):
             try:
                 consulta_tool = create_consulta_reserva_persona_tool(
                     memory_manager=state.memory_manager,
@@ -1304,7 +1301,7 @@ def register_chatter_routes(app, state) -> None:
                         state.memory_manager.set_flag(chat_id, "checkout", co)
                     if locator:
                         state.memory_manager.set_flag(chat_id, "reservation_locator", locator)
-                    if folio_id:
+                    if folio_id and folio_from_params:
                         upsert_chat_reservation(
                             chat_id=chat_id,
                             folio_id=folio_id,
@@ -1358,7 +1355,7 @@ def register_chatter_routes(app, state) -> None:
                                 state.memory_manager.set_flag(mem_id, "checkout", checkout)
                 except Exception as exc:
                     log.warning("No se pudo extraer folio/checkin/checkout desde rendered: %s", exc)
-            if reservation_locator and folio_id:
+            if reservation_locator and folio_id and folio_from_params:
                 try:
                     upsert_chat_reservation(
                         chat_id=chat_id,
@@ -1366,11 +1363,11 @@ def register_chatter_routes(app, state) -> None:
                         checkin=checkin,
                         checkout=checkout,
                         property_id=property_id,
-                    instance_id=instance_id,
-                    original_chat_id=context_id or None,
-                    reservation_locator=reservation_locator,
-                    source="rendered",
-                )
+                        instance_id=instance_id,
+                        original_chat_id=context_id or None,
+                        reservation_locator=reservation_locator,
+                        source="rendered",
+                    )
                 except Exception as exc:
                     log.warning("No se pudo persistir reservation_locator desde rendered: %s", exc)
             state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")

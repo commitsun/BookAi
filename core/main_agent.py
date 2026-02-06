@@ -36,6 +36,7 @@ from core.memory_manager import MemoryManager
 from core.config import ModelConfig, ModelTier
 from core.utils.escalation_messages import EscalationMessages
 from core.instance_context import DEFAULT_PROPERTY_TABLE, fetch_property_by_id, fetch_properties_by_code
+from core.db import get_active_chat_reservation
 
 
 log = logging.getLogger("MainAgent")
@@ -291,7 +292,7 @@ class MainAgent:
             for row in rows
         ]
         self.memory_manager.set_flag(chat_id, "property_disambiguation_candidates", candidates)
-        self.memory_manager.set_flag(chat_id, "property_disambiguation_hotel_code", str(instance_code))
+        self.memory_manager.set_flag(chat_id, "property_disambiguation_instance_id", str(instance_code))
         log.info(
             "[PROPERTY_CANDIDATES] loaded chat_id=%s instance_code=%s count=%s",
             chat_id,
@@ -368,6 +369,65 @@ class MainAgent:
         if prompt:
             return prompt
         return "¿En cuál de nuestros hoteles estarías interesado? Puedes darme un nombre aproximado."
+
+    def _build_property_not_in_instance(self) -> str:
+        prompt = self._load_embedded_prompt("PROPERTY_NOT_IN_INSTANCE")
+        if prompt:
+            return prompt
+        return "No encuentro ese hotel en esta instancia. ¿Puedes indicarme otro nombre (aprox)?"
+
+    def _hydrate_context_from_active_reservation(self, chat_id: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        try:
+            instance_id = (
+                self.memory_manager.get_flag(chat_id, "instance_id")
+                or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+            )
+            reservation = get_active_chat_reservation(
+                chat_id=chat_id,
+                instance_id=instance_id,
+            )
+        except Exception:
+            return False
+        if not reservation:
+            return False
+
+        changed = False
+        prop_id = reservation.get("property_id")
+        inst_id = reservation.get("instance_id")
+        folio_id = reservation.get("folio_id")
+        checkin = reservation.get("checkin")
+        checkout = reservation.get("checkout")
+
+        if prop_id and not self.memory_manager.get_flag(chat_id, "property_id"):
+            self.memory_manager.set_flag(chat_id, "property_id", prop_id)
+            changed = True
+        if inst_id and not self.memory_manager.get_flag(chat_id, "instance_id"):
+            self.memory_manager.set_flag(chat_id, "instance_id", inst_id)
+            self.memory_manager.set_flag(chat_id, "instance_hotel_code", inst_id)
+            self.memory_manager.set_flag(chat_id, "wa_context_instance_id", inst_id)
+            changed = True
+        if folio_id and not self.memory_manager.get_flag(chat_id, "folio_id"):
+            self.memory_manager.set_flag(chat_id, "folio_id", folio_id)
+            changed = True
+        if checkin and not self.memory_manager.get_flag(chat_id, "checkin"):
+            self.memory_manager.set_flag(chat_id, "checkin", checkin)
+        if checkout and not self.memory_manager.get_flag(chat_id, "checkout"):
+            self.memory_manager.set_flag(chat_id, "checkout", checkout)
+
+        if prop_id and not self.memory_manager.get_flag(chat_id, "property_name"):
+            table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+            if table:
+                try:
+                    payload = fetch_property_by_id(table, prop_id)
+                except Exception:
+                    payload = {}
+                display = (payload.get("name") or payload.get("property_name") or "").strip()
+                if display:
+                    self.memory_manager.set_flag(chat_id, "property_name", display)
+                    self.memory_manager.set_flag(chat_id, "property_display_name", display)
+        return True
 
     def _resolve_property_from_candidates(self, chat_id: str, user_input: str) -> bool:
         if not self.memory_manager or not chat_id:
@@ -454,7 +514,7 @@ class MainAgent:
             tool = create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id)
             tool.invoke(
                 {
-                    "hotel_code": selected.get("name"),
+                    "property_name": selected.get("name"),
                     "property_id": selected.get("property_id"),
                 }
             )
@@ -500,7 +560,7 @@ class MainAgent:
             tool = create_property_context_tool(memory_manager=self.memory_manager, chat_id=chat_id)
             tool.invoke(
                 {
-                    "hotel_code": None if property_id is not None else raw,
+                    "property_name": None if property_id is not None else raw,
                     "property_id": property_id,
                 }
             )
@@ -537,14 +597,14 @@ class MainAgent:
         except Exception:
             payload = {}
         display = (payload.get("name") or payload.get("property_name") or "").strip()
-        code = (payload.get("hotel_code") or "").strip()
+        instance_id = (payload.get("instance_id") or "").strip()
         if display:
             self.memory_manager.set_flag(chat_id, "property_display_name", display)
             self.memory_manager.set_flag(chat_id, "property_name", display)
-        elif code:
-            self.memory_manager.set_flag(chat_id, "property_name", code)
-        if code:
-            self.memory_manager.set_flag(chat_id, "wa_context_hotel_code", code)
+        if instance_id:
+            self.memory_manager.set_flag(chat_id, "instance_id", instance_id)
+            self.memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
+            self.memory_manager.set_flag(chat_id, "wa_context_instance_id", instance_id)
 
     def _request_property_context(self, chat_id: str, original_message: str) -> str:
         self.memory_manager.set_flag(
@@ -565,9 +625,10 @@ class MainAgent:
             "property_name",
             "property_display_name",
             "wa_context_property_id",
-            "wa_context_hotel_code",
+            "wa_context_instance_id",
             "property_disambiguation_candidates",
-            "property_disambiguation_hotel_code",
+            "property_disambiguation_instance_id",
+            "property_disambiguation_attempts",
             FLAG_PROPERTY_DISAMBIGUATION_PENDING,
         ):
             self.memory_manager.clear_flag(chat_id, key)
@@ -606,7 +667,7 @@ class MainAgent:
             try:
                 table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
                 payload = fetch_property_by_id(table, property_id) if table else {}
-                prop_code = (payload.get("hotel_code") or payload.get("name") or "").strip()
+                prop_code = (payload.get("name") or payload.get("property_name") or "").strip()
                 if prop_code and str(prop_code).lower() != str(instance_name).strip().lower():
                     current_display = None
                     current_name = None
@@ -648,7 +709,7 @@ class MainAgent:
             try:
                 table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
                 payload = fetch_property_by_id(table, property_id_hint) if table else {}
-                prop_code = (payload.get("hotel_code") or payload.get("name") or "").strip()
+                prop_code = (payload.get("name") or payload.get("property_name") or "").strip()
                 if prop_code and str(prop_code).lower() != str(instance_name).strip().lower():
                     label = None
             except Exception:
@@ -689,7 +750,7 @@ class MainAgent:
                         memory_manager=self.memory_manager,
                         chat_id=chat_id,
                     )
-                    tool.invoke({"property_id": prop_id, "hotel_code": prop_code})
+                    tool.invoke({"property_id": prop_id, "property_name": prop_code})
                 except Exception as exc:
                     log.warning("No se pudo fijar property unica desde instancia: %s", exc)
         return False
@@ -757,6 +818,7 @@ class MainAgent:
 
             try:
                 skip_new_reservation_checks = False
+                has_active_res_context = False
                 if self.memory_manager.get_flag(chat_id, "escalation_in_progress"):
                     return "##INCISO## Un momento, sigo verificando tu solicitud con el encargado."
 
@@ -870,6 +932,16 @@ class MainAgent:
                         self.memory_manager.save(chat_id, "assistant", question)
                         return question
 
+                # Si hay una reserva activa en contexto y NO es una nueva reserva, evita pedir hotel otra vez.
+                if (
+                    not self._is_new_reservation_intent(user_input)
+                    and not self._has_real_property_context(chat_id)
+                ):
+                    # Solo usa la reserva activa si NO hay mención explícita a otra property.
+                    if not self._is_valid_property_label(user_input):
+                        if self._hydrate_context_from_active_reservation(chat_id):
+                            has_active_res_context = True
+
                 # 🔎 Si el usuario menciona un hotel directamente, intenta resolver antes de volver a preguntar
                 if (
                     not self.memory_manager.get_flag(chat_id, "property_id")
@@ -880,7 +952,7 @@ class MainAgent:
                     if resolved:
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                         self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
-                        self.memory_manager.clear_flag(chat_id, "property_disambiguation_hotel_code")
+                        self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_CONFIRMATION_PENDING)
                         skip_new_reservation_checks = True
 
@@ -932,13 +1004,27 @@ class MainAgent:
                     if not resolved:
                         resolved = self._resolve_property_from_candidates(chat_id, user_input)
                         if not resolved:
+                            attempts = self.memory_manager.get_flag(chat_id, "property_disambiguation_attempts") or 0
+                            attempts = int(attempts) + 1 if str(attempts).isdigit() else 1
+                            self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
+                            instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                            if attempts >= 2 and instance_id:
+                                question = self._build_property_not_in_instance()
+                                self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
+                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
+                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
+                                self.memory_manager.save(chat_id, "user", user_input)
+                                self.memory_manager.save(chat_id, "assistant", question)
+                                return question
                             question = self._build_disambiguation_question(candidates)
                             self.memory_manager.save(chat_id, "user", user_input)
                             self.memory_manager.save(chat_id, "assistant", question)
                             return question
                     self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
-                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_hotel_code")
+                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                     self.memory_manager.save(chat_id, "user", user_input)
                     if isinstance(pending_disambiguation, dict):
                         original_message = pending_disambiguation.get("original_message")
@@ -978,7 +1064,8 @@ class MainAgent:
                     if resolved:
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                         self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
-                        self.memory_manager.clear_flag(chat_id, "property_disambiguation_hotel_code")
+                        self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                        self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                         self.memory_manager.save(chat_id, "user", user_input)
                     else:
                         log.info(
@@ -987,7 +1074,18 @@ class MainAgent:
                             user_input,
                             len(candidates or []),
                         )
-                        question = self._build_disambiguation_question(candidates)
+                        attempts = self.memory_manager.get_flag(chat_id, "property_disambiguation_attempts") or 0
+                        attempts = int(attempts) + 1 if str(attempts).isdigit() else 1
+                        self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
+                        instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                        if attempts >= 2 and instance_id:
+                            question = self._build_property_not_in_instance()
+                            self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
+                        else:
+                            question = self._build_disambiguation_question(candidates)
                         self.memory_manager.set_flag(
                             chat_id,
                             FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1028,11 +1126,23 @@ class MainAgent:
                                 log.info("[PROPERTY_RESOLVE] candidates resolved chat_id=%s", chat_id)
                                 self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                                 self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
-                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_hotel_code")
+                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                                self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                                 self.memory_manager.save(chat_id, "user", user_input)
                             else:
                                 log.info("[PROPERTY_RESOLVE] candidates NOT resolved chat_id=%s", chat_id)
-                                question = self._build_disambiguation_question(candidates)
+                                attempts = self.memory_manager.get_flag(chat_id, "property_disambiguation_attempts") or 0
+                                attempts = int(attempts) + 1 if str(attempts).isdigit() else 1
+                                self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
+                                instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                                if attempts >= 2 and instance_id:
+                                    question = self._build_property_not_in_instance()
+                                    self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
+                                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
+                                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                                    self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
+                                else:
+                                    question = self._build_disambiguation_question(candidates)
                                 self.memory_manager.set_flag(
                                     chat_id,
                                     FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1043,10 +1153,11 @@ class MainAgent:
                                 return question
 
                 if self._needs_property_context(chat_id):
-                    question = self._request_property_context(chat_id, user_input)
-                    self.memory_manager.save(chat_id, "user", user_input)
-                    self.memory_manager.save(chat_id, "assistant", question)
-                    return question
+                    if not (has_active_res_context and not self._is_new_reservation_intent(user_input)):
+                        question = self._request_property_context(chat_id, user_input)
+                        self.memory_manager.save(chat_id, "user", user_input)
+                        self.memory_manager.save(chat_id, "assistant", question)
+                        return question
 
                 base_prompt = load_prompt("main_prompt.txt") or self._get_default_prompt()
                 dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)

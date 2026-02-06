@@ -274,6 +274,33 @@ def _normalize_chat_id(value: str | None) -> str:
     return cleaned or text
 
 
+def _normalize_date_field(value: str | None) -> str | None:
+    if not value:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    # Acepta ISO (YYYY-MM-DD) o fechas con hora.
+    try:
+        parsed = datetime.fromisoformat(raw.replace("Z", ""))
+        return parsed.date().isoformat()
+    except Exception:
+        pass
+    # Acepta formato DD/MM/YYYY
+    try:
+        parsed = datetime.strptime(raw, "%d/%m/%Y")
+        return parsed.date().isoformat()
+    except Exception:
+        pass
+    # Acepta formato DD-MM-YYYY
+    try:
+        parsed = datetime.strptime(raw, "%d-%m-%Y")
+        return parsed.date().isoformat()
+    except Exception:
+        pass
+    return raw
+
+
 def upsert_chat_reservation(
     *,
     chat_id: str,
@@ -298,15 +325,39 @@ def upsert_chat_reservation(
         return
 
     normalized_chat = _normalize_chat_id(chat_id)
+
+    def _exists_duplicate(chat_key: str, folio: str | None, locator: str | None) -> bool:
+        try:
+            table = supabase.table(Settings.CHAT_RESERVATIONS_TABLE).select("id").eq("chat_id", chat_key)
+            if folio:
+                resp = table.eq("folio_id", folio).limit(1).execute()
+                if resp.data:
+                    return True
+            if locator:
+                resp = table.eq("reservation_locator", locator).limit(1).execute()
+                if resp.data:
+                    return True
+        except Exception as exc:
+            logging.warning("⚠️ No se pudo verificar duplicados de chat_reservation: %s", exc)
+        return False
+    if _exists_duplicate(normalized_chat, folio_id, reservation_locator):
+        logging.info(
+            "🧾 chat_reservation duplicada omitida chat_id=%s folio_id=%s locator=%s",
+            normalized_chat,
+            folio_id,
+            reservation_locator,
+        )
+        return
+
     payload = {
         "chat_id": normalized_chat,
         "folio_id": folio_id,
         "updated_at": datetime.utcnow().isoformat(),
     }
     if checkin:
-        payload["checkin"] = str(checkin).strip()
+        payload["checkin"] = _normalize_date_field(checkin)
     if checkout:
-        payload["checkout"] = str(checkout).strip()
+        payload["checkout"] = _normalize_date_field(checkout)
     if property_id is not None:
         payload["property_id"] = property_id
     if instance_id:

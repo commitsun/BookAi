@@ -50,9 +50,9 @@ class SendBroadcastInput(BaseModel):
         default="es",
         description="Código de idioma de la plantilla (ej: es, en)",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código externo del hotel (opcional, para plantillas específicas)",
+        description="Identificador de la instancia (opcional, para plantillas específicas).",
     )
     property_id: Optional[int] = Field(
         default=None,
@@ -74,9 +74,9 @@ class SendBroadcastCheckinInput(BaseModel):
         default="es",
         description="Código de idioma de la plantilla (ej: es, en)",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código externo del hotel (opcional, para plantillas específicas)",
+        description="Identificador de la instancia (opcional, para plantillas específicas).",
     )
     property_id: Optional[int] = Field(
         default=None,
@@ -101,9 +101,9 @@ class ReviewConversationsInput(BaseModel):
         default=None,
         description="ID de propiedad (property_id) para filtrar el historial.",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código o nombre del hotel para resolver property_id si falta.",
+        description="Identificador de la instancia (opcional) para fijar el contexto.",
     )
 
 
@@ -121,9 +121,9 @@ class SendWhatsAppInput(BaseModel):
         default=None,
         description="ID de propiedad (property_id) para contexto multipropiedad.",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código o nombre del hotel para contexto multipropiedad.",
+        description="Identificador de la instancia para contexto multipropiedad.",
     )
 
 
@@ -142,9 +142,9 @@ class ConsultaReservaGeneralInput(BaseModel):
         default=None,
         description="URL de la instancia (opcional)",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Codigo o nombre del hotel (opcional).",
+        description="Identificador de la instancia (opcional).",
     )
     enrich_contact: bool = Field(
         default=False,
@@ -166,21 +166,17 @@ class ConsultaReservaPersonaInput(BaseModel):
         default=None,
         description="URL de la instancia (opcional)",
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Codigo o nombre del hotel (opcional).",
+        description="Identificador de la instancia (opcional).",
     )
 
 
-def _hotel_code_variants(raw: Optional[str]) -> list[str]:
+def _instance_id_variants(raw: Optional[str]) -> list[str]:
     clean = (raw or "").strip()
     if not clean:
         return []
-    variants = [clean]
-    for prefix in ("Hotel ", "Hostal "):
-        if not clean.lower().startswith(prefix.lower()):
-            variants.append(f"{prefix}{clean}")
-    return list(dict.fromkeys(variants))
+    return [clean]
 
 
 def _resolve_property_table(memory_manager: Any, chat_id: str) -> str:
@@ -464,47 +460,36 @@ def _set_instance_context(
     memory_manager: Any,
     chat_id: str,
     property_id: Optional[int] = None,
-    hotel_code: Optional[str] = None,
+    instance_id: Optional[str] = None,
 ) -> None:
     if not memory_manager or not chat_id:
         return
 
     resolved_property_id = property_id
-    resolved_hotel_code = (hotel_code or "").strip() or None
-    resolved_instance_id = None
+    resolved_instance_id = (instance_id or "").strip() or None
+    resolved_property_name = None
     property_table = _resolve_property_table(memory_manager, chat_id)
 
     log.info(
-        "🏨 [WA_CTX] start chat_id=%s property_id=%s hotel_code=%s table=%s",
+        "🏨 [WA_CTX] start chat_id=%s property_id=%s instance_id=%s table=%s",
         chat_id,
         resolved_property_id,
-        resolved_hotel_code,
+        resolved_instance_id,
         property_table,
     )
-
-    if resolved_property_id is None and resolved_hotel_code:
-        for variant in _hotel_code_variants(resolved_hotel_code):
-            log.info("🏨 [WA_CTX] resolve property_id via name variant=%s", variant)
-            prop_payload = fetch_property_by_name(property_table, variant)
-            prop_id = prop_payload.get("property_id")
-            if prop_id is not None:
-                resolved_property_id = prop_id
-                resolved_hotel_code = prop_payload.get("name") or variant
-                resolved_instance_id = prop_payload.get("instance_id") or resolved_instance_id
-                break
 
     if resolved_property_id is not None:
         log.info("🏨 [WA_CTX] resolve property_name via property_id=%s", resolved_property_id)
         prop_payload = fetch_property_by_id(property_table, resolved_property_id)
         prop_name = prop_payload.get("name")
         if prop_name:
-            resolved_hotel_code = prop_name
+            resolved_property_name = prop_name
         resolved_instance_id = prop_payload.get("instance_id") or resolved_instance_id
 
     if resolved_property_id is not None:
         memory_manager.set_flag(chat_id, "property_id", resolved_property_id)
-    if resolved_hotel_code:
-        memory_manager.set_flag(chat_id, "property_name", resolved_hotel_code)
+    if resolved_property_name:
+        memory_manager.set_flag(chat_id, "property_name", resolved_property_name)
     if resolved_instance_id:
         memory_manager.set_flag(chat_id, "instance_id", resolved_instance_id)
         memory_manager.set_flag(chat_id, "instance_hotel_code", resolved_instance_id)
@@ -553,9 +538,9 @@ class ListTemplatesInput(BaseModel):
     language: str = Field(
         default="es", description="Idioma a listar (ej: es, en, fr)"
     )
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código de hotel para filtrar. Si no se pasa, usa el hotel activo.",
+        description="Identificador de la instancia para filtrar. Si no se pasa, usa la instancia activa.",
     )
     refresh: bool = Field(
         default=False,
@@ -574,9 +559,9 @@ class SendTemplateDraftInput(BaseModel):
         description="Parámetros a rellenar (dict). También se acepta lista ordenada o JSON string.",
     )
     language: str = Field(default="es", description="Idioma de la plantilla (ej: es, en)")
-    hotel_code: Optional[str] = Field(
+    instance_id: Optional[str] = Field(
         default=None,
-        description="Código de hotel para escoger plantillas específicas.",
+        description="Identificador de la instancia para escoger plantillas específicas.",
     )
     property_id: Optional[int] = Field(
         default=None,
@@ -602,7 +587,7 @@ def create_list_templates_tool(
 
     async def _list_templates(
         language: str = "es",
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
         refresh: bool = False,
     ) -> str:
         if not template_registry:
@@ -617,7 +602,7 @@ def create_list_templates_tool(
             log.warning("No se pudo recargar las plantillas desde Supabase: %s", exc)
 
         lang_norm = _normalize_lang(language)
-        target_hotel = (hotel_code or "").strip().upper() or None
+        target_hotel = (instance_id or "").strip().upper() or None
         fallback_hotel = (hotel_name or "").strip().upper() or None
 
         templates = template_registry.list_templates()
@@ -625,9 +610,9 @@ def create_list_templates_tool(
         for tpl in templates:
             if _normalize_lang(tpl.language) != lang_norm:
                 continue
-            tpl_hotel = (tpl.hotel_code or "").strip().upper() or None
+            tpl_hotel = (tpl.instance_id or "").strip().upper() or None
 
-            # Filtrado: si se indicó hotel_code, acepta solo ese o las genéricas
+            # Filtrado: si se indicó instance_id, acepta solo ese o las genéricas
             if target_hotel:
                 if tpl_hotel and tpl_hotel != target_hotel:
                     continue
@@ -641,20 +626,20 @@ def create_list_templates_tool(
             prefer_current = False
             if not prev:
                 prefer_current = True
-            elif target_hotel and tpl_hotel == target_hotel and not prev.hotel_code:
+            elif target_hotel and tpl_hotel == target_hotel and not prev.instance_id:
                 prefer_current = True
-            elif not target_hotel and fallback_hotel and tpl_hotel == fallback_hotel and not prev.hotel_code:
+            elif not target_hotel and fallback_hotel and tpl_hotel == fallback_hotel and not prev.instance_id:
                 prefer_current = True
 
             if prefer_current:
                 picked[key] = tpl
 
         if not picked:
-            hotel_label = hotel_code or hotel_name
+            hotel_label = instance_id or hotel_name
             return f"⚠️ No encontré plantillas en {lang_norm} para {hotel_label}."
 
         lang_label = "español" if lang_norm == "es" else lang_norm
-        hotel_label = hotel_code or hotel_name
+        hotel_label = instance_id or hotel_name
         lines = [
             f"Estas son las plantillas de WhatsApp disponibles en {lang_label} para {hotel_label}:",
             "",
@@ -679,7 +664,7 @@ def create_list_templates_tool(
     return StructuredTool.from_function(
         name="listar_plantillas_whatsapp",
         description=(
-            "Lista las plantillas de WhatsApp disponibles desde Supabase para un idioma/hotel. "
+            "Lista las plantillas de WhatsApp disponibles desde Supabase para un idioma/instancia. "
             "Úsala cuando el encargado pida ver qué plantillas están registradas."
         ),
         coroutine=_list_templates,
@@ -734,7 +719,7 @@ def create_send_template_tool(
         guest_ids: str,
         parameters: Optional[dict] = None,
         language: str = "es",
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
         property_id: Optional[int] = None,
         refresh: bool = False,
     ) -> str:
@@ -755,19 +740,22 @@ def create_send_template_tool(
             try:
                 if property_id is None:
                     property_id = memory_manager.get_flag(chat_id, "property_id")
-                if not hotel_code:
-                    hotel_code = memory_manager.get_flag(chat_id, "property_name")
+                if not instance_id:
+                    instance_id = (
+                        memory_manager.get_flag(chat_id, "instance_id")
+                        or memory_manager.get_flag(chat_id, "instance_hotel_code")
+                    )
                 _set_instance_context(
                     memory_manager,
                     chat_id,
                     property_id=property_id,
-                    hotel_code=hotel_code or hotel_name,
+                    instance_id=instance_id,
                 )
             except Exception:
                 pass
 
         lang_norm = _normalize_lang(language)
-        hotel_filter = (hotel_code or "").strip().upper() or None
+        hotel_filter = (instance_id or "").strip().upper() or None
         tpl = None
         try:
             hotel_candidates = []
@@ -779,7 +767,7 @@ def create_send_template_tool(
 
             for h in hotel_candidates:
                 tpl = template_registry.resolve(
-                    hotel_code=h,
+                    instance_id=h,
                     template_code=template_code,
                     language=lang_norm,
                 )
@@ -985,7 +973,7 @@ def create_send_broadcast_tool(
         guest_ids: str,
         parameters: Optional[dict] = None,
         language: str = "es",
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
         property_id: Optional[int] = None,
     ) -> str:
         try:
@@ -993,13 +981,16 @@ def create_send_broadcast_tool(
                 try:
                     if property_id is None:
                         property_id = memory_manager.get_flag(chat_id, "property_id")
-                    if not hotel_code:
-                        hotel_code = memory_manager.get_flag(chat_id, "property_name")
+                    if not instance_id:
+                        instance_id = (
+                            memory_manager.get_flag(chat_id, "instance_id")
+                            or memory_manager.get_flag(chat_id, "instance_hotel_code")
+                        )
                     _set_instance_context(
                         memory_manager,
                         chat_id,
                         property_id=property_id,
-                        hotel_code=hotel_code or hotel_name,
+                        instance_id=instance_id,
                     )
                 except Exception:
                     pass
@@ -1016,12 +1007,12 @@ def create_send_broadcast_tool(
             if not ids:
                 return "⚠️ No encontré ningún huésped válido. Indica al menos un número con prefijo de país."
 
-            target_hotel = hotel_code or hotel_name
+            target_hotel = instance_id or hotel_name
             template_def = None
             if template_registry:
                 try:
                     template_def = template_registry.resolve(
-                        hotel_code=target_hotel,
+                        instance_id=target_hotel,
                         template_code=template_id,
                         language=language,
                     )
@@ -1080,7 +1071,7 @@ def create_send_broadcast_checkin_tool(
         date: Optional[str] = None,
         parameters: Optional[dict] = None,
         language: str = "es",
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
         property_id: Optional[int] = None,
     ) -> str:
         if not channel_manager:
@@ -1096,13 +1087,16 @@ def create_send_broadcast_checkin_tool(
             try:
                 if property_id is None:
                     property_id = memory_manager.get_flag(chat_id, "property_id")
-                if not hotel_code:
-                    hotel_code = memory_manager.get_flag(chat_id, "property_name")
+                if not instance_id:
+                    instance_id = (
+                        memory_manager.get_flag(chat_id, "instance_id")
+                        or memory_manager.get_flag(chat_id, "instance_hotel_code")
+                    )
                 _set_instance_context(
                     memory_manager,
                     chat_id,
                     property_id=property_id,
-                    hotel_code=hotel_code or hotel_name,
+                    instance_id=instance_id,
                 )
             except Exception:
                 pass
@@ -1111,14 +1105,14 @@ def create_send_broadcast_checkin_tool(
         if template_registry:
             try:
                 candidates = []
-                if hotel_code:
-                    candidates.append(hotel_code)
+                if instance_id:
+                    candidates.append(instance_id)
                 if hotel_name and hotel_name not in candidates:
                     candidates.append(hotel_name)
                 candidates.append(None)
                 for cand in candidates:
                     tpl_def = template_registry.resolve(
-                        hotel_code=cand,
+                        instance_id=cand,
                         template_code=template_id,
                         language=language,
                     )
@@ -1135,7 +1129,7 @@ def create_send_broadcast_checkin_tool(
             "fecha_inicio": target_date,
             "fecha_fin": target_date,
             "property_id": property_id,
-            "hotel_code": hotel_code or hotel_name,
+            "instance_id": instance_id,
         }
         raw = await consulta_tool.ainvoke(consulta_payload)
         try:
@@ -1173,7 +1167,7 @@ def create_send_broadcast_checkin_tool(
             if not phone:
                 continue
             guest_ids.append(phone)
-            hotel_label = hotel_code or hotel_name
+            hotel_label = hotel_name
             auto_params = _auto_params_from_folio(folio, hotel_label)
             provided = parameters or {}
             params_for_guest = {**auto_params, **provided}
@@ -1203,7 +1197,7 @@ def create_send_broadcast_checkin_tool(
                     "template_id": template_id,
                     "date": target_date,
                     "language": language,
-                    "hotel_code": hotel_code,
+                    "instance_id": instance_id,
                     "property_id": property_id,
                     "missing_fields": missing_fields,
                 }
@@ -1259,7 +1253,7 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
         guest_id: Optional[str] = None,
         mode: Optional[str] = None,
         property_id: Optional[int] = None,
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> str:
         try:
             if not memory_manager:
@@ -1270,11 +1264,24 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                     property_id = memory_manager.get_flag(chat_id, "property_id")
                 except Exception:
                     property_id = None
-            if not hotel_code and memory_manager and chat_id:
+            if not instance_id and memory_manager and chat_id:
                 try:
-                    hotel_code = memory_manager.get_flag(chat_id, "property_name")
+                    instance_id = (
+                        memory_manager.get_flag(chat_id, "instance_id")
+                        or memory_manager.get_flag(chat_id, "instance_hotel_code")
+                    )
                 except Exception:
-                    hotel_code = None
+                    instance_id = None
+            if instance_id and memory_manager and chat_id:
+                try:
+                    _set_instance_context(
+                        memory_manager,
+                        chat_id,
+                        property_id=property_id,
+                        instance_id=instance_id,
+                    )
+                except Exception:
+                    pass
 
             if not guest_id:
                 return (
@@ -1327,13 +1334,6 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                 return "⚠️ El guest_id no parece un teléfono válido. Indícame el número completo con prefijo."
 
             resolved_property_id = property_id
-            if resolved_property_id is None and hotel_code:
-                for variant in _hotel_code_variants(hotel_code):
-                    prop_payload = fetch_property_by_code(DEFAULT_PROPERTY_TABLE, variant)
-                    prop_id = prop_payload.get("property_id")
-                    if prop_id is not None:
-                        resolved_property_id = prop_id
-                        break
 
 
             # Recupera de Supabase (limit extendido) y combina con memoria en RAM
@@ -1462,7 +1462,7 @@ def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, 
         guest_id: str,
         message: str,
         property_id: Optional[int] = None,
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> str:
         """
         Genera un borrador para envío por WhatsApp.
@@ -1472,13 +1472,16 @@ def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, 
             try:
                 if property_id is None:
                     property_id = memory_manager.get_flag(chat_id, "property_id")
-                if not hotel_code:
-                    hotel_code = memory_manager.get_flag(chat_id, "property_name")
+                if not instance_id:
+                    instance_id = (
+                        memory_manager.get_flag(chat_id, "instance_id")
+                        or memory_manager.get_flag(chat_id, "instance_hotel_code")
+                    )
                 _set_instance_context(
                     memory_manager,
                     chat_id,
                     property_id=property_id,
-                    hotel_code=hotel_code,
+                    instance_id=instance_id,
                 )
             except Exception:
                 pass
@@ -1611,7 +1614,7 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
         property_id: Optional[int] = None,
         pms_property_id: int = 38,
         instance_url: Optional[str] = None,
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
         enrich_contact: bool = False,
     ) -> str:
         """
@@ -1642,8 +1645,9 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             payload["instance_url"] = instance_url
         if memory_manager and chat_id:
             try:
-                if hotel_code:
-                    memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                if instance_id:
+                    memory_manager.set_flag(chat_id, "instance_id", str(instance_id))
+                    memory_manager.set_flag(chat_id, "instance_hotel_code", str(instance_id))
                 dynamic_instance_url = memory_manager.get_flag(chat_id, "instance_url")
                 dynamic_property_id = memory_manager.get_flag(chat_id, "property_id")
             except Exception:
@@ -1654,28 +1658,13 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             if dynamic_property_id is not None and pms_property_id is None:
                 pms_property_id = dynamic_property_id
 
-        if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
-            for variant in _hotel_code_variants(hotel_code):
-                prop_payload = fetch_property_by_name(DEFAULT_PROPERTY_TABLE, variant)
-                prop_id = prop_payload.get("property_id")
-                if prop_id is not None:
-                    pms_property_id = prop_id
-                    instance_id = prop_payload.get("instance_id")
-                    if memory_manager and chat_id:
-                        memory_manager.set_flag(chat_id, "property_id", prop_id)
-                        memory_manager.set_flag(chat_id, "property_name", prop_payload.get("name") or variant)
-                        if instance_id:
-                            memory_manager.set_flag(chat_id, "instance_id", instance_id)
-                            memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
-                    if instance_id:
-                        inst_payload = fetch_instance_by_code(str(instance_id))
-                        inst_url = inst_payload.get("instance_url")
-                        if inst_url:
-                            payload["instance_url"] = inst_url
-                            if memory_manager and chat_id:
-                                memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                if payload.get("instance_url") and pms_property_id is not None:
-                    break
+        if instance_id and not payload.get("instance_url"):
+            inst_payload = fetch_instance_by_code(str(instance_id))
+            inst_url = inst_payload.get("instance_url")
+            if inst_url:
+                payload["instance_url"] = inst_url
+                if memory_manager and chat_id:
+                    memory_manager.set_flag(chat_id, "instance_url", inst_url)
 
         if (not payload.get("instance_url")) and pms_property_id is not None:
             prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)
@@ -1819,7 +1808,7 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                             {
                                 "folio_id": str(folio_id),
                                 "property_id": pms_property_id,
-                                "hotel_code": hotel_code,
+                                "instance_id": instance_id,
                             }
                         )
                         detail = json.loads(detail_raw) if isinstance(detail_raw, str) else detail_raw
@@ -1835,13 +1824,13 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                 try:
                     cache_payload = {
                         "items": simplified,
-                        "meta": {
-                            "fecha_inicio": fecha_inicio,
-                            "fecha_fin": fecha_fin,
-                            "property_id": pms_property_id,
-                            "hotel_code": hotel_code,
-                            "instance_url": payload.get("instance_url"),
-                        },
+                            "meta": {
+                                "fecha_inicio": fecha_inicio,
+                                "fecha_fin": fecha_fin,
+                                "property_id": pms_property_id,
+                                "instance_id": instance_id,
+                                "instance_url": payload.get("instance_url"),
+                            },
                         "stored_at": datetime.utcnow().isoformat(),
                     }
                     memory_manager.set_flag(chat_id, "superintendente_last_reservations", cache_payload)
@@ -1870,7 +1859,7 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
         property_id: Optional[int] = None,
         pms_property_id: int = 38,
         instance_url: Optional[str] = None,
-        hotel_code: Optional[str] = None,
+        instance_id: Optional[str] = None,
     ) -> str:
         """
         Consulta los detalles de un folio específico vía MCP → n8n.
@@ -1899,8 +1888,9 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
             payload["instance_url"] = instance_url
         if memory_manager and chat_id:
             try:
-                if hotel_code:
-                    memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                if instance_id:
+                    memory_manager.set_flag(chat_id, "instance_id", str(instance_id))
+                    memory_manager.set_flag(chat_id, "instance_hotel_code", str(instance_id))
                 dynamic_instance_url = memory_manager.get_flag(chat_id, "instance_url")
                 dynamic_property_id = memory_manager.get_flag(chat_id, "property_id")
             except Exception:
@@ -1911,28 +1901,13 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
             if dynamic_property_id is not None and pms_property_id is None:
                 pms_property_id = dynamic_property_id
 
-        if (not payload.get("instance_url") or pms_property_id is None) and hotel_code:
-            for variant in _hotel_code_variants(hotel_code):
-                prop_payload = fetch_property_by_name(DEFAULT_PROPERTY_TABLE, variant)
-                prop_id = prop_payload.get("property_id")
-                if prop_id is not None:
-                    pms_property_id = prop_id
-                    instance_id = prop_payload.get("instance_id")
-                    if memory_manager and chat_id:
-                        memory_manager.set_flag(chat_id, "property_id", prop_id)
-                        memory_manager.set_flag(chat_id, "property_name", prop_payload.get("name") or variant)
-                        if instance_id:
-                            memory_manager.set_flag(chat_id, "instance_id", instance_id)
-                            memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
-                    if instance_id:
-                        inst_payload = fetch_instance_by_code(str(instance_id))
-                        inst_url = inst_payload.get("instance_url")
-                        if inst_url:
-                            payload["instance_url"] = inst_url
-                            if memory_manager and chat_id:
-                                memory_manager.set_flag(chat_id, "instance_url", inst_url)
-                if payload.get("instance_url") and pms_property_id is not None:
-                    break
+        if instance_id and not payload.get("instance_url"):
+            inst_payload = fetch_instance_by_code(str(instance_id))
+            inst_url = inst_payload.get("instance_url")
+            if inst_url:
+                payload["instance_url"] = inst_url
+                if memory_manager and chat_id:
+                    memory_manager.set_flag(chat_id, "instance_url", inst_url)
 
         if (not payload.get("instance_url")) and pms_property_id is not None:
             prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, pms_property_id)

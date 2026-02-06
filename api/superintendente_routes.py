@@ -1064,18 +1064,22 @@ def register_superintendente_routes(app, state) -> None:
             if state.memory_manager:
                 try:
                     ctx_property_id = state.memory_manager.get_flag(session_key, "property_id")
-                    ctx_hotel_code = state.memory_manager.get_flag(session_key, "property_name")
+                    ctx_instance_id = (
+                        state.memory_manager.get_flag(session_key, "instance_id")
+                        or state.memory_manager.get_flag(session_key, "instance_hotel_code")
+                    )
                     for draft in wa_drafts:
                         if ctx_property_id is not None:
                             draft["property_id"] = ctx_property_id
-                        if ctx_hotel_code:
-                            draft["hotel_code"] = ctx_hotel_code
+                        if ctx_instance_id:
+                            draft["instance_id"] = ctx_instance_id
                         guest_id = draft.get("guest_id")
                         if guest_id:
                             if ctx_property_id is not None:
                                 state.memory_manager.set_flag(guest_id, "property_id", ctx_property_id)
-                            if ctx_hotel_code:
-                                state.memory_manager.set_flag(guest_id, "property_name", ctx_hotel_code)
+                            if ctx_instance_id:
+                                state.memory_manager.set_flag(guest_id, "instance_id", ctx_instance_id)
+                                state.memory_manager.set_flag(guest_id, "instance_hotel_code", ctx_instance_id)
                 except Exception:
                     pass
             pending_payload: Any = {"drafts": wa_drafts} if len(wa_drafts) > 1 else wa_drafts[0]

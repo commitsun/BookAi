@@ -154,3 +154,7 @@ Llamas a **Interno** con: "No se pudo obtener disponibilidad para fin de semana,
 [[PROPERTY_DISAMBIGUATION]]
 Encantado. ¿En cuál de nuestros hoteles estarías interesado? Puedes darme un nombre aproximado; si coincide claramente con uno, continuaré sin repetir la pregunta.
 [[/PROPERTY_DISAMBIGUATION]]
+
+[[PROPERTY_NOT_IN_INSTANCE]]
+Gracias. Ese hotel no figura en nuestros establecimientos para esta instancia. ¿Puedes indicarme otro nombre de hotel (aprox) para continuar?
+[[/PROPERTY_NOT_IN_INSTANCE]]

@@ -149,10 +149,10 @@ def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _extract_hotel_code(params: Dict[str, Any]) -> Optional[str]:
+def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
-    for key in ("hotel_code", "hotel", "hotel_name", "property_name", "property"):
+    for key in ("hotel", "hotel_name", "property_name", "property"):
         val = params.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
@@ -242,7 +242,7 @@ def register_template_routes(app, state) -> None:
     @router.post("/send-template")
     async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
         try:
-            hotel_code = payload.source.hotel.external_code
+            property_code = payload.source.hotel.external_code
             instance_id = (
                 (payload.meta.instance_id if payload.meta else None)
                 or payload.source.instance_id
@@ -265,7 +265,7 @@ def register_template_routes(app, state) -> None:
                 state.processed_template_keys.add(idempotency_key)
 
             template_def = registry.resolve(
-                hotel_code=hotel_code,
+                instance_id=instance_id,
                 template_code=template_code,
                 language=language,
             ) if registry else None
@@ -304,18 +304,18 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
 
-            if hotel_code:
+            if property_code:
                 try:
-                    state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                    state.memory_manager.set_flag(chat_id, "property_name", property_code)
                     # property_name es nombre/label; instance_id se guarda aparte
                 except Exception as exc:
-                    log.warning("No se pudo guardar hotel_code en memoria: %s", exc)
+                    log.warning("No se pudo guardar property_code en memoria: %s", exc)
             elif payload.template and payload.template.parameters:
-                inferred_hotel = _extract_hotel_code(payload.template.parameters)
-                if inferred_hotel:
-                    hotel_code = inferred_hotel
+                inferred_name = _extract_property_name(payload.template.parameters)
+                if inferred_name:
+                    property_code = inferred_name
                     try:
-                        state.memory_manager.set_flag(chat_id, "property_name", hotel_code)
+                        state.memory_manager.set_flag(chat_id, "property_name", property_code)
                     except Exception:
                         pass
 
@@ -323,9 +323,11 @@ def register_template_routes(app, state) -> None:
             reservation_locator = None
             checkin = None
             checkout = None
+            folio_from_meta = False
             try:
                 if payload.meta and payload.meta.folio_id is not None:
                     folio_id = str(payload.meta.folio_id)
+                    folio_from_meta = True
                 if payload.template and payload.template.parameters:
                     f_id, ci, co = _extract_reservation_fields(payload.template.parameters)
                     folio_id = folio_id or f_id
@@ -364,6 +366,7 @@ def register_template_routes(app, state) -> None:
                         )
                     if folio.id is not None:
                         folio_id = folio_id or str(folio.id)
+                        folio_from_meta = True
                     if folio.min_checkin:
                         checkin = checkin or folio.min_checkin
                     if folio.max_checkout:
@@ -389,7 +392,7 @@ def register_template_routes(app, state) -> None:
             except Exception as exc:
                 log.warning("No se pudo guardar folio/checkin/checkout en memoria: %s", exc)
 
-            if folio_id:
+            if folio_id and folio_from_meta:
                 try:
                     log.info(
                         "🧾 template upsert_chat_reservation chat_id=%s folio_id=%s checkin=%s checkout=%s property_id=%s instance_id=%s",
@@ -426,7 +429,7 @@ def register_template_routes(app, state) -> None:
             )
 
             # Si falta checkin/checkout y hay folio_id, intenta enriquecer desde PMS.
-            if folio_id and (not checkin or not checkout):
+            if folio_id and folio_from_meta and (not checkin or not checkout):
                 try:
                     consulta_tool = create_consulta_reserva_persona_tool(
                         memory_manager=state.memory_manager,
@@ -458,7 +461,7 @@ def register_template_routes(app, state) -> None:
                             state.memory_manager.set_flag(chat_id, "checkout", co)
                         if locator:
                             state.memory_manager.set_flag(chat_id, "reservation_locator", locator)
-                        if folio_id:
+                        if folio_id and folio_from_meta:
                             upsert_chat_reservation(
                                 chat_id=chat_id,
                                 folio_id=folio_id,
@@ -491,7 +494,7 @@ def register_template_routes(app, state) -> None:
                         reservation_locator = m.group(2)
                         for target in [chat_id, context_id] if context_id else [chat_id]:
                             state.memory_manager.set_flag(target, "reservation_locator", reservation_locator)
-                if reservation_locator and folio_id:
+                if reservation_locator and folio_id and folio_from_meta:
                     try:
                         upsert_chat_reservation(
                             chat_id=chat_id,
@@ -534,7 +537,7 @@ def register_template_routes(app, state) -> None:
                         original_chat_id=context_id or None,
                     )
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
-                source_tag = instance_id or payload.source.instance_url or hotel_code
+                source_tag = instance_id or payload.source.instance_url or property_code
                 state.memory_manager.save(
                     chat_id,
                     role="system",
@@ -552,7 +555,6 @@ def register_template_routes(app, state) -> None:
                 "status": "sent",
                 "template": wa_template,
                 "chat_id": chat_id,
-                "hotel_code": hotel_code,
                 "instance_id": instance_id,
                 "language": language,
             }
