@@ -182,6 +182,7 @@ def get_conversation_history(
     limit: int = 10,
     since=None,
     property_id: str | int | None = None,
+    original_chat_id: str | None = None,
     table: str = "chat_history",
     channel: str | None = None,
 ):
@@ -201,6 +202,8 @@ def get_conversation_history(
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:
             query = query.eq("conversation_id", clean_id)
+        if original_chat_id:
+            query = query.eq("original_chat_id", str(original_chat_id).replace("+", "").strip())
         if channel:
             query = query.eq("channel", channel)
 
