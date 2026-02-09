@@ -37,6 +37,7 @@ from core.config import ModelConfig, ModelTier
 from core.utils.escalation_messages import EscalationMessages
 from core.instance_context import DEFAULT_PROPERTY_TABLE, fetch_property_by_id, fetch_properties_by_code
 from core.db import get_active_chat_reservation
+from core.language_manager import language_manager
 
 
 log = logging.getLogger("MainAgent")
@@ -393,6 +394,42 @@ class MainAgent:
             return prompt
         return "No encuentro ese hotel en esta instancia. ¿Puedes indicarme otro nombre (aprox)?"
 
+    def _get_guest_lang(self, chat_id: str, user_input: Optional[str] = None) -> str:
+        if not self.memory_manager or not chat_id:
+            return "es"
+        prev = self.memory_manager.get_flag(chat_id, "guest_lang")
+        if user_input is None:
+            return (prev or "es").strip().lower() or "es"
+        detected = language_manager.detect_language(user_input, prev_lang=prev)
+        if detected:
+            self.memory_manager.set_flag(chat_id, "guest_lang", detected)
+            return detected
+        return (prev or "es").strip().lower() or "es"
+
+    def _localize(self, chat_id: str, text: str) -> str:
+        lang = self._get_guest_lang(chat_id)
+        if not text or lang == "es":
+            return text
+        return language_manager.ensure_language(text, lang)
+
+    def _get_intent_text_es(self, chat_id: Optional[str], text: str) -> str:
+        raw = (text or "").strip()
+        if not raw:
+            return ""
+        if not self.memory_manager or not chat_id:
+            lang = language_manager.detect_language(raw, prev_lang=None)
+            if lang and lang != "es":
+                return language_manager.translate_if_needed(raw, lang, "es")
+            return raw
+        cache = self.memory_manager.get_flag(chat_id, "intent_text_es")
+        if isinstance(cache, dict) and cache.get("src") == raw and cache.get("text"):
+            return cache.get("text")
+        prev_lang = self.memory_manager.get_flag(chat_id, "guest_lang")
+        lang = language_manager.detect_language(raw, prev_lang=prev_lang)
+        translated = language_manager.translate_if_needed(raw, lang, "es") if lang and lang != "es" else raw
+        self.memory_manager.set_flag(chat_id, "intent_text_es", {"src": raw, "text": translated, "lang": lang})
+        return translated
+
     def _format_property_candidates(self, candidates: list[dict]) -> str:
         if not candidates:
             return ""
@@ -435,8 +472,8 @@ class MainAgent:
             return False
         return True
 
-    def _is_uncertain_location(self, text: str) -> bool:
-        t = self._normalize_text(text or "")
+    def _is_uncertain_location(self, text: str, chat_id: Optional[str] = None) -> bool:
+        t = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not t:
             return True
         phrases = {
@@ -454,8 +491,9 @@ class MainAgent:
                 return True
         return False
 
-    def _filter_candidates_by_city(self, candidates: list[dict], city_text: str) -> list[dict]:
-        target_raw = (city_text or "").strip()
+    def _filter_candidates_by_city(self, candidates: list[dict], city_text: str, chat_id: Optional[str] = None) -> list[dict]:
+        target_raw = self._get_intent_text_es(chat_id, city_text) or (city_text or "")
+        target_raw = target_raw.strip()
         lowered = target_raw.lower()
         for prefix in ("en el ", "en la ", "en los ", "en las ", "en ", "para el ", "para la ", "para ", "a ", "en"):
             if lowered.startswith(prefix):
@@ -478,8 +516,8 @@ class MainAgent:
                 filtered.append(cand)
         return filtered
 
-    def _filter_candidates_by_text(self, candidates: list[dict], text: str) -> list[dict]:
-        target = self._normalize_text(text or "")
+    def _filter_candidates_by_text(self, candidates: list[dict], text: str, chat_id: Optional[str] = None) -> list[dict]:
+        target = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not target:
             return []
         filtered = []
@@ -505,10 +543,10 @@ class MainAgent:
             FLAG_PROPERTY_CITY_FILTER_PENDING,
             {"original_message": original_message},
         )
-        return "¿En qué ciudad te gustaría alojarte?"
+        return self._localize(chat_id, "¿En qué ciudad te gustaría alojarte?")
 
-    def _is_city_list_intent(self, text: str) -> bool:
-        t = self._normalize_text(text or "")
+    def _is_city_list_intent(self, text: str, chat_id: Optional[str] = None) -> bool:
+        t = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not t:
             return False
         keywords = (
@@ -538,15 +576,15 @@ class MainAgent:
             cities.append(city)
         return cities
 
-    def _build_city_list_reply(self, cities: list[str]) -> str:
+    def _build_city_list_reply(self, cities: list[str], chat_id: str) -> str:
         if not cities:
-            return "No tengo ciudades cargadas para esta instancia. ¿En qué ciudad te gustaría alojarte?"
+            return self._localize(chat_id, "No tengo ciudades cargadas para esta instancia. ¿En qué ciudad te gustaría alojarte?")
         cities_sorted = sorted(cities, key=lambda c: self._normalize_text(c))
         if len(cities_sorted) <= 12:
             body = ", ".join(cities_sorted)
         else:
             body = ", ".join(cities_sorted[:12]) + f" y {len(cities_sorted) - 12} más"
-        return f"Tenemos hoteles en estas ciudades: {body}. ¿Te interesa alguna en concreto?"
+        return self._localize(chat_id, f"Tenemos hoteles en estas ciudades: {body}. ¿Te interesa alguna en concreto?")
 
     def _hydrate_context_from_active_reservation(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
@@ -786,8 +824,8 @@ class MainAgent:
         )
         prompt = self._load_embedded_prompt("PROPERTY_REQUEST")
         if prompt:
-            return prompt
-        return "¿En qué hotel o propiedad te gustaría alojarte?"
+            return self._localize(chat_id, prompt)
+        return self._localize(chat_id, "¿En qué hotel o propiedad te gustaría alojarte?")
 
     def _clear_property_context(self, chat_id: str) -> None:
         if not self.memory_manager:
@@ -805,8 +843,8 @@ class MainAgent:
         ):
             self.memory_manager.clear_flag(chat_id, key)
 
-    def _is_new_reservation_intent(self, text: str) -> bool:
-        t = (text or "").strip().lower()
+    def _is_new_reservation_intent(self, text: str, chat_id: Optional[str] = None) -> bool:
+        t = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not t:
             return False
         triggers = [
@@ -863,8 +901,9 @@ class MainAgent:
             current_name = None
         current = current_display or current_name
         if not current:
-            return "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo."
-        return (
+            return self._localize(chat_id, "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo.")
+        return self._localize(
+            chat_id,
             f"¿Esta nueva reserva es para {current} o para otro hotel? "
             "Si es otro, dime el nombre (aprox) y continúo."
         )
@@ -900,8 +939,9 @@ class MainAgent:
                 pass
         current = label or "el mismo hotel"
         if current == "el mismo hotel":
-            return "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo."
-        return (
+            return self._localize(chat_id, "¿Para qué hotel es la reserva? Dime el nombre (aprox) y continúo.")
+        return self._localize(
+            chat_id,
             f"¿Esta nueva reserva es para {current} o para otro hotel? "
             "Si es otro, dime el nombre (aprox) y continúo."
         )
@@ -1003,6 +1043,7 @@ class MainAgent:
             try:
                 skip_new_reservation_checks = False
                 has_active_res_context = False
+                self._get_guest_lang(chat_id, user_input)
                 if self.memory_manager.get_flag(chat_id, "escalation_in_progress"):
                     return "##INCISO## Un momento, sigo verificando tu solicitud con el encargado."
 
@@ -1091,10 +1132,10 @@ class MainAgent:
                             return question
 
                 # Responder con ciudades de la instancia si el usuario lo pide explícitamente
-                if self._is_city_list_intent(user_input):
+                if self._is_city_list_intent(user_input, chat_id):
                     candidates = self._ensure_property_candidates(chat_id)
                     cities = self._extract_unique_cities(candidates)
-                    reply = self._build_city_list_reply(cities)
+                    reply = self._build_city_list_reply(cities, chat_id)
                     # Mantener/activar espera de ciudad para el siguiente turno
                     if not self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING):
                         self.memory_manager.set_flag(
@@ -1114,20 +1155,20 @@ class MainAgent:
                         else None
                     )
                     candidates = self._get_property_candidates(chat_id)
-                    if self._is_uncertain_location(user_input):
+                    if self._is_uncertain_location(user_input, chat_id):
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
                         self.memory_manager.set_flag(
                             chat_id,
                             FLAG_PROPERTY_ZONE_FILTER_PENDING,
                             {"original_message": original_message},
                         )
-                        question = "¿Prefieres playa, centro o aeropuerto?"
+                        question = self._localize(chat_id, "¿Prefieres playa, centro o aeropuerto?")
                         self.memory_manager.save(chat_id, "user", user_input)
                         self.memory_manager.save(chat_id, "assistant", question)
                         return question
-                    filtered = self._filter_candidates_by_city(candidates, user_input)
+                    filtered = self._filter_candidates_by_city(candidates, user_input, chat_id)
                     if not filtered:
-                        question = "No encuentro hoteles en esa ciudad. ¿Qué otra ciudad prefieres?"
+                        question = self._localize(chat_id, "No encuentro hoteles en esa ciudad. ¿Qué otra ciudad prefieres?")
                         self.memory_manager.save(chat_id, "user", user_input)
                         self.memory_manager.save(chat_id, "assistant", question)
                         return question
@@ -1144,14 +1185,14 @@ class MainAgent:
                             log.warning("No se pudo fijar property desde ciudad: %s", exc)
                         # Confirmación breve sin volver a pedir hotel
                         single_text = self._format_property_candidates(filtered)
-                        reply = (
-                            f"Perfecto, en esa ciudad tenemos:\n{single_text}\n"
-                            "¿Quieres reservar en este hotel?"
+                        reply = self._localize(
+                            chat_id,
+                            f"Perfecto, en esa ciudad tenemos:\n{single_text}\n¿Quieres reservar en este hotel?",
                         )
                         self.memory_manager.save(chat_id, "user", user_input)
                         self.memory_manager.save(chat_id, "assistant", reply)
                         return reply
-                    question = self._build_disambiguation_question(filtered)
+                    question = self._localize(chat_id, self._build_disambiguation_question(filtered))
                     self.memory_manager.set_flag(
                         chat_id,
                         FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1169,7 +1210,7 @@ class MainAgent:
                         else None
                     )
                     candidates = self._get_property_candidates(chat_id)
-                    filtered = self._filter_candidates_by_text(candidates, user_input)
+                    filtered = self._filter_candidates_by_text(candidates, user_input, chat_id)
                     if not filtered:
                         self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING)
                         self.memory_manager.set_flag(
@@ -1177,7 +1218,7 @@ class MainAgent:
                             FLAG_PROPERTY_CITY_FILTER_PENDING,
                             {"original_message": original_message},
                         )
-                        question = "No encuentro hoteles con esa preferencia. ¿En qué ciudad te gustaría alojarte?"
+                        question = self._localize(chat_id, "No encuentro hoteles con esa preferencia. ¿En qué ciudad te gustaría alojarte?")
                         self.memory_manager.save(chat_id, "user", user_input)
                         self.memory_manager.save(chat_id, "assistant", question)
                         return question
@@ -1196,7 +1237,7 @@ class MainAgent:
                         if original_message:
                             user_input = original_message
                     else:
-                        question = self._build_disambiguation_question(filtered)
+                        question = self._localize(chat_id, self._build_disambiguation_question(filtered))
                         self.memory_manager.set_flag(
                             chat_id,
                             FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1234,7 +1275,7 @@ class MainAgent:
 
                 # Si hay una reserva activa en contexto y NO es una nueva reserva, evita pedir hotel otra vez.
                 if (
-                    not self._is_new_reservation_intent(user_input)
+                    not self._is_new_reservation_intent(user_input, chat_id)
                     and not self._has_real_property_context(chat_id)
                 ):
                     # Solo usa la reserva activa si NO hay mención explícita a otra property.
@@ -1246,7 +1287,7 @@ class MainAgent:
                 if (
                     not self.memory_manager.get_flag(chat_id, "property_id")
                     and self._is_valid_property_label(user_input)
-                    and not self._is_new_reservation_intent(user_input)
+                    and not self._is_new_reservation_intent(user_input, chat_id)
                 ):
                     resolved = await self._resolve_property_from_message(chat_id, user_input)
                     if resolved:
@@ -1259,7 +1300,7 @@ class MainAgent:
                 if (
                     not skip_new_reservation_checks
                     and self._has_real_property_context(chat_id)
-                    and self._is_new_reservation_intent(user_input)
+                    and self._is_new_reservation_intent(user_input, chat_id)
                 ):
                     prop_id_hint = self.memory_manager.get_last_property_id_hint(chat_id) if self.memory_manager else None
                     if self._is_multi_property_instance(chat_id):
@@ -1277,7 +1318,7 @@ class MainAgent:
 
                 if (
                     not skip_new_reservation_checks
-                    and self._is_new_reservation_intent(user_input)
+                    and self._is_new_reservation_intent(user_input, chat_id)
                     and not (
                         self.memory_manager.get_flag(chat_id, "property_id")
                         or self.memory_manager.get_flag(chat_id, "property_name")
@@ -1309,7 +1350,7 @@ class MainAgent:
                             self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
                             instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
                             if attempts >= 2 and instance_id:
-                                question = self._build_property_not_in_instance()
+                                question = self._localize(chat_id, self._build_property_not_in_instance())
                                 self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                                 self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
                                 self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
@@ -1318,7 +1359,7 @@ class MainAgent:
                                 self.memory_manager.save(chat_id, "assistant", question)
                                 return question
                             city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
-                            question = city_question or self._build_disambiguation_question(candidates)
+                            question = city_question or self._localize(chat_id, self._build_disambiguation_question(candidates))
                             self.memory_manager.save(chat_id, "user", user_input)
                             self.memory_manager.save(chat_id, "assistant", question)
                             return question
@@ -1380,14 +1421,14 @@ class MainAgent:
                         self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
                         instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
                         if attempts >= 2 and instance_id:
-                            question = self._build_property_not_in_instance()
+                            question = self._localize(chat_id, self._build_property_not_in_instance())
                             self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                             self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
                             self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
                             self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                         else:
                             city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
-                            question = city_question or self._build_disambiguation_question(candidates)
+                            question = city_question or self._localize(chat_id, self._build_disambiguation_question(candidates))
                         self.memory_manager.set_flag(
                             chat_id,
                             FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1438,14 +1479,14 @@ class MainAgent:
                                 self.memory_manager.set_flag(chat_id, "property_disambiguation_attempts", attempts)
                                 instance_id = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
                                 if attempts >= 2 and instance_id:
-                                    question = self._build_property_not_in_instance()
+                                    question = self._localize(chat_id, self._build_property_not_in_instance())
                                     self.memory_manager.clear_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
                                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
                                     self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
                                 else:
                                     city_question = self._maybe_ask_city_filter(chat_id, candidates, user_input)
-                                    question = city_question or self._build_disambiguation_question(candidates)
+                                    question = city_question or self._localize(chat_id, self._build_disambiguation_question(candidates))
                                 self.memory_manager.set_flag(
                                     chat_id,
                                     FLAG_PROPERTY_DISAMBIGUATION_PENDING,
@@ -1456,7 +1497,7 @@ class MainAgent:
                                 return question
 
                 if self._needs_property_context(chat_id):
-                    if not (has_active_res_context and not self._is_new_reservation_intent(user_input)):
+                    if not (has_active_res_context and not self._is_new_reservation_intent(user_input, chat_id)):
                         candidates = self._ensure_property_candidates(chat_id)
                         if len(candidates or []) == 1 and candidates[0].get("property_id"):
                             try:
