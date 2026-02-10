@@ -1093,7 +1093,7 @@ def register_chatter_routes(app, state) -> None:
             if first_interaction:
                 ai_message = _brief_escalation_summary(reason)
             else:
-                ai_message = clean_draft
+                ai_message = ""
 
             draft_response = (
                 (ESCALATIONS_STORE.get(escalation_id).draft_response or "").strip()
