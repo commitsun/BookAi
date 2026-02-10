@@ -261,6 +261,17 @@ class InternoAgent:
                 },
                 rooms=rooms,
             )
+            await emit_event(
+                "escalation.chat.updated",
+                {
+                    "chat_id": clean_chat_id,
+                    "escalation_id": escalation_id,
+                    "messages": [],
+                    "property_id": prop_id,
+                    "rooms": rooms,
+                },
+                rooms=rooms,
+            )
         except Exception:
             pass
 
