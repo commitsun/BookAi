@@ -97,6 +97,33 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
             val = _MEMORY_MANAGER.get_flag(cid, "property_id")
             if val is not None:
                 return val
+        # Fallback: busca en DB el último property_id registrado para el chat.
+        try:
+            from core.db import supabase
+            for cid in candidates:
+                if not cid:
+                    continue
+                clean = _clean_chat_id(cid) or cid
+                resp = (
+                    supabase.table("chat_history")
+                    .select("property_id")
+                    .eq("conversation_id", clean)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                )
+                rows = resp.data or []
+                if rows:
+                    prop_id = rows[0].get("property_id")
+                    if prop_id is not None:
+                        # cache en memoria si es posible
+                        try:
+                            _MEMORY_MANAGER.set_flag(cid, "property_id", prop_id)
+                        except Exception:
+                            pass
+                        return prop_id
+        except Exception:
+            pass
     except Exception:
         return None
     return None
