@@ -210,13 +210,22 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
         # Marcamos como pendiente para prevenir carreras; se limpia en caso de fallo.
         NOTIFIED_ESCALATIONS[escalation_id] = "pending"
 
+        clean_reason = (reason or "").strip()
+        clean_context = (context or "").strip()
+        generic_contexts = {
+            "Escalación manual desde MainAgent (Hotel)",
+            "Escalación automática",
+            "Rechazado por Supervisor Input",
+        }
+        context_to_store = clean_context if clean_context and clean_context not in generic_contexts else clean_reason
+
         esc = Escalation(
             escalation_id=escalation_id,
             guest_chat_id=guest_chat_id,
             guest_message=guest_message,
             escalation_type=escalation_type,
-            escalation_reason=reason,
-            context=context,
+            escalation_reason=clean_reason,
+            context=context_to_store,
             timestamp=datetime.utcnow().isoformat(),
         )
         ESCALATIONS_STORE[escalation_id] = esc
