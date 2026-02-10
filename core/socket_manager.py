@@ -111,8 +111,22 @@ class SocketManager:
         if isinstance(rooms, str):
             await self.sio.emit(event, data, room=rooms)
             return
+        unique_rooms = []
+        seen = set()
         for room in rooms:
-            await self.sio.emit(event, data, room=str(room))
+            r = str(room)
+            if r in seen:
+                continue
+            seen.add(r)
+            unique_rooms.append(r)
+        if not unique_rooms:
+            await self.sio.emit(event, data)
+            return
+        try:
+            await self.sio.emit(event, data, room=unique_rooms)
+        except Exception:
+            for room in unique_rooms:
+                await self.sio.emit(event, data, room=room)
 
 
 def set_global_socket_manager(manager: SocketManager | None) -> None:
