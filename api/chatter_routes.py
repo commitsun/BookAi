@@ -949,64 +949,45 @@ def register_chatter_routes(app, state) -> None:
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
 
-        def _wants_draft_response(text: str) -> bool:
-            """Detecta si el operador pide explícitamente generar una respuesta al huésped."""
+        def _classify_operator_intent(text: str) -> str:
+            """
+            Clasifica la intención del operador:
+            - "draft": quiere que se genere un borrador al huésped
+            - "adjustment": quiere ajustar/refinar un borrador existente
+            - "context": solo pregunta contexto o hace consultas internas
+            """
             if not text:
-                return False
-            lowered = text.lower()
-            patterns = [
-                r"\bdile\b",
-                r"\bdecile\b",
-                r"\bcontesta\b",
-                r"\bresponde\b",
-                r"\bescribe\b",
-                r"\bredacta\b",
-                r"\bgenera\b",
-                r"\bcrea\b",
-                r"\belabora\b",
-                r"\bprepara\b",
-                r"\bformula\b",
-                r"\bhaz (una )?respuesta\b",
-                r"\brespuesta (final|para el huésped|para el huesped)\b",
-                r"\bmensaje (al|para el) huésped\b",
-                r"\breply\b",
-                r"\brespond\b",
-                r"\bwrite\b",
-                r"\bdraft\b",
-                r"\bcompose\b",
-                r"\bgenerate\b",
-                r"\bprepare (a )?response\b",
-            ]
-            return any(re.search(pat, lowered) for pat in patterns)
-
-        def _wants_adjustment(text: str) -> bool:
-            """Detecta si el operador pide ajustes sobre un borrador existente."""
-            if not text:
-                return False
-            lowered = text.lower()
-            patterns = [
-                r"\bquita\b",
-                r"\bquital[e|o]\b",
-                r"\belimina\b",
-                r"\bborr[ae]\b",
-                r"\bcambia\b",
-                r"\bmodifica\b",
-                r"\bajusta\b",
-                r"\bcorregi\b",
-                r"\bedita\b",
-                r"\breformula\b",
-                r"\bhazlo\b",
-                r"\bmas corto\b",
-                r"\bmás corto\b",
-                r"\bacorta\b",
-                r"\bresum[e|i]\b",
-                r"\bmenos formal\b",
-                r"\bmas formal\b",
-                r"\bmás formal\b",
-                r"\bmas cordial\b",
-                r"\bmás cordial\b",
-            ]
-            return any(re.search(pat, lowered) for pat in patterns)
+                return "context"
+            system_prompt = (
+                "Clasifica la intención del operador en SOLO una etiqueta:\n"
+                "draft, adjustment, context.\n"
+                "draft = el operador pide redactar/generar/enviar una respuesta al huésped.\n"
+                "adjustment = el operador pide modificar/ajustar un borrador existente.\n"
+                "context = el operador pide contexto o info interna, sin generar respuesta.\n"
+                "Ejemplos:\n"
+                "- \"pregúntale qué le ocurre\" => draft\n"
+                "- \"añade que le subiremos algo\" => adjustment\n"
+                "- \"quita la última frase\" => adjustment\n"
+                "- \"¿qué dijo exactamente?\" => context\n"
+                "- \"responde al huésped\" => draft\n"
+                "- \"hazlo más corto\" => adjustment\n"
+                "Responde SOLO con la etiqueta."
+            )
+            user_prompt = f"Mensaje del operador:\n{text}\nEtiqueta:"
+            try:
+                llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+                raw = llm.invoke(
+                    [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ]
+                )
+                label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+                if label in {"draft", "adjustment", "context"}:
+                    return label
+            except Exception:
+                pass
+            return "context"
 
         operator_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
@@ -1022,8 +1003,16 @@ def register_chatter_routes(app, state) -> None:
         context = (esc.get("context") or "").strip()
         draft_response = (esc.get("draft_response") or "").strip()
 
-        wants_draft = _wants_draft_response(message)
-        wants_adjustment = _wants_adjustment(message)
+        intent = _classify_operator_intent(message)
+        log.info(
+            "Escalation-chat intent=%s chat_id=%s escalation_id=%s message=%s",
+            intent,
+            clean_id,
+            escalation_id,
+            message,
+        )
+        wants_draft = intent == "draft"
+        wants_adjustment = intent == "adjustment"
 
         if wants_draft or wants_adjustment:
             from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
