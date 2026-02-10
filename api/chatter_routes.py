@@ -1266,15 +1266,21 @@ def register_chatter_routes(app, state) -> None:
             get_escalation_messages,
         )
 
-        esc = None
-        if escalation_id:
-            esc = get_escalation(escalation_id)
-        if not esc:
-            esc = get_latest_pending_escalation(clean_id)
+        esc = get_latest_pending_escalation(clean_id)
+        # Si el frontend envía un escalation_id distinto al pendiente, no devolvemos su historial.
         if not esc:
             raise HTTPException(status_code=404, detail="No hay escalación pendiente")
+        pending_id = str(esc.get("escalation_id") or "").strip()
+        if escalation_id and pending_id and escalation_id.strip() != pending_id:
+            return {
+                "chat_id": clean_id,
+                "escalation_id": pending_id,
+                "messages": [],
+                "proposed_response": (esc.get("draft_response") or "").strip() or None,
+                "is_final_response": bool((esc.get("draft_response") or "").strip()),
+            }
 
-        escalation_id = str(esc.get("escalation_id") or escalation_id or "").strip()
+        escalation_id = pending_id or str(escalation_id or "").strip()
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
 
