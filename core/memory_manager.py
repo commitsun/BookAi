@@ -215,6 +215,9 @@ class MemoryManager:
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
         user_id: Optional[str] = None,
+        user_first_name: Optional[str] = None,
+        user_last_name: Optional[str] = None,
+        user_last_name2: Optional[str] = None,
         channel: Optional[str] = None,
         original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
@@ -326,6 +329,12 @@ class MemoryManager:
             entry["client_name"] = client_name
         if user_id:
             entry["user_id"] = str(user_id)
+        if user_first_name:
+            entry["user_first_name"] = str(user_first_name)
+        if user_last_name:
+            entry["user_last_name"] = str(user_last_name)
+        if user_last_name2:
+            entry["user_last_name2"] = str(user_last_name2)
         if channel_to_store:
             entry["channel"] = channel_to_store
 
@@ -361,6 +370,9 @@ class MemoryManager:
                 escalation_id=escalation_id,
                 client_name=client_name if is_guest else None,
                 user_id=user_id,
+                user_first_name=user_first_name,
+                user_last_name=user_last_name,
+                user_last_name2=user_last_name2,
                 channel=channel_to_store,
                 property_id=property_id,
                 original_chat_id=resolved_original or cid,
@@ -378,6 +390,10 @@ class MemoryManager:
         content: str,
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
+        user_id: Optional[str] = None,
+        user_first_name: Optional[str] = None,
+        user_last_name: Optional[str] = None,
+        user_last_name2: Optional[str] = None,
         channel: Optional[str] = None,
         original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
@@ -412,6 +428,14 @@ class MemoryManager:
             entry["escalation_id"] = escalation_id
         if client_name and is_guest:
             entry["client_name"] = client_name
+        if user_id:
+            entry["user_id"] = str(user_id)
+        if user_first_name:
+            entry["user_first_name"] = str(user_first_name)
+        if user_last_name:
+            entry["user_last_name"] = str(user_last_name)
+        if user_last_name2:
+            entry["user_last_name2"] = str(user_last_name2)
         if channel_to_store:
             entry["channel"] = channel_to_store
         if original_chat_id:

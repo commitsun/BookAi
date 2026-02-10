@@ -109,6 +109,9 @@ def save_message(
     escalation_id: str | None = None,
     client_name: str | None = None,
     user_id: str | None = None,
+    user_first_name: str | None = None,
+    user_last_name: str | None = None,
+    user_last_name2: str | None = None,
     channel: str | None = None,
     property_id: str | int | None = None,
     original_chat_id: str | None = None,
@@ -146,6 +149,12 @@ def save_message(
             data["client_name"] = client_name
         if user_id:
             data["user_id"] = str(user_id)
+        if user_first_name:
+            data["user_first_name"] = str(user_first_name)
+        if user_last_name:
+            data["user_last_name"] = str(user_last_name)
+        if user_last_name2:
+            data["user_last_name2"] = str(user_last_name2)
         if channel:
             data["channel"] = channel
         if property_id is not None:
@@ -163,6 +172,15 @@ def save_message(
                 retry = True
             if "user_id" in data:
                 data.pop("user_id", None)
+                retry = True
+            if "user_first_name" in data:
+                data.pop("user_first_name", None)
+                retry = True
+            if "user_last_name" in data:
+                data.pop("user_last_name", None)
+                retry = True
+            if "user_last_name2" in data:
+                data.pop("user_last_name2", None)
                 retry = True
             if "property_id" in data:
                 data.pop("property_id", None)

@@ -27,6 +27,9 @@ log = logging.getLogger("ChatterRoutes")
 # ---------------------------------------------------------------------------
 class SendMessageRequest(BaseModel):
     user_id: str = Field(..., description="ID del usuario en Roomdoo")
+    user_first_name: Optional[str] = Field(default=None, description="Nombre del usuario")
+    user_last_name: Optional[str] = Field(default=None, description="Primer apellido del usuario")
+    user_last_name2: Optional[str] = Field(default=None, description="Segundo apellido del usuario")
     chat_id: str = Field(..., description="ID del chat (telefono)")
     message: str = Field(..., description="Texto del mensaje a enviar")
     channel: str = Field(default="whatsapp", description="Canal de salida")
@@ -442,11 +445,13 @@ def register_chatter_routes(app, state) -> None:
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
         channel: str = Query(default="whatsapp"),
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         channel = (channel or "whatsapp").strip().lower()
         if channel not in {"whatsapp", "telegram"}:
             raise HTTPException(status_code=422, detail="Canal no soportado")
+        property_id = _normalize_property_id(property_id)
 
         target = page * page_size
         batch_size = max(200, page_size * 10)
@@ -455,14 +460,17 @@ def register_chatter_routes(app, state) -> None:
         summaries: Dict[str, Dict[str, Any]] = {}
 
         while len(ordered_keys) < target:
-            resp = (
+            query = (
                 supabase.table("chat_history")
                 .select("conversation_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
-                .order("created_at", desc=True)
-                .range(offset, offset + batch_size - 1)
-                .execute()
             )
+            if property_id is not None:
+                query = query.eq("property_id", property_id)
+            resp = query.order("created_at", desc=True).range(
+                offset,
+                offset + batch_size - 1,
+            ).execute()
             rows = resp.data or []
             if not rows:
                 break
@@ -506,16 +514,16 @@ def register_chatter_routes(app, state) -> None:
             ]
             if conv_ids:
                 try:
-                    resp_names = (
+                    query = (
                         supabase.table("chat_history")
                         .select("conversation_id, client_name, created_at")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
                         .in_("role", ["guest"])
-                        .order("created_at", desc=True)
-                        .limit(500)
-                        .execute()
                     )
+                    if property_id is not None:
+                        query = query.eq("property_id", property_id)
+                    resp_names = query.order("created_at", desc=True).limit(500).execute()
                     for row in resp_names.data or []:
                         cid = str(row.get("conversation_id") or "").strip()
                         name = row.get("client_name")
@@ -621,7 +629,7 @@ def register_chatter_routes(app, state) -> None:
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
         base_fields = "role, content, created_at, read_status, original_chat_id, property_id"
-        extended_fields = f"{base_fields}, user_id"
+        extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
         try:
             query = supabase.table("chat_history").select(extended_fields)
             if property_id is not None:
@@ -635,17 +643,31 @@ def register_chatter_routes(app, state) -> None:
                 offset + page_size - 1,
             ).execute()
         except Exception:
-            query = supabase.table("chat_history").select(base_fields)
-            if property_id is not None:
-                query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-            else:
-                or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
-                or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-                query = query.or_(",".join(or_filters))
-            resp = query.order("created_at", desc=True).range(
-                offset,
-                offset + page_size - 1,
-            ).execute()
+            try:
+                fallback_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
+                query = supabase.table("chat_history").select(fallback_fields)
+                if property_id is not None:
+                    query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+                else:
+                    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                    query = query.or_(",".join(or_filters))
+                resp = query.order("created_at", desc=True).range(
+                    offset,
+                    offset + page_size - 1,
+                ).execute()
+            except Exception:
+                query = supabase.table("chat_history").select(base_fields)
+                if property_id is not None:
+                    query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+                else:
+                    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                    query = query.or_(",".join(or_filters))
+                resp = query.order("created_at", desc=True).range(
+                    offset,
+                    offset + page_size - 1,
+                ).execute()
 
         rows = resp.data or []
         rows.reverse()
@@ -654,14 +676,19 @@ def register_chatter_routes(app, state) -> None:
         for row in rows:
             items.append(
                 {
+                    "message_id": row.get("id") or row.get("message_id"),
                     "chat_id": clean_id,
                     "created_at": row.get("created_at"),
                     "read_status": row.get("read_status"),
+                    "content": row.get("content"),
                     "message": row.get("content"),
                     "sender": _map_sender(row.get("role")),
                     "original_chat_id": row.get("original_chat_id"),
                     "property_id": row.get("property_id"),
                     "user_id": row.get("user_id"),
+                    "user_first_name": row.get("user_first_name"),
+                    "user_last_name": row.get("user_last_name"),
+                    "user_last_name2": row.get("user_last_name2"),
                 }
             )
 
@@ -737,6 +764,9 @@ def register_chatter_routes(app, state) -> None:
                 role,
                 payload.message,
                 user_id=payload.user_id if role == "user" else None,
+                user_first_name=payload.user_first_name if role == "user" else None,
+                user_last_name=payload.user_last_name if role == "user" else None,
+                user_last_name2=payload.user_last_name2 if role == "user" else None,
                 channel=payload.channel.lower(),
                 original_chat_id=context_id or None,
                 bypass_force_guest_role=role == "user",
@@ -751,19 +781,46 @@ def register_chatter_routes(app, state) -> None:
                     channel=payload.channel.lower(),
                     original_chat_id=chat_id,
                     bypass_force_guest_role=role == "user",
+                    user_id=payload.user_id if role == "user" else None,
+                    user_first_name=payload.user_first_name if role == "user" else None,
+                    user_last_name=payload.user_last_name if role == "user" else None,
+                    user_last_name2=payload.user_last_name2 if role == "user" else None,
                 )
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
+        rooms = _rooms(chat_id, property_id, payload.channel.lower())
         try:
             resolved_id = resolve_latest_pending_escalation(chat_id, final_response=payload.message)
             if resolved_id:
                 log.info("Escalación %s resuelta automáticamente tras enviar mensaje.", resolved_id)
+                await _emit(
+                    "escalation.resolved",
+                    {
+                        "rooms": rooms,
+                        "chat_id": chat_id,
+                        "escalation_id": resolved_id,
+                        "final_response": payload.message,
+                    },
+                )
+                await _emit(
+                    "chat.updated",
+                    {
+                        "rooms": rooms,
+                        "chat_id": chat_id,
+                        "property_id": property_id,
+                        "channel": payload.channel.lower(),
+                        "needs_action": None,
+                        "needs_action_type": None,
+                        "needs_action_reason": None,
+                        "proposed_response": None,
+                        "is_final_response": False,
+                    },
+                )
         except Exception as exc:
             log.warning("No se pudo auto-resolver escalación para %s: %s", chat_id, exc)
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        rooms = _rooms(chat_id, property_id, payload.channel.lower())
         await _emit(
             "chat.message.created",
             {
@@ -1146,6 +1203,28 @@ def register_chatter_routes(app, state) -> None:
                 "ai_message": ai_message,
             },
         )
+        await _emit(
+            "escalation.updated",
+            {
+                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "chat_id": clean_id,
+                "escalation_id": escalation_id,
+                "messages": messages,
+                "ai_message": ai_message,
+                "draft_response": draft_response or None,
+            },
+        )
+
+        if draft_response:
+            await _emit(
+                "chat.proposed_response.updated",
+                {
+                    "rooms": _rooms(clean_id, None, "whatsapp"),
+                    "chat_id": clean_id,
+                    "proposed_response": draft_response,
+                    "is_final_response": True,
+                },
+            )
 
         if wants_draft or wants_adjustment:
             proposed_response = draft_response or None
@@ -1256,6 +1335,15 @@ def register_chatter_routes(app, state) -> None:
 
         await _emit(
             "chat.read",
+            {
+                "rooms": _rooms(clean_id, property_id, "whatsapp"),
+                "chat_id": clean_id,
+                "property_id": property_id,
+                "read_status": True,
+            },
+        )
+        await _emit(
+            "chat.updated",
             {
                 "rooms": _rooms(clean_id, property_id, "whatsapp"),
                 "chat_id": clean_id,
