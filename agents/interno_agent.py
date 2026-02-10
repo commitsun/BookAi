@@ -240,7 +240,7 @@ class InternoAgent:
                     "escalation_id": escalation_id,
                     "type": escalation_type,
                     "reason": reason,
-                    "context": context,
+                    "context": reason,
                     "property_id": prop_id,
                     "rooms": rooms,
                 },
