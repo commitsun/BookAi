@@ -71,6 +71,44 @@ def set_memory_manager(memory_manager):
     global _MEMORY_MANAGER
     _MEMORY_MANAGER = memory_manager
 
+
+def _clean_chat_id(chat_id: str) -> str:
+    if not chat_id:
+        return ""
+    return re.sub(r"\D", "", str(chat_id or "")).strip()
+
+
+def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
+    if not _MEMORY_MANAGER or not guest_chat_id:
+        return None
+    try:
+        candidates = []
+        raw = str(guest_chat_id).strip()
+        if raw:
+            candidates.append(raw)
+        clean = _clean_chat_id(raw)
+        if clean and clean not in candidates:
+            candidates.append(clean)
+        if ":" in raw:
+            tail = raw.split(":")[-1].strip()
+            if tail and tail not in candidates:
+                candidates.append(tail)
+        for cid in candidates:
+            val = _MEMORY_MANAGER.get_flag(cid, "property_id")
+            if val is not None:
+                return val
+    except Exception:
+        return None
+    return None
+
+
+def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
+    rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+    prop_id = _resolve_property_id(guest_chat_id)
+    if prop_id is not None:
+        rooms.append(f"property:{prop_id}")
+    return rooms
+
 # =============================================================
 # 📥 INPUT SCHEMAS
 # =============================================================
@@ -168,7 +206,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             NOTIFIED_ESCALATIONS[escalation_id] = sent_message_id or "sent"
             log.info(f"✅ Escalación {escalation_id} enviada correctamente al encargado.")
 
-            rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+            rooms = _rooms_for_escalation(guest_chat_id)
             _fire_event(
                 "escalation.created",
                 {
@@ -177,6 +215,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     "type": escalation_type,
                     "reason": reason,
                     "context": context,
+                    "property_id": _resolve_property_id(guest_chat_id),
                 },
                 rooms=rooms,
             )
@@ -188,6 +227,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     "needs_action_type": escalation_type,
                     "needs_action_reason": reason,
                     "proposed_response": None,
+                    "property_id": _resolve_property_id(guest_chat_id),
                 },
                 rooms=rooms,
             )
@@ -246,13 +286,14 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         esc.draft_response = draft
         update_escalation(escalation_id, {"draft_response": draft})
 
-        rooms = [f"chat:{esc.guest_chat_id}", "channel:whatsapp"]
+        rooms = _rooms_for_escalation(esc.guest_chat_id)
         _fire_event(
             "escalation.updated",
             {
                 "chat_id": esc.guest_chat_id,
                 "escalation_id": escalation_id,
                 "draft_response": draft,
+                "property_id": _resolve_property_id(esc.guest_chat_id),
             },
             rooms=rooms,
         )
@@ -261,6 +302,7 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
             {
                 "chat_id": esc.guest_chat_id,
                 "proposed_response": draft,
+                "property_id": _resolve_property_id(esc.guest_chat_id),
             },
             rooms=rooms,
         )
@@ -341,13 +383,14 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "sent_to_guest": True,
             })
 
-            rooms = [f"chat:{esc.guest_chat_id}", "channel:whatsapp"]
+            rooms = _rooms_for_escalation(esc.guest_chat_id)
             _fire_event(
                 "escalation.resolved",
                 {
                     "chat_id": esc.guest_chat_id,
                     "escalation_id": escalation_id,
                     "final_response": final_text,
+                    "property_id": _resolve_property_id(esc.guest_chat_id),
                 },
                 rooms=rooms,
             )
@@ -355,6 +398,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "chat.message.created",
                 {
                     "chat_id": esc.guest_chat_id,
+                    "property_id": _resolve_property_id(esc.guest_chat_id),
                     "channel": "whatsapp",
                     "sender": "bookai",
                     "message": final_text,
@@ -372,6 +416,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                     "needs_action_type": None,
                     "needs_action_reason": None,
                     "proposed_response": None,
+                    "property_id": _resolve_property_id(esc.guest_chat_id),
                 },
                 rooms=rooms,
             )
