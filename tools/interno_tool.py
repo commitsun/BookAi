@@ -325,26 +325,26 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         update_escalation(escalation_id, {"draft_response": draft})
 
         rooms = _rooms_for_escalation(esc.guest_chat_id)
-            clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
-            _fire_event(
-                "escalation.updated",
-                {
-                    "chat_id": clean_chat_id,
-                    "escalation_id": escalation_id,
-                    "draft_response": draft,
-                    "property_id": _resolve_property_id(esc.guest_chat_id),
-                },
-                rooms=rooms,
-            )
-            _fire_event(
-                "chat.proposed_response.updated",
-                {
-                    "chat_id": clean_chat_id,
-                    "proposed_response": draft,
-                    "property_id": _resolve_property_id(esc.guest_chat_id),
-                },
-                rooms=rooms,
-            )
+        clean_chat_id = _clean_chat_id(esc.guest_chat_id) or esc.guest_chat_id
+        _fire_event(
+            "escalation.updated",
+            {
+                "chat_id": clean_chat_id,
+                "escalation_id": escalation_id,
+                "draft_response": draft,
+                "property_id": _resolve_property_id(esc.guest_chat_id),
+            },
+            rooms=rooms,
+        )
+        _fire_event(
+            "chat.proposed_response.updated",
+            {
+                "chat_id": clean_chat_id,
+                "proposed_response": draft,
+                "property_id": _resolve_property_id(esc.guest_chat_id),
+            },
+            rooms=rooms,
+        )
 
         formatted = (
             f"📝 *BORRADOR DE RESPUESTA PROPUESTO:*\n\n"
