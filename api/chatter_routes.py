@@ -949,6 +949,36 @@ def register_chatter_routes(app, state) -> None:
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
 
+        def _wants_draft_response(text: str) -> bool:
+            """Detecta si el operador pide explícitamente generar una respuesta al huésped."""
+            if not text:
+                return False
+            lowered = text.lower()
+            patterns = [
+                r"\bdile\b",
+                r"\bdecile\b",
+                r"\bcontesta\b",
+                r"\bresponde\b",
+                r"\bescribe\b",
+                r"\bredacta\b",
+                r"\bgenera\b",
+                r"\bcrea\b",
+                r"\belabora\b",
+                r"\bprepara\b",
+                r"\bformula\b",
+                r"\bhaz (una )?respuesta\b",
+                r"\brespuesta (final|para el huésped|para el huesped)\b",
+                r"\bmensaje (al|para el) huésped\b",
+                r"\breply\b",
+                r"\brespond\b",
+                r"\bwrite\b",
+                r"\bdraft\b",
+                r"\bcompose\b",
+                r"\bgenerate\b",
+                r"\bprepare (a )?response\b",
+            ]
+            return any(re.search(pat, lowered) for pat in patterns)
+
         operator_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
             escalation_id=escalation_id,
@@ -963,32 +993,70 @@ def register_chatter_routes(app, state) -> None:
         context = (esc.get("context") or "").strip()
         draft_response = (esc.get("draft_response") or "").strip()
 
-        system_prompt = (
-            "Eres un asistente interno para operadores de hotel. "
-            "Responde preguntas sobre el contexto de la escalación con claridad y brevedad. "
-            "No generes la respuesta final al huésped a menos que el operador lo solicite explícitamente. "
-            "Si falta información, indícalo."
-        )
-        user_prompt = (
-            "Contexto de escalación:\n"
-            f"- Mensaje del huésped: {guest_message or 'No disponible'}\n"
-            f"- Tipo: {esc_type or 'No disponible'}\n"
-            f"- Motivo: {reason or 'No disponible'}\n"
-            f"- Contexto: {context or 'No disponible'}\n"
-            f"- Borrador actual: {draft_response or 'No disponible'}\n\n"
-            f"Pregunta del operador:\n{message}"
-        )
+        wants_draft = _wants_draft_response(message)
 
-        llm = ModelConfig.get_llm(ModelTier.INTERNAL)
-        ai_raw = llm.invoke(
-            [
-                {"role": "system", "content": system_prompt},
-                {"role": "user", "content": user_prompt},
-            ]
-        )
-        ai_message = (getattr(ai_raw, "content", None) or str(ai_raw or "")).strip()
-        if not ai_message:
-            ai_message = "No tengo suficiente información para responder."
+        if wants_draft:
+            from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
+
+            if escalation_id not in ESCALATIONS_STORE:
+                ESCALATIONS_STORE[escalation_id] = Escalation(
+                    escalation_id=escalation_id,
+                    guest_chat_id=clean_id,
+                    guest_message=guest_message,
+                    escalation_type=esc_type or "manual",
+                    escalation_reason=reason,
+                    context=context,
+                    timestamp=str(esc.get("timestamp") or ""),
+                    draft_response=draft_response or None,
+                    manager_confirmed=bool(esc.get("manager_confirmed") or False),
+                    final_response=(esc.get("final_response") or None),
+                    sent_to_guest=bool(esc.get("sent_to_guest") or False),
+                )
+
+            base_response = draft_response or guest_message or ""
+            if base_response:
+                ESCALATIONS_STORE[escalation_id].draft_response = base_response
+
+            ai_message = (generar_borrador(
+                escalation_id=escalation_id,
+                manager_response=base_response,
+                adjustment=message,
+            ) or "").strip()
+            if not ai_message:
+                ai_message = "No tengo suficiente información para generar un borrador."
+
+            draft_response = (
+                (ESCALATIONS_STORE.get(escalation_id).draft_response or "").strip()
+                if ESCALATIONS_STORE.get(escalation_id)
+                else draft_response
+            )
+        else:
+            system_prompt = (
+                "Eres un asistente interno para operadores de hotel. "
+                "Responde preguntas sobre el contexto de la escalación con claridad y brevedad. "
+                "No generes la respuesta final al huésped a menos que el operador lo solicite explícitamente. "
+                "Si falta información, indícalo."
+            )
+            user_prompt = (
+                "Contexto de escalación:\n"
+                f"- Mensaje del huésped: {guest_message or 'No disponible'}\n"
+                f"- Tipo: {esc_type or 'No disponible'}\n"
+                f"- Motivo: {reason or 'No disponible'}\n"
+                f"- Contexto: {context or 'No disponible'}\n"
+                f"- Borrador actual: {draft_response or 'No disponible'}\n\n"
+                f"Pregunta del operador:\n{message}"
+            )
+
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            ai_raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            ai_message = (getattr(ai_raw, "content", None) or str(ai_raw or "")).strip()
+            if not ai_message:
+                ai_message = "No tengo suficiente información para responder."
 
         ai_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
@@ -1009,13 +1077,20 @@ def register_chatter_routes(app, state) -> None:
             },
         )
 
+        if wants_draft:
+            proposed_response = draft_response or None
+            is_final_response = bool(draft_response)
+        else:
+            proposed_response = None
+            is_final_response = False
+
         return {
             "chat_id": clean_id,
             "escalation_id": escalation_id,
             "ai_message": ai_message,
             "messages": messages,
-            "proposed_response": draft_response or None,
-            "is_final_response": bool(draft_response),
+            "proposed_response": proposed_response,
+            "is_final_response": is_final_response,
         }
 
     @router.get("/chats/{chat_id}/escalation-chat")
