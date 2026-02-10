@@ -164,7 +164,8 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
 
 
 def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
-    rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+    clean_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+    rooms = [f"chat:{clean_id}", "channel:whatsapp"]
     prop_id = _resolve_property_id(guest_chat_id)
     if prop_id is not None:
         rooms.append(f"property:{prop_id}")
@@ -324,25 +325,26 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         update_escalation(escalation_id, {"draft_response": draft})
 
         rooms = _rooms_for_escalation(esc.guest_chat_id)
-        _fire_event(
-            "escalation.updated",
-            {
-                "chat_id": esc.guest_chat_id,
-                "escalation_id": escalation_id,
-                "draft_response": draft,
-                "property_id": _resolve_property_id(esc.guest_chat_id),
-            },
-            rooms=rooms,
-        )
-        _fire_event(
-            "chat.proposed_response.updated",
-            {
-                "chat_id": esc.guest_chat_id,
-                "proposed_response": draft,
-                "property_id": _resolve_property_id(esc.guest_chat_id),
-            },
-            rooms=rooms,
-        )
+            clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+            _fire_event(
+                "escalation.updated",
+                {
+                    "chat_id": clean_chat_id,
+                    "escalation_id": escalation_id,
+                    "draft_response": draft,
+                    "property_id": _resolve_property_id(esc.guest_chat_id),
+                },
+                rooms=rooms,
+            )
+            _fire_event(
+                "chat.proposed_response.updated",
+                {
+                    "chat_id": clean_chat_id,
+                    "proposed_response": draft,
+                    "property_id": _resolve_property_id(esc.guest_chat_id),
+                },
+                rooms=rooms,
+            )
 
         formatted = (
             f"📝 *BORRADOR DE RESPUESTA PROPUESTO:*\n\n"
@@ -420,11 +422,12 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "sent_to_guest": True,
             })
 
+            clean_chat_id = _clean_chat_id(esc.guest_chat_id) or esc.guest_chat_id
             rooms = _rooms_for_escalation(esc.guest_chat_id)
             _fire_event(
                 "escalation.resolved",
                 {
-                    "chat_id": esc.guest_chat_id,
+                    "chat_id": clean_chat_id,
                     "escalation_id": escalation_id,
                     "final_response": final_text,
                     "property_id": _resolve_property_id(esc.guest_chat_id),
@@ -434,7 +437,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
             _fire_event(
                 "chat.message.created",
                 {
-                    "chat_id": esc.guest_chat_id,
+                    "chat_id": clean_chat_id,
                     "property_id": _resolve_property_id(esc.guest_chat_id),
                     "channel": "whatsapp",
                     "sender": "bookai",
@@ -446,7 +449,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
             _fire_event(
                 "chat.updated",
                 {
-                    "chat_id": esc.guest_chat_id,
+                    "chat_id": clean_chat_id,
                     "last_message": final_text,
                     "last_message_at": datetime.utcnow().isoformat(),
                     "needs_action": None,

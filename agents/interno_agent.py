@@ -211,7 +211,11 @@ class InternoAgent:
         context: str,
     ) -> str:
 
-        escalation_id = f"esc_{guest_chat_id}_{int(datetime.utcnow().timestamp())}"
+        def _clean_chat_id(value: str) -> str:
+            return re.sub(r"\\D", "", str(value or "")).strip()
+
+        clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+        escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
             prop_id = None
@@ -226,13 +230,13 @@ class InternoAgent:
                         prop_id = self.memory_manager.get_last_property_id_hint(guest_chat_id)
                 except Exception:
                     prop_id = None
-            rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+            rooms = [f"chat:{clean_chat_id}", "channel:whatsapp"]
             if prop_id is not None:
                 rooms.append(f"property:{prop_id}")
             await emit_event(
                 "escalation.created",
                 {
-                    "chat_id": guest_chat_id,
+                    "chat_id": clean_chat_id,
                     "escalation_id": escalation_id,
                     "type": escalation_type,
                     "reason": reason,
@@ -245,7 +249,7 @@ class InternoAgent:
             await emit_event(
                 "chat.updated",
                 {
-                    "chat_id": guest_chat_id,
+                    "chat_id": clean_chat_id,
                     "needs_action": guest_message,
                     "needs_action_type": escalation_type,
                     "needs_action_reason": reason,
