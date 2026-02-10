@@ -979,6 +979,35 @@ def register_chatter_routes(app, state) -> None:
             ]
             return any(re.search(pat, lowered) for pat in patterns)
 
+        def _wants_adjustment(text: str) -> bool:
+            """Detecta si el operador pide ajustes sobre un borrador existente."""
+            if not text:
+                return False
+            lowered = text.lower()
+            patterns = [
+                r"\bquita\b",
+                r"\bquital[e|o]\b",
+                r"\belimina\b",
+                r"\bborr[ae]\b",
+                r"\bcambia\b",
+                r"\bmodifica\b",
+                r"\bajusta\b",
+                r"\bcorregi\b",
+                r"\bedita\b",
+                r"\breformula\b",
+                r"\bhazlo\b",
+                r"\bmas corto\b",
+                r"\bmás corto\b",
+                r"\bacorta\b",
+                r"\bresum[e|i]\b",
+                r"\bmenos formal\b",
+                r"\bmas formal\b",
+                r"\bmás formal\b",
+                r"\bmas cordial\b",
+                r"\bmás cordial\b",
+            ]
+            return any(re.search(pat, lowered) for pat in patterns)
+
         operator_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
             escalation_id=escalation_id,
@@ -994,8 +1023,9 @@ def register_chatter_routes(app, state) -> None:
         draft_response = (esc.get("draft_response") or "").strip()
 
         wants_draft = _wants_draft_response(message)
+        wants_adjustment = _wants_adjustment(message)
 
-        if wants_draft:
+        if wants_draft or wants_adjustment:
             from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
 
             if escalation_id not in ESCALATIONS_STORE:
@@ -1077,7 +1107,7 @@ def register_chatter_routes(app, state) -> None:
             },
         )
 
-        if wants_draft:
+        if wants_draft or wants_adjustment:
             proposed_response = draft_response or None
             is_final_response = bool(draft_response)
         else:
