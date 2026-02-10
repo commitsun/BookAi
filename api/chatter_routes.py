@@ -1083,14 +1083,23 @@ def register_chatter_routes(app, state) -> None:
             if not clean_draft:
                 clean_draft = "No tengo suficiente información para generar un borrador."
 
-            context_lines = [
-                "Contexto de la escalación:",
-                f"- Mensaje del huésped: {guest_message or 'No disponible'}",
-                f"- Tipo: {esc_type or 'No disponible'}",
-                f"- Motivo: {reason or 'No disponible'}",
-                f"- Contexto: {context or 'No disponible'}",
-            ]
-            ai_message = "\n".join(context_lines) + "\n\n" + clean_draft
+            def _brief_escalation_summary(
+                esc_type: str,
+                reason: str,
+                context: str,
+            ) -> str:
+                base_reason = reason or "Sin motivo registrado"
+                if esc_type:
+                    base_reason = f"{base_reason} ({esc_type})"
+                if context:
+                    return f"Motivo de la escalación: {base_reason}. Se escaló porque: {context}."
+                return f"Motivo de la escalación: {base_reason}."
+
+            if not draft_response:
+                summary = _brief_escalation_summary(esc_type, reason, context)
+                ai_message = summary + "\n\n" + clean_draft
+            else:
+                ai_message = clean_draft
 
             draft_response = (
                 (ESCALATIONS_STORE.get(escalation_id).draft_response or "").strip()
