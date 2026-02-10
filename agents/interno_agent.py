@@ -250,9 +250,9 @@ class InternoAgent:
                 "chat.updated",
                 {
                     "chat_id": clean_chat_id,
-                    "needs_action": guest_message,
+                    "needs_action": None,
                     "needs_action_type": escalation_type,
-                    "needs_action_reason": reason,
+                    "needs_action_reason": None,
                     "proposed_response": None,
                     "escalation_id": escalation_id,
                     "escalation_messages": [],
