@@ -1016,6 +1016,7 @@ def register_chatter_routes(app, state) -> None:
 
         if wants_draft or wants_adjustment:
             from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
+            from core.message_utils import extract_clean_draft
 
             if escalation_id not in ESCALATIONS_STORE:
                 ESCALATIONS_STORE[escalation_id] = Escalation(
@@ -1036,13 +1037,60 @@ def register_chatter_routes(app, state) -> None:
             if base_response:
                 ESCALATIONS_STORE[escalation_id].draft_response = base_response
 
-            ai_message = (generar_borrador(
+            raw_borrador = (generar_borrador(
                 escalation_id=escalation_id,
                 manager_response=base_response,
                 adjustment=message,
             ) or "").strip()
-            if not ai_message:
-                ai_message = "No tengo suficiente información para generar un borrador."
+
+            def _strip_instruction_block(text: str) -> str:
+                if not text:
+                    return text
+                cut_markers = [
+                    "📝 *Nuevo borrador generado según tus ajustes:*",
+                    "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
+                    "Se ha generado el siguiente borrador",
+                    "Se ha generado el siguiente borrador según tus indicaciones:",
+                    "el texto, escribe tus ajustes directamente.",
+                    "✏️ Si deseas modificar",
+                    "✏️ Si deseas más cambios",
+                    "✅ Si estás conforme",
+                    "Si deseas modificar el texto",
+                    "Si deseas más cambios",
+                    "responde con 'OK' para enviarlo al huésped",
+                ]
+                for marker in cut_markers:
+                    if marker in text:
+                        parts = text.split(marker, 1)
+                        if marker.startswith("📝") or marker.startswith("Se ha generado"):
+                            text = parts[1].strip() if len(parts) > 1 else ""
+                        else:
+                            text = parts[0].strip()
+                lines = []
+                for ln in text.splitlines():
+                    stripped = ln.strip()
+                    if not stripped:
+                        continue
+                    if stripped.lower().startswith("si deseas"):
+                        continue
+                    if stripped.lower().startswith("si estás conforme"):
+                        continue
+                    lines.append(stripped)
+                return "\n".join(lines).strip()
+
+            clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
+            clean_draft = _strip_instruction_block(clean_draft)
+            if not clean_draft:
+                clean_draft = "No tengo suficiente información para generar un borrador."
+
+            context_lines = [
+                "Contexto de la escalación:",
+                f"- Mensaje del huésped: {guest_message or 'No disponible'}",
+                f"- Tipo: {esc_type or 'No disponible'}",
+                f"- Motivo: {reason or 'No disponible'}",
+                f"- Contexto: {context or 'No disponible'}",
+            ]
+            ai_message = "\n".join(context_lines) + "\n\n" + clean_draft
 
             draft_response = (
                 (ESCALATIONS_STORE.get(escalation_id).draft_response or "").strip()
