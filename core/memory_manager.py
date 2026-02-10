@@ -214,6 +214,7 @@ class MemoryManager:
         content: str,
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
+        user_id: Optional[str] = None,
         channel: Optional[str] = None,
         original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
@@ -323,6 +324,8 @@ class MemoryManager:
             entry["escalation_id"] = escalation_id
         if client_name and is_guest:
             entry["client_name"] = client_name
+        if user_id:
+            entry["user_id"] = str(user_id)
         if channel_to_store:
             entry["channel"] = channel_to_store
 
@@ -357,6 +360,7 @@ class MemoryManager:
                 entry["content"],
                 escalation_id=escalation_id,
                 client_name=client_name if is_guest else None,
+                user_id=user_id,
                 channel=channel_to_store,
                 property_id=property_id,
                 original_chat_id=resolved_original or cid,

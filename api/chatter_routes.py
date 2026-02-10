@@ -620,19 +620,32 @@ def register_chatter_routes(app, state) -> None:
         offset = (page - 1) * page_size
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
-        query = supabase.table("chat_history").select(
-            "role, content, created_at, read_status, original_chat_id, property_id"
-        )
-        if property_id is not None:
-            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-        else:
-            or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
-            or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-            query = query.or_(",".join(or_filters))
-        resp = query.order("created_at", desc=True).range(
-            offset,
-            offset + page_size - 1,
-        ).execute()
+        base_fields = "role, content, created_at, read_status, original_chat_id, property_id"
+        extended_fields = f"{base_fields}, user_id"
+        try:
+            query = supabase.table("chat_history").select(extended_fields)
+            if property_id is not None:
+                query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+            else:
+                or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                query = query.or_(",".join(or_filters))
+            resp = query.order("created_at", desc=True).range(
+                offset,
+                offset + page_size - 1,
+            ).execute()
+        except Exception:
+            query = supabase.table("chat_history").select(base_fields)
+            if property_id is not None:
+                query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+            else:
+                or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                query = query.or_(",".join(or_filters))
+            resp = query.order("created_at", desc=True).range(
+                offset,
+                offset + page_size - 1,
+            ).execute()
 
         rows = resp.data or []
         rows.reverse()
@@ -648,6 +661,7 @@ def register_chatter_routes(app, state) -> None:
                     "sender": _map_sender(row.get("role")),
                     "original_chat_id": row.get("original_chat_id"),
                     "property_id": row.get("property_id"),
+                    "user_id": row.get("user_id"),
                 }
             )
 
@@ -722,6 +736,7 @@ def register_chatter_routes(app, state) -> None:
                 chat_id,
                 role,
                 payload.message,
+                user_id=payload.user_id if role == "user" else None,
                 channel=payload.channel.lower(),
                 original_chat_id=context_id or None,
                 bypass_force_guest_role=role == "user",
