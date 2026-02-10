@@ -221,6 +221,8 @@ def _pending_actions(limit: int = 200) -> Dict[str, str]:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
             continue
+        if guest_id in result:
+            continue
         question = (esc.get("guest_message") or "").strip()
         if not question:
             continue
@@ -235,6 +237,8 @@ def _pending_reasons(limit: int = 200) -> Dict[str, str]:
     for esc in pending:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
+            continue
+        if guest_id in result:
             continue
         reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
         if not reason:
@@ -251,6 +255,8 @@ def _pending_types(limit: int = 200) -> Dict[str, str]:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
             continue
+        if guest_id in result:
+            continue
         esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
         if not esc_type:
             continue
@@ -266,6 +272,8 @@ def _pending_responses(limit: int = 200) -> Dict[str, str]:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
             continue
+        if guest_id in result:
+            continue
         proposed = (esc.get("draft_response") or "").strip()
         if not proposed:
             continue
@@ -280,6 +288,8 @@ def _pending_messages(limit: int = 200) -> Dict[str, list]:
     for esc in pending:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
+            continue
+        if guest_id in result:
             continue
         messages = esc.get("messages")
         if not messages:
