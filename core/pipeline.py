@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import re
+from datetime import datetime, timezone
 
 from core.main_agent import create_main_agent
 from core.instance_context import hydrate_dynamic_context
@@ -236,6 +237,52 @@ async def process_user_message(
                 context=context_full,
             )
             return None
+
+        # Emitimos evento en tiempo real para respuestas de IA.
+        try:
+            socket_mgr = getattr(state, "socket_manager", None)
+            if socket_mgr and getattr(socket_mgr, "enabled", False):
+                prop_id = None
+                if state.memory_manager:
+                    try:
+                        prop_id = state.memory_manager.get_flag(mem_id, "property_id")
+                        if prop_id is None:
+                            prop_id = state.memory_manager.get_flag(chat_id, "property_id")
+                    except Exception:
+                        prop_id = None
+                rooms = [f"chat:{chat_id}"]
+                if prop_id is not None:
+                    rooms.append(f"property:{prop_id}")
+                if channel:
+                    rooms.append(f"channel:{channel}")
+                now_iso = datetime.now(timezone.utc).isoformat()
+                await socket_mgr.emit(
+                    "chat.message.created",
+                    {
+                        "rooms": rooms,
+                        "chat_id": str(chat_id),
+                        "property_id": prop_id,
+                        "channel": channel,
+                        "sender": "bookai",
+                        "message": response_raw,
+                        "created_at": now_iso,
+                    },
+                    rooms=rooms,
+                )
+                await socket_mgr.emit(
+                    "chat.updated",
+                    {
+                        "rooms": rooms,
+                        "chat_id": str(chat_id),
+                        "property_id": prop_id,
+                        "channel": channel,
+                        "last_message": response_raw,
+                        "last_message_at": now_iso,
+                    },
+                    rooms=rooms,
+                )
+        except Exception as exc:
+            log.warning("No se pudo emitir respuesta IA por socket: %s", exc)
 
         return response_raw
 
