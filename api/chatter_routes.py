@@ -989,6 +989,9 @@ def register_chatter_routes(app, state) -> None:
                 pass
             return "context"
 
+        pre_messages = esc.get("messages") or []
+        first_interaction = not isinstance(pre_messages, list) or len(pre_messages) == 0
+
         operator_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
             escalation_id=escalation_id,
@@ -1083,21 +1086,12 @@ def register_chatter_routes(app, state) -> None:
             if not clean_draft:
                 clean_draft = "No tengo suficiente información para generar un borrador."
 
-            def _brief_escalation_summary(
-                esc_type: str,
-                reason: str,
-                context: str,
-            ) -> str:
+            def _brief_escalation_summary(reason: str) -> str:
                 base_reason = reason or "Sin motivo registrado"
-                if esc_type:
-                    base_reason = f"{base_reason} ({esc_type})"
-                if context:
-                    return f"Motivo de la escalación: {base_reason}. Se escaló porque: {context}."
                 return f"Motivo de la escalación: {base_reason}."
 
-            if not draft_response:
-                summary = _brief_escalation_summary(esc_type, reason, context)
-                ai_message = summary + "\n\n" + clean_draft
+            if first_interaction:
+                ai_message = _brief_escalation_summary(reason)
             else:
                 ai_message = clean_draft
 
