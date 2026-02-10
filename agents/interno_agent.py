@@ -250,6 +250,8 @@ class InternoAgent:
                     "needs_action_type": escalation_type,
                     "needs_action_reason": reason,
                     "proposed_response": None,
+                    "escalation_id": escalation_id,
+                    "escalation_messages": [],
                     "property_id": prop_id,
                     "rooms": rooms,
                 },
