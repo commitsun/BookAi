@@ -15,6 +15,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
+from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 from tools.interno_tool import (
@@ -211,6 +212,51 @@ class InternoAgent:
     ) -> str:
 
         escalation_id = f"esc_{guest_chat_id}_{int(datetime.utcnow().timestamp())}"
+        # Emitir escalation.created en tiempo real (fallback seguro).
+        try:
+            prop_id = None
+            if self.memory_manager:
+                try:
+                    prop_id = self.memory_manager.get_flag(guest_chat_id, "property_id")
+                    if prop_id is None:
+                        last_mem = self.memory_manager.get_flag(guest_chat_id, "last_memory_id")
+                        if isinstance(last_mem, str):
+                            prop_id = self.memory_manager.get_flag(last_mem, "property_id")
+                    if prop_id is None and hasattr(self.memory_manager, "get_last_property_id_hint"):
+                        prop_id = self.memory_manager.get_last_property_id_hint(guest_chat_id)
+                except Exception:
+                    prop_id = None
+            rooms = [f"chat:{guest_chat_id}", "channel:whatsapp"]
+            if prop_id is not None:
+                rooms.append(f"property:{prop_id}")
+            await emit_event(
+                "escalation.created",
+                {
+                    "chat_id": guest_chat_id,
+                    "escalation_id": escalation_id,
+                    "type": escalation_type,
+                    "reason": reason,
+                    "context": context,
+                    "property_id": prop_id,
+                    "rooms": rooms,
+                },
+                rooms=rooms,
+            )
+            await emit_event(
+                "chat.updated",
+                {
+                    "chat_id": guest_chat_id,
+                    "needs_action": guest_message,
+                    "needs_action_type": escalation_type,
+                    "needs_action_reason": reason,
+                    "proposed_response": None,
+                    "property_id": prop_id,
+                    "rooms": rooms,
+                },
+                rooms=rooms,
+            )
+        except Exception:
+            pass
 
         prompt = (
             "Nueva escalación:\n"

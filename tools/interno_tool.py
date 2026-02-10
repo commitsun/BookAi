@@ -60,6 +60,19 @@ def _fire_event(event: str, payload: dict, rooms: list[str] | None = None) -> No
     try:
         loop = asyncio.get_running_loop()
     except RuntimeError:
+        try:
+            import anyio
+            if rooms:
+                payload["rooms"] = rooms
+            anyio.from_thread.run(emit_event, event, payload, rooms=rooms)
+        except Exception:
+            try:
+                if rooms:
+                    payload["rooms"] = rooms
+                asyncio.run(emit_event(event, payload, rooms=rooms))
+            except Exception:
+                log.debug("No se pudo emitir evento %s desde hilo sync", event)
+            return
         return
     if rooms:
         payload["rooms"] = rooms
@@ -93,10 +106,31 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
             tail = raw.split(":")[-1].strip()
             if tail and tail not in candidates:
                 candidates.append(tail)
+        # Si existe un memory_id compuesto, lo probamos también.
+        try:
+            last_mem = _MEMORY_MANAGER.get_flag(raw, "last_memory_id") if raw else None
+            if isinstance(last_mem, str) and last_mem and last_mem not in candidates:
+                candidates.append(last_mem)
+        except Exception:
+            pass
         for cid in candidates:
             val = _MEMORY_MANAGER.get_flag(cid, "property_id")
             if val is not None:
                 return val
+        # Fallback usando helper del memory_manager si existe.
+        try:
+            get_hint = getattr(_MEMORY_MANAGER, "get_last_property_id_hint", None)
+            if callable(get_hint):
+                for cid in candidates:
+                    hint = get_hint(cid)
+                    if hint is not None:
+                        try:
+                            _MEMORY_MANAGER.set_flag(cid, "property_id", hint)
+                        except Exception:
+                            pass
+                        return hint
+        except Exception:
+            pass
         # Fallback: busca en DB el último property_id registrado para el chat.
         try:
             from core.db import supabase
@@ -233,31 +267,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             NOTIFIED_ESCALATIONS[escalation_id] = sent_message_id or "sent"
             log.info(f"✅ Escalación {escalation_id} enviada correctamente al encargado.")
 
-            rooms = _rooms_for_escalation(guest_chat_id)
-            _fire_event(
-                "escalation.created",
-                {
-                    "chat_id": guest_chat_id,
-                    "escalation_id": escalation_id,
-                    "type": escalation_type,
-                    "reason": reason,
-                    "context": context,
-                    "property_id": _resolve_property_id(guest_chat_id),
-                },
-                rooms=rooms,
-            )
-            _fire_event(
-                "chat.updated",
-                {
-                    "chat_id": guest_chat_id,
-                    "needs_action": guest_message,
-                    "needs_action_type": escalation_type,
-                    "needs_action_reason": reason,
-                    "proposed_response": None,
-                    "property_id": _resolve_property_id(guest_chat_id),
-                },
-                rooms=rooms,
-            )
+            # Emisión en tiempo real se realiza en InternoAgent.escalate()
 
             return f"Escalación {escalation_id} notificada al encargado con éxito."
 
