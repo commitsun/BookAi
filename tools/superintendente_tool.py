@@ -135,7 +135,7 @@ class ConsultaReservaGeneralInput(BaseModel):
         description="ID de propiedad (property_id).",
     )
     pms_property_id: Optional[int] = Field(
-        default=38,
+        default=None,
         description="ID de la propiedad en el PMS (compatibilidad)",
     )
     instance_url: Optional[str] = Field(
@@ -159,7 +159,7 @@ class ConsultaReservaPersonaInput(BaseModel):
         description="ID de propiedad (property_id).",
     )
     pms_property_id: Optional[int] = Field(
-        default=38,
+        default=None,
         description="ID de la propiedad en el PMS (compatibilidad)",
     )
     instance_url: Optional[str] = Field(
@@ -1612,7 +1612,7 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
         fecha_inicio: str,
         fecha_fin: str,
         property_id: Optional[int] = None,
-        pms_property_id: int = 38,
+        pms_property_id: Optional[int] = None,
         instance_url: Optional[str] = None,
         instance_id: Optional[str] = None,
         enrich_contact: bool = False,
@@ -1857,7 +1857,7 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
     async def _consulta_reserva_persona(
         folio_id: str,
         property_id: Optional[int] = None,
-        pms_property_id: int = 38,
+        pms_property_id: Optional[int] = None,
         instance_url: Optional[str] = None,
         instance_id: Optional[str] = None,
     ) -> str:

@@ -167,6 +167,73 @@ def _clean_wa_payload(msg: str) -> str:
     return base.strip()
 
 
+def _pull_recent_reservations(state, *keys: str, max_age_seconds: int = 180) -> Optional[dict]:
+    if not getattr(state, "memory_manager", None):
+        return None
+    for key in [k for k in keys if k]:
+        try:
+            payload = state.memory_manager.get_flag(key, "superintendente_last_reservations")
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            continue
+        stored_at = payload.get("stored_at")
+        if stored_at:
+            try:
+                ts = datetime.fromisoformat(str(stored_at).replace("Z", ""))
+                if (datetime.utcnow() - ts).total_seconds() > max_age_seconds:
+                    continue
+            except Exception:
+                continue
+        return payload
+    return None
+
+
+def _csv_escape(value: Any) -> str:
+    text = "" if value is None else str(value)
+    if any(ch in text for ch in [';', '\n', '"']):
+        return '"' + text.replace('"', '""') + '"'
+    return text
+
+
+def _build_reservations_csv(payload: dict) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    items = payload.get("items")
+    if not isinstance(items, list) or not items:
+        return None
+    header = [
+        "nombre",
+        "folio_id",
+        "codigo",
+        "checkin",
+        "checkout",
+        "estado",
+        "total",
+        "pendiente",
+        "tel",
+        "email",
+    ]
+    lines = [";".join(header)]
+    for item in items:
+        if not isinstance(item, dict):
+            continue
+        row = [
+            item.get("partner_name"),
+            item.get("folio_id"),
+            item.get("folio_code"),
+            item.get("checkin"),
+            item.get("checkout"),
+            item.get("state"),
+            item.get("amount_total"),
+            item.get("pending_amount"),
+            item.get("partner_phone"),
+            item.get("partner_email"),
+        ]
+        lines.append(";".join(_csv_escape(v) for v in row))
+    return "\n".join(lines)
+
+
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
     return msg
 
@@ -613,8 +680,23 @@ def register_superintendente_routes(app, state) -> None:
                     state.memory_manager.set_flag(alt_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
                 if property_id:
                     state.memory_manager.set_flag(session_key, "property_id", property_id)
+                    state.memory_manager.set_flag(owner_id, "property_id", property_id)
                     if alt_key:
                         state.memory_manager.set_flag(alt_key, "property_id", property_id)
+                    # Deja un contexto explícito para que el LLM conozca el property_id.
+                    state.memory_manager.save(
+                        conversation_id=session_key,
+                        role="system",
+                        content=f"[CTX] property_id={property_id}",
+                        channel="superintendente",
+                    )
+                    if alt_key:
+                        state.memory_manager.save(
+                            conversation_id=alt_key,
+                            role="system",
+                            content=f"[CTX] property_id={property_id}",
+                            channel="superintendente",
+                        )
             except Exception:
                 pass
 
@@ -1149,7 +1231,23 @@ def register_superintendente_routes(app, state) -> None:
             _record_pending_action(state, owner_key, "kb", pending_kb, session_key)
             return {"result": result}
 
-        return {"result": result}
+        response = {"result": result}
+        structured = _pull_recent_reservations(state, session_key, alt_key, owner_id)
+        if structured:
+            csv_payload = _build_reservations_csv(structured)
+            response["structured"] = {
+                "kind": "reservations",
+                "data": structured,
+                "csv": csv_payload,
+                "csv_delimiter": ";",
+            }
+            try:
+                for key in [session_key, alt_key, owner_id]:
+                    if key:
+                        state.memory_manager.clear_flag(key, "superintendente_last_reservations")
+            except Exception:
+                pass
+        return response
 
     @router.post("/sessions")
     async def create_session(payload: CreateSessionRequest, _: None = Depends(_verify_bearer)):
