@@ -1231,15 +1231,16 @@ def register_superintendente_routes(app, state) -> None:
             _record_pending_action(state, owner_key, "kb", pending_kb, session_key)
             return {"result": result}
 
-        response = {"result": result}
         structured = _pull_recent_reservations(state, session_key, alt_key, owner_id)
         if structured:
             csv_payload = _build_reservations_csv(structured)
-            response["structured"] = {
-                "kind": "reservations",
-                "data": structured,
-                "csv": csv_payload,
-                "csv_delimiter": ";",
+            response = {
+                "structured": {
+                    "kind": "reservations",
+                    "data": structured,
+                    "csv": csv_payload,
+                    "csv_delimiter": ";",
+                }
             }
             try:
                 for key in [session_key, alt_key, owner_id]:
@@ -1247,7 +1248,8 @@ def register_superintendente_routes(app, state) -> None:
                         state.memory_manager.clear_flag(key, "superintendente_last_reservations")
             except Exception:
                 pass
-        return response
+            return response
+        return {"result": result}
 
     @router.post("/sessions")
     async def create_session(payload: CreateSessionRequest, _: None = Depends(_verify_bearer)):
