@@ -487,6 +487,8 @@ def register_chatter_routes(app, state) -> None:
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
                 prop_id = row.get("property_id")
+                if property_id is not None and prop_id is None:
+                    continue
                 key = cid
                 content = (row.get("content") or "").strip()
                 if (
