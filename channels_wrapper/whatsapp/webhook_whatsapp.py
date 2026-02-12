@@ -76,18 +76,46 @@ def register_whatsapp_routes(app, state):
 
             text = ""
             instance_number = metadata.get("display_phone_number") or ""
+            instance_phone_id = metadata.get("phone_number_id") or ""
             memory_id = f"{instance_number}:{sender}" if instance_number and sender else sender
-            instance_phone_id = None
             instance_token = None
             if sender and instance_number:
                 try:
-                    from core.instance_context import hydrate_dynamic_context
+                    from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
+
+                    # Guarda identificadores crudos para fallback posterior.
+                    if state.memory_manager:
+                        if instance_number:
+                            state.memory_manager.set_flag(memory_id, "instance_number", instance_number)
+                        if instance_phone_id:
+                            state.memory_manager.set_flag(memory_id, "whatsapp_phone_id", instance_phone_id)
 
                     hydrate_dynamic_context(
                         state=state,
                         chat_id=memory_id,
                         instance_number=instance_number,
+                        instance_phone_id=instance_phone_id or None,
                     )
+                    # Fallback duro: si no quedó instance_id, resolver directo por phone_id.
+                    if instance_phone_id:
+                        mm = state.memory_manager
+                        if mm and not (mm.get_flag(memory_id, "instance_id") or mm.get_flag(memory_id, "instance_hotel_code")):
+                            payload = fetch_instance_by_phone_id(instance_phone_id)
+                            if payload:
+                                inst_id = payload.get("instance_id") or payload.get("instance_url")
+                                if inst_id:
+                                    mm.set_flag(memory_id, "instance_id", inst_id)
+                                    mm.set_flag(memory_id, "instance_hotel_code", inst_id)
+                                inst_url = payload.get("instance_url")
+                                if inst_url:
+                                    mm.set_flag(memory_id, "instance_url", inst_url)
+                                table = _resolve_property_table(payload)
+                                if table:
+                                    mm.set_flag(memory_id, "property_table", table)
+                                for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                                    val = payload.get(key)
+                                    if val:
+                                        mm.set_flag(memory_id, key, val)
                     instance_phone_id = state.memory_manager.get_flag(memory_id, "whatsapp_phone_id")
                     instance_token = state.memory_manager.get_flag(memory_id, "whatsapp_token")
                     if instance_phone_id:
@@ -135,11 +163,24 @@ def register_whatsapp_routes(app, state):
                 state.memory_manager.set_flag(sender, "last_memory_id", memory_id)
 
             try:
-                property_id = state.memory_manager.get_flag(memory_id, "property_id")
-                if property_id is None:
-                    property_id = state.memory_manager.get_flag(sender, "property_id")
-                    if property_id is not None:
-                        state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                property_id = None
+                # Resolución estricta: solo por contexto de instancia.
+                instance_id = (
+                    state.memory_manager.get_flag(memory_id, "instance_id")
+                    or state.memory_manager.get_flag(memory_id, "instance_hotel_code")
+                )
+                if instance_id:
+                    from core.instance_context import fetch_properties_by_code, DEFAULT_PROPERTY_TABLE
+
+                    table = state.memory_manager.get_flag(memory_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                    rows = fetch_properties_by_code(table, str(instance_id)) if table else []
+                    if isinstance(rows, list) and len(rows) == 1:
+                        property_id = rows[0].get("property_id")
+                        if property_id is not None:
+                            state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                # Limpiar cualquier property_id heredado del sender global para evitar mezcla.
+                if sender:
+                    state.memory_manager.clear_flag(sender, "property_id")
                 for key in ("folio_id", "checkin", "checkout"):
                     if state.memory_manager.get_flag(memory_id, key) is None:
                         val = state.memory_manager.get_flag(sender, key)
@@ -147,18 +188,6 @@ def register_whatsapp_routes(app, state):
                             state.memory_manager.set_flag(memory_id, key, val)
             except Exception:
                 property_id = None
-            if property_id is None:
-                try:
-                    hint = state.memory_manager.get_last_property_id_hint(memory_id)
-                    if hint is None:
-                        hint = state.memory_manager.get_last_property_id_hint(sender)
-                    if hint is not None:
-                        property_id = hint
-                        state.memory_manager.set_flag(memory_id, "property_id", property_id)
-                        if sender:
-                            state.memory_manager.set_flag(sender, "property_id", property_id)
-                except Exception:
-                    pass
             if property_id is not None and sender:
                 try:
                     state.memory_manager.set_flag(sender, "property_id", property_id)

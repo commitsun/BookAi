@@ -285,6 +285,39 @@ def get_last_property_id_for_conversation(
         return None
 
 
+def get_last_property_id_for_original_chat(
+    original_chat_id: str,
+    *,
+    table: str = "chat_history",
+    limit: int = 30,
+) -> str | int | None:
+    """
+    Recupera el último property_id asociado a un original_chat_id (ej. instancia:telefono).
+    """
+    try:
+        clean_id = str(original_chat_id).replace("+", "").strip()
+        response = (
+            supabase.table(table)
+            .select("property_id, created_at")
+            .eq("original_chat_id", clean_id)
+            .order("created_at", desc=True)
+            .limit(limit)
+            .execute()
+        )
+        rows = response.data or []
+        if not rows:
+            return None
+        for row in rows:
+            prop = row.get("property_id")
+            if prop is None or str(prop).strip() == "":
+                continue
+            return prop
+        return None
+    except Exception as exc:
+        logging.error("⚠️ Error obteniendo property_id por original_chat_id: %s", exc, exc_info=True)
+        return None
+
+
 # ======================================================
 # 📌 Reservas por chat (persistencia ligera)
 # ======================================================
@@ -446,6 +479,9 @@ def get_active_chat_reservation(
             query = query.eq("property_id", property_id)
         if instance_id:
             query = query.eq("instance_id", instance_id)
+        elif isinstance(chat_id, str) and ":" in chat_id:
+            # Si es chat compuesto y no hay instance_id, filtra por original_chat_id
+            query = query.eq("original_chat_id", chat_id)
         resp = query.execute()
         rows = resp.data or []
     except Exception as exc:

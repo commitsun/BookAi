@@ -152,8 +152,7 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
     log.info("MCP property tool seleccionado: %s", getattr(tool, "name", ""))
     payloads = [
         {"instance_id": instance_id},
-        {"instance_id": instance_id, "hotel_code": str(instance_id)},
-        {"tabla": table, "instance_id": instance_id, "hotel_code": str(instance_id)},
+        {"tabla": table, "instance_id": instance_id},
     ]
     raw = None
     last_exc = None
@@ -190,7 +189,50 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
 
 
 def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
-    payload = {"whatsApp_number": whatsapp_number}
+    normalized = _normalize_phone_number(whatsapp_number or "")
+    payload = {"whatsApp_number": normalized or whatsapp_number}
+    data = _post_json(INSTANCE_LOOKUP_WEBHOOK, payload)
+    if data:
+        return data
+    if supabase:
+        try:
+            candidates = []
+            raw = (whatsapp_number or "").strip()
+            if raw:
+                candidates.append(raw)
+            if normalized:
+                candidates.append(normalized)
+                candidates.append(f"+{normalized}")
+            # Evita duplicados
+            candidates = [c for i, c in enumerate(candidates) if c and c not in candidates[:i]]
+            if candidates:
+                or_filters = ",".join([f"whatsapp_number.eq.{c}" for c in candidates])
+                resp = (
+                    supabase.table("instances")
+                    .select("*")
+                    .or_(or_filters)
+                    .limit(1)
+                    .execute()
+                )
+            else:
+                resp = (
+                    supabase.table("instances")
+                    .select("*")
+                    .eq("whatsapp_number", whatsapp_number)
+                    .limit(1)
+                    .execute()
+                )
+            rows = resp.data or []
+            return rows[0] if rows else {}
+        except Exception as exc:
+            log.warning("Fallback supabase instances (numero) fallo: %s", exc)
+    return {}
+
+
+def fetch_instance_by_phone_id(whatsapp_phone_id: str) -> Dict[str, Any]:
+    if not whatsapp_phone_id:
+        return {}
+    payload = {"whatsapp_phone_id": whatsapp_phone_id}
     data = _post_json(INSTANCE_LOOKUP_WEBHOOK, payload)
     if data:
         return data
@@ -199,14 +241,14 @@ def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
             resp = (
                 supabase.table("instances")
                 .select("*")
-                .eq("whatsapp_number", whatsapp_number)
+                .eq("whatsapp_phone_id", whatsapp_phone_id)
                 .limit(1)
                 .execute()
             )
             rows = resp.data or []
             return rows[0] if rows else {}
         except Exception as exc:
-            log.warning("Fallback supabase instances (numero) fallo: %s", exc)
+            log.warning("Fallback supabase instances (phone_id) fallo: %s", exc)
     return {}
 
 
@@ -257,50 +299,19 @@ def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
 
 
 def fetch_property_by_code(table: str, instance_id: str) -> Dict[str, Any]:
-    if supabase:
-        try:
-            resp = (
-                supabase.table(table)
-                .select("*")
-                .eq("instance_id", instance_id)
-                .limit(1)
-                .execute()
-            )
-            rows = resp.data or []
-            if rows:
-                log.info("✅ Property found in Supabase: table=%s instance_id=%s", table, instance_id)
-                return rows[0]
-        except Exception as exc:
-            log.warning("Fallback supabase property_by_code fallo: %s", exc)
-    payload = {"tabla": table, "instance_id": instance_id}
-    data = _post_json(PROPERTY_BY_CODE_WEBHOOK, payload)
-    if data:
-        return data
+    rows = _fetch_properties_by_code_mcp(table, instance_id)
+    if rows:
+        return rows[0]
     return {}
 
 
 def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any]]:
     """
     Devuelve multiples properties por instance_id si existen.
-    Usa MCP como fuente principal.
+    Usa MCP como fuente única.
     """
     mcp_rows = _fetch_properties_by_code_mcp(table, instance_id)
-    if mcp_rows:
-        return mcp_rows
-    if supabase:
-        try:
-            resp = (
-                supabase.table(table)
-                .select("*")
-                .eq("instance_id", instance_id)
-                .execute()
-            )
-            rows = resp.data or []
-            if rows:
-                return rows
-        except Exception as exc:
-            log.warning("Fallback supabase properties by code fallo: %s", exc)
-    return []
+    return mcp_rows or []
 
 
 def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
@@ -453,6 +464,7 @@ def hydrate_dynamic_context(
     state,
     chat_id: str,
     instance_number: Optional[str] = None,
+    instance_phone_id: Optional[str] = None,
 ) -> None:
     """Fetch instance + property metadata and store into MemoryManager flags."""
     memory_manager = getattr(state, "memory_manager", None)
@@ -461,9 +473,19 @@ def hydrate_dynamic_context(
 
     normalized_number = _normalize_phone_number(instance_number or "")
     cached_number = memory_manager.get_flag(chat_id, "instance_number")
+    cached_phone_id = memory_manager.get_flag(chat_id, "whatsapp_phone_id")
 
     instance_payload: Dict[str, Any] = {}
-    if normalized_number and (cached_number != normalized_number or not memory_manager.get_flag(chat_id, "instance_url")):
+    if instance_phone_id and (cached_phone_id != instance_phone_id or not memory_manager.get_flag(chat_id, "instance_url")):
+        log.info("🔎 Buscando instancia por phone_id=%s chat_id=%s", instance_phone_id, chat_id)
+        instance_payload = fetch_instance_by_phone_id(instance_phone_id)
+        if instance_payload:
+            log.info("✅ Instancia encontrada por phone_id: %s", list(instance_payload.keys()))
+            memory_manager.set_flag(chat_id, "whatsapp_phone_id", instance_phone_id)
+        else:
+            log.warning("⚠️ Sin datos de instancia para phone_id=%s", instance_phone_id)
+
+    if not instance_payload and normalized_number and (cached_number != normalized_number or not memory_manager.get_flag(chat_id, "instance_url")):
         if cached_number and cached_number != normalized_number:
             memory_manager.clear_flag(chat_id, "property_id")
             memory_manager.clear_flag(chat_id, "kb")
@@ -503,21 +525,21 @@ def hydrate_dynamic_context(
         if val:
             memory_manager.set_flag(chat_id, key, val)
 
-    property_id = memory_manager.get_flag(chat_id, "property_id") or _resolve_property_id(instance_payload)
+    # No fijar property_id desde payload de instancia para evitar mezcla entre instancias.
+    # Solo fijar si ya estaba en memoria o si la instancia tiene UNA sola property.
+    property_id = memory_manager.get_flag(chat_id, "property_id")
+    if not property_id:
+        instance_code = instance_payload.get("instance_id") or instance_payload.get("instance_url")
+        if instance_code and property_table:
+            try:
+                rows = fetch_properties_by_code(property_table, str(instance_code))
+            except Exception:
+                rows = []
+            if len(rows) == 1:
+                property_id = rows[0].get("property_id")
     if property_id:
-        should_set_property_id = True
-        if not memory_manager.get_flag(chat_id, "property_id"):
-            instance_code = instance_payload.get("instance_id") or instance_payload.get("instance_url")
-            if instance_code and property_table:
-                try:
-                    rows = fetch_properties_by_code(property_table, str(instance_code))
-                except Exception:
-                    rows = []
-                if len(rows) > 1:
-                    should_set_property_id = False
-        if should_set_property_id:
-            memory_manager.set_flag(chat_id, "property_id", property_id)
-            log.info("🏷️ property_id=%s (chat_id=%s)", property_id, chat_id)
+        memory_manager.set_flag(chat_id, "property_id", property_id)
+        log.info("🏷️ property_id=%s (chat_id=%s)", property_id, chat_id)
 
     if not property_id and property_table:
         property_name = memory_manager.get_flag(chat_id, "property_name")

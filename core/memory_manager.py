@@ -3,7 +3,13 @@ import re
 import logging
 from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
-from core.db import get_conversation_history, save_message, get_last_property_id_for_conversation, upsert_chat_reservation
+from core.db import (
+    get_conversation_history,
+    save_message,
+    get_last_property_id_for_conversation,
+    get_last_property_id_for_original_chat,
+    upsert_chat_reservation,
+)
 
 log = logging.getLogger("MemoryManager")
 
@@ -45,10 +51,48 @@ class MemoryManager:
         return self._normalize_phone(str(conversation_id))
 
     def _resolve_property_id(self, conversation_id: str):
-        return self.get_flag(conversation_id, "property_id") or self.get_flag(
+        prop_id = self.get_flag(conversation_id, "property_id") or self.get_flag(
             conversation_id,
             "pms_property_id",
         )
+        if prop_id is None:
+            return None
+        # Si es un chat compuesto (instancia:telefono) y no hay instance_id, no arrastrar property_id.
+        try:
+            if isinstance(conversation_id, str) and ":" in conversation_id:
+                instance_id = self.get_flag(conversation_id, "instance_id") or self.get_flag(
+                    conversation_id,
+                    "instance_hotel_code",
+                )
+                if not instance_id:
+                    return None
+        except Exception:
+            return None
+        # Guardrail: si tenemos instance_id, valida que el property_id pertenece a esa instancia.
+        try:
+            instance_id = self.get_flag(conversation_id, "instance_id") or self.get_flag(
+                conversation_id,
+                "instance_hotel_code",
+            )
+            if instance_id:
+                from core.instance_context import fetch_property_by_id, DEFAULT_PROPERTY_TABLE
+
+                table = self.get_flag(conversation_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                payload = fetch_property_by_id(str(table), prop_id) if table else {}
+                prop_instance = payload.get("instance_id") or payload.get("instance_url")
+                if prop_instance and str(prop_instance).strip() and str(instance_id).strip():
+                    if str(prop_instance).strip() != str(instance_id).strip():
+                        log.warning(
+                            "⚠️ property_id no coincide con instance_id; ignorando. chat_id=%s property_id=%s instance_id=%s prop_instance=%s",
+                            conversation_id,
+                            prop_id,
+                            instance_id,
+                            prop_instance,
+                        )
+                        return None
+        except Exception:
+            return None
+        return prop_id
 
     def _resolve_history_table(self, conversation_id: str) -> str:
         table = self.get_flag(conversation_id, "history_table")
@@ -59,13 +103,20 @@ class MemoryManager:
         Busca el último property_id en el historial, incluso si no está en memoria.
         """
         try:
-            db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             table = self._resolve_history_table(conversation_id)
-            prop = get_last_property_id_for_conversation(
-                db_conversation_id,
-                table=table,
-                limit=limit,
-            )
+            if isinstance(conversation_id, str) and ":" in conversation_id:
+                prop = get_last_property_id_for_original_chat(
+                    conversation_id,
+                    table=table,
+                    limit=limit,
+                )
+            else:
+                db_conversation_id = self._resolve_db_conversation_id(conversation_id)
+                prop = get_last_property_id_for_conversation(
+                    db_conversation_id,
+                    table=table,
+                    limit=limit,
+                )
             if prop is None:
                 return None
             return int(prop)

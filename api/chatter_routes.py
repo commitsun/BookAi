@@ -726,10 +726,14 @@ def register_chatter_routes(app, state) -> None:
             except Exception:
                 instance_id = None
         if state.memory_manager and property_id is not None:
-            for mem_id in [context_id, chat_id]:
-                if mem_id:
-                    state.memory_manager.set_flag(mem_id, "property_id", property_id)
-        if state.memory_manager:
+            # Si se especifica property_id, forzar contexto al chat_id para evitar
+            # usar instance:telefono de otra property.
+            for mem_id in [chat_id]:
+                state.memory_manager.set_flag(mem_id, "property_id", property_id)
+            ensure_instance_credentials(state.memory_manager, chat_id)
+            # Evita usar context_id de otra instancia al enviar manualmente.
+            context_id = None
+        elif state.memory_manager:
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
         await state.channel_manager.send_message(
@@ -758,7 +762,7 @@ def register_chatter_routes(app, state) -> None:
                     if candidate is not None:
                         property_id = candidate
                         break
-            if property_id is None:
+            if property_id is None and ":" not in str(chat_id):
                 property_id = _resolve_property_id_from_history(chat_id, payload.channel.lower())
             for mem_id in related_ids:
                 if property_id is not None:
