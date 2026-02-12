@@ -234,6 +234,115 @@ def _build_reservations_csv(payload: dict) -> Optional[str]:
     return "\n".join(lines)
 
 
+def _pull_recent_reservation_detail(state, *keys: str, max_age_seconds: int = 180) -> Optional[dict]:
+    if not getattr(state, "memory_manager", None):
+        return None
+    for key in [k for k in keys if k]:
+        try:
+            payload = state.memory_manager.get_flag(key, "superintendente_last_reservation_detail")
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            continue
+        stored_at = payload.get("stored_at")
+        if stored_at:
+            try:
+                ts = datetime.fromisoformat(str(stored_at).replace("Z", ""))
+                if (datetime.utcnow() - ts).total_seconds() > max_age_seconds:
+                    continue
+            except Exception:
+                continue
+        return payload
+    return None
+
+
+def _normalize_reservation_detail(payload: dict) -> Optional[dict]:
+    if not isinstance(payload, dict):
+        return None
+    detail = payload.get("detail") if isinstance(payload.get("detail"), dict) else payload
+    if not isinstance(detail, dict):
+        return None
+    reservations = detail.get("reservations") or detail.get("reservation") or []
+    first_res = reservations[0] if isinstance(reservations, list) and reservations else {}
+    checkin = (first_res.get("checkin") or detail.get("firstCheckin") or detail.get("checkin") or "")
+    checkout = (first_res.get("checkout") or detail.get("lastCheckout") or detail.get("checkout") or "")
+    return {
+        "folio_id": detail.get("id") or detail.get("folio_id") or detail.get("folio"),
+        "folio_code": detail.get("name") or detail.get("folio_code"),
+        "partner_name": detail.get("partnerName") or detail.get("partner_name"),
+        "partner_phone": detail.get("partnerPhone") or detail.get("partner_phone"),
+        "partner_email": detail.get("partnerEmail") or detail.get("partner_email"),
+        "state": detail.get("state") or detail.get("stateCode"),
+        "amount_total": detail.get("amountTotal"),
+        "pending_amount": detail.get("pendingAmount"),
+        "payment_state": detail.get("paymentStateDescription") or detail.get("paymentStateCode"),
+        "checkin": str(checkin).split("T")[0] if checkin else "",
+        "checkout": str(checkout).split("T")[0] if checkout else "",
+        "portal_url": detail.get("portalUrl") or detail.get("portal_url"),
+    }
+
+
+def _build_reservation_detail_csv(detail: dict) -> Optional[str]:
+    if not isinstance(detail, dict):
+        return None
+    header = [
+        "folio_id",
+        "codigo",
+        "nombre",
+        "checkin",
+        "checkout",
+        "estado",
+        "total",
+        "pendiente",
+        "tel",
+        "email",
+        "portal_url",
+    ]
+    row = [
+        detail.get("folio_id"),
+        detail.get("folio_code"),
+        detail.get("partner_name"),
+        detail.get("checkin"),
+        detail.get("checkout"),
+        detail.get("state"),
+        detail.get("amount_total"),
+        detail.get("pending_amount"),
+        detail.get("partner_phone"),
+        detail.get("partner_email"),
+        detail.get("portal_url"),
+    ]
+    return ";".join(header) + "\n" + ";".join(_csv_escape(v) for v in row)
+
+
+def _extract_detail_from_text(text: str) -> Optional[dict]:
+    if not text:
+        return None
+    if text.count("Folio ID:") != 1:
+        return None
+    name = ""
+    try:
+        name = text.split("| Folio ID:")[0].strip()
+    except Exception:
+        name = ""
+    def _m(pattern: str) -> Optional[str]:
+        m = re.search(pattern, text, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    return {
+        "folio_id": _m(r"Folio ID:\s*([A-Za-z0-9]+)"),
+        "folio_code": _m(r"Código:\s*([A-Za-z0-9/\\-]+)"),
+        "partner_name": name or _m(r"Nombre:\s*([^|\\n]+)"),
+        "partner_phone": _m(r"Tel:\s*([^|\\n]+)"),
+        "partner_email": _m(r"Email:\s*([^|\\n]+)"),
+        "state": _m(r"Estado:\s*([^|\\n]+)"),
+        "amount_total": _m(r"Total:\s*([0-9]+(?:[.,][0-9]+)?)"),
+        "pending_amount": _m(r"Pendiente:\s*([0-9]+(?:[.,][0-9]+)?)"),
+        "checkin": _m(r"Check-in:\s*([^|\\n]+)"),
+        "checkout": _m(r"Check-out:\s*([^|\\n]+)"),
+        "portal_url": _m(r"(https?://\\S+)"),
+    }
+
+
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
     return msg
 
@@ -1231,6 +1340,26 @@ def register_superintendente_routes(app, state) -> None:
             _record_pending_action(state, owner_key, "kb", pending_kb, session_key)
             return {"result": result}
 
+        detail_payload = _pull_recent_reservation_detail(state, session_key, alt_key, owner_id)
+        if detail_payload:
+            normalized = _normalize_reservation_detail(detail_payload)
+            csv_payload = _build_reservation_detail_csv(normalized or {})
+            response = {
+                "structured": {
+                    "kind": "reservation_detail",
+                    "data": normalized or detail_payload,
+                    "csv": csv_payload,
+                    "csv_delimiter": ";",
+                }
+            }
+            try:
+                for key in [session_key, alt_key, owner_id]:
+                    if key:
+                        state.memory_manager.clear_flag(key, "superintendente_last_reservation_detail")
+            except Exception:
+                pass
+            return response
+
         structured = _pull_recent_reservations(state, session_key, alt_key, owner_id)
         if structured:
             csv_payload = _build_reservations_csv(structured)
@@ -1249,6 +1378,16 @@ def register_superintendente_routes(app, state) -> None:
             except Exception:
                 pass
             return response
+        fallback_detail = _extract_detail_from_text(result)
+        if fallback_detail:
+            return {
+                "structured": {
+                    "kind": "reservation_detail",
+                    "data": fallback_detail,
+                    "csv": _build_reservation_detail_csv(fallback_detail),
+                    "csv_delimiter": ";",
+                }
+            }
         return {"result": result}
 
     @router.post("/sessions")

@@ -1935,7 +1935,14 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
             parsed = json.loads(raw_response) if isinstance(raw_response, str) else raw_response
             if memory_manager and chat_id and isinstance(parsed, dict):
                 try:
-                    memory_manager.set_flag(chat_id, "superintendente_last_reservation_detail", parsed)
+                    memory_manager.set_flag(
+                        chat_id,
+                        "superintendente_last_reservation_detail",
+                        {
+                            "detail": parsed,
+                            "stored_at": datetime.utcnow().isoformat(),
+                        },
+                    )
                 except Exception:
                     pass
             return json.dumps(parsed, ensure_ascii=False)
