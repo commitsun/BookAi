@@ -601,7 +601,9 @@ def register_chatter_routes(app, state) -> None:
                     "avatar": None,
                     "client_name": client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
-                    "bookai_enabled": bool(bookai_flags.get(cid, True)),
+                    "bookai_enabled": bool(
+                        bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))
+                    ),
                     "unread_count": 0,
                     "needs_action": pending_map.get(cid),
                     "needs_action_type": pending_type_map.get(cid),
@@ -1311,32 +1313,39 @@ def register_chatter_routes(app, state) -> None:
     async def toggle_bookai(
         chat_id: str,
         payload: ToggleBookAiRequest,
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
+        if property_id is None:
+            raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
-        bookai_flags[clean_id] = payload.bookai_enabled
+        bookai_flags[f"{clean_id}:{property_id}"] = payload.bookai_enabled
         state.save_tracking()
 
         await _emit(
             "chat.bookai.toggled",
             {
-                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "rooms": _rooms(clean_id, property_id, "whatsapp"),
                 "chat_id": clean_id,
+                "property_id": property_id,
                 "bookai_enabled": payload.bookai_enabled,
             },
         )
         await _emit(
             "chat.updated",
             {
-                "rooms": _rooms(clean_id, None, "whatsapp"),
+                "rooms": _rooms(clean_id, property_id, "whatsapp"),
                 "chat_id": clean_id,
+                "property_id": property_id,
                 "bookai_enabled": payload.bookai_enabled,
             },
         )
 
         return {
             "chat_id": clean_id,
+            "property_id": property_id,
             "bookai_enabled": payload.bookai_enabled,
         }
 
@@ -1348,6 +1357,8 @@ def register_chatter_routes(app, state) -> None:
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         property_id = _normalize_property_id(property_id)
+        if property_id is None:
+            raise HTTPException(status_code=422, detail="property_id requerido")
         like_pattern = f"%:{clean_id}"
         query = supabase.table("chat_history").update({"read_status": True}).eq(
             "read_status",

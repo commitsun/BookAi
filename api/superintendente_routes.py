@@ -35,6 +35,7 @@ class SuperintendenteContext(BaseModel):
     )
     hotel_name: str = Field(..., description="Nombre del hotel en contexto")
     session_id: Optional[str] = Field(default=None, description="ID de sesión del superintendente")
+    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
 
 class AskSuperintendenteRequest(SuperintendenteContext):
@@ -98,6 +99,21 @@ def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     if legacy:
         return legacy
     raise HTTPException(status_code=422, detail="owner_id requerido")
+
+
+def _normalize_property_id(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _resolve_owner_key(payload: SuperintendenteContext) -> tuple[str, str, Optional[str]]:
+    owner_id = _resolve_owner_id(payload)
+    property_id = _normalize_property_id(payload.property_id)
+    if not property_id:
+        return owner_id, owner_id, None
+    return f"{owner_id}:{property_id}", owner_id, property_id
 
 
 def _normalize_guest_id(guest_id: str | None) -> str:
@@ -584,17 +600,21 @@ def register_superintendente_routes(app, state) -> None:
         if not agent:
             raise HTTPException(status_code=500, detail="Superintendente no disponible")
 
-        owner_id = _resolve_owner_id(payload)
-        session_key = payload.session_id or owner_id
-        alt_key = owner_id if payload.session_id else None
+        owner_key, owner_id, property_id = _resolve_owner_key(payload)
+        session_key = payload.session_id or owner_key
+        alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
         auto_send_wa = False  # En Chatter mantenemos borrador + confirmación.
-        pending_last = _get_last_pending_action(state, owner_id)
+        pending_last = _get_last_pending_action(state, owner_key)
         if state.memory_manager:
             try:
                 state.memory_manager.set_flag(session_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
                 if alt_key:
                     state.memory_manager.set_flag(alt_key, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
+                if property_id:
+                    state.memory_manager.set_flag(session_key, "property_id", property_id)
+                    if alt_key:
+                        state.memory_manager.set_flag(alt_key, "property_id", property_id)
             except Exception:
                 pass
 
@@ -605,7 +625,7 @@ def register_superintendente_routes(app, state) -> None:
             recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
             if not recovered:
                 try:
-                    sessions = _tracking_sessions(state).get(owner_id, {})
+                    sessions = _tracking_sessions(state).get(owner_key, {})
                     for sid in list(sessions.keys())[-5:]:
                         recovered = _recover_wa_drafts_from_memory(state, sid)
                         if recovered:
@@ -662,12 +682,12 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, None)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
-                    _persist_last_pending_wa(state, owner_id, None)
+                    _persist_last_pending_wa(state, owner_key, None)
                 elif pending_type == "kb":
                     _persist_pending_kb(state, session_key, None)
                     if alt_key:
                         _persist_pending_kb(state, alt_key, None)
-                _pop_last_pending_action(state, owner_id)
+                _pop_last_pending_action(state, owner_key)
                 pending_last = None
             if pending_last and looks_like_new_instruction(message) and not _looks_like_adjustment(message):
                 if pending_type == "wa":
@@ -677,12 +697,12 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, None)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
-                    _persist_last_pending_wa(state, owner_id, None)
+                    _persist_last_pending_wa(state, owner_key, None)
                 elif pending_type == "kb":
                     _persist_pending_kb(state, session_key, None)
                     if alt_key:
                         _persist_pending_kb(state, alt_key, None)
-                _pop_last_pending_action(state, owner_id)
+                _pop_last_pending_action(state, owner_key)
                 pending_last = None
         if pending_last:
             pending_type = pending_last.get("type")
@@ -707,17 +727,17 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, None)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, None)
-                    _persist_last_pending_wa(state, owner_id, None)
-                    _pop_trailing_pending_type(state, owner_id, "wa")
+                    _persist_last_pending_wa(state, owner_key, None)
+                    _pop_trailing_pending_type(state, owner_key, "wa")
                 elif pending_type == "kb":
                     _persist_pending_kb(state, session_key, None)
                     if alt_key:
                         _persist_pending_kb(state, alt_key, None)
-                    _pop_trailing_pending_type(state, owner_id, "kb")
+                    _pop_trailing_pending_type(state, owner_key, "kb")
                 elif pending_type == "kb_remove":
-                    _pop_trailing_pending_type(state, owner_id, "kb_remove")
+                    _pop_trailing_pending_type(state, owner_key, "kb_remove")
                 else:
-                    _pop_last_pending_action(state, owner_id)
+                    _pop_last_pending_action(state, owner_key)
             else:
                 if pending_type == "kb":
                     pending_kb = pending_last.get("payload") or _load_pending_kb(state, session_key)
@@ -725,7 +745,7 @@ def register_superintendente_routes(app, state) -> None:
                         pending_kb = _load_pending_kb(state, alt_key)
 
                     if not pending_kb:
-                        _pop_last_pending_action(state, owner_id)
+                        _pop_last_pending_action(state, owner_key)
                         pending_last = None
                         pending_type = None
                     else:
@@ -735,7 +755,7 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_kb(state, session_key, None)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, None)
-                            _pop_trailing_pending_type(state, owner_id, "kb")
+                            _pop_trailing_pending_type(state, owner_key, "kb")
                             return {"result": "✓ Información descartada. No se agregó a la base de conocimientos."}
 
                         kb_response = await state.interno_agent.process_kb_response(
@@ -759,12 +779,12 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_kb(state, session_key, None)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, None)
-                            _pop_trailing_pending_type(state, owner_id, "kb")
+                            _pop_trailing_pending_type(state, owner_key, "kb")
                         else:
                             _persist_pending_kb(state, session_key, pending_kb)
                             if alt_key:
                                 _persist_pending_kb(state, alt_key, pending_kb)
-                            _update_last_pending_action(state, owner_id, pending_kb)
+                            _update_last_pending_action(state, owner_key, pending_kb)
 
                         return {"result": kb_response}
 
@@ -773,12 +793,12 @@ def register_superintendente_routes(app, state) -> None:
                     hotel_name = pending_remove.get("hotel_name") or payload.hotel_name
                     remove_payload = pending_remove.get("payload") if isinstance(pending_remove, dict) else {}
                     if not remove_payload:
-                        _pop_last_pending_action(state, owner_id)
+                        _pop_last_pending_action(state, owner_key)
                         pending_last = None
                         pending_type = None
                     else:
                         if action == "cancel" or _is_short_rejection(message):
-                            _pop_trailing_pending_type(state, owner_id, "kb_remove")
+                            _pop_trailing_pending_type(state, owner_key, "kb_remove")
                             return {"result": "✓ Eliminación cancelada."}
                         if action == "adjust":
                             return {
@@ -796,7 +816,7 @@ def register_superintendente_routes(app, state) -> None:
                             note=note,
                             criteria=criteria,
                         )
-                        _pop_trailing_pending_type(state, owner_id, "kb_remove")
+                        _pop_trailing_pending_type(state, owner_key, "kb_remove")
                         msg = result_obj.get("message") if isinstance(result_obj, dict) else None
                         return {"result": msg or "✅ Eliminación completada."}
 
@@ -810,7 +830,7 @@ def register_superintendente_routes(app, state) -> None:
                             pending_wa = recovered[0] if len(recovered) == 1 else {"drafts": recovered}
 
                     if not pending_wa:
-                        _pop_last_pending_action(state, owner_id)
+                        _pop_last_pending_action(state, owner_key)
                         pending_last = None
                         pending_type = None
                     else:
@@ -821,15 +841,15 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_wa(state, session_key, None)
                             if alt_key:
                                 _persist_pending_wa(state, alt_key, None)
-                            _persist_last_pending_wa(state, owner_id, None)
-                            _pop_trailing_pending_type(state, owner_id, "wa")
+                            _persist_last_pending_wa(state, owner_key, None)
+                            _pop_trailing_pending_type(state, owner_key, "wa")
                             return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
 
                         if action == "confirm" or _is_short_wa_confirmation(message):
                             drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                             drafts = drafts or []
                             if not drafts:
-                                _pop_last_pending_action(state, owner_id)
+                                _pop_last_pending_action(state, owner_key)
                                 return {"result": "⚠️ No hay borrador pendiente para enviar."}
 
                             if state.memory_manager:
@@ -871,8 +891,8 @@ def register_superintendente_routes(app, state) -> None:
                             _persist_pending_wa(state, session_key, None)
                             if alt_key:
                                 _persist_pending_wa(state, alt_key, None)
-                            _persist_last_pending_wa(state, owner_id, None)
-                            _pop_trailing_pending_type(state, owner_id, "wa")
+                            _persist_last_pending_wa(state, owner_key, None)
+                            _pop_trailing_pending_type(state, owner_key, "wa")
                             guest_list = ", ".join(
                                 [_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")]
                             )
@@ -918,9 +938,9 @@ def register_superintendente_routes(app, state) -> None:
                         _persist_pending_wa(state, session_key, pending_payload)
                         if alt_key:
                             _persist_pending_wa(state, alt_key, pending_payload)
-                        _persist_last_pending_wa(state, owner_id, pending_payload)
-                        _update_last_pending_action(state, owner_id, pending_payload)
-                        _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+                        _persist_last_pending_wa(state, owner_key, pending_payload)
+                        _update_last_pending_action(state, owner_key, pending_payload)
+                        _record_pending_action(state, owner_key, "wa", pending_payload, session_key)
                         try:
                             if state.memory_manager and updated:
                                 draft = updated[0]
@@ -952,7 +972,7 @@ def register_superintendente_routes(app, state) -> None:
             recovered = _recover_wa_drafts_from_memory(state, session_key, alt_key)
             if not recovered:
                 try:
-                    sessions = _tracking_sessions(state).get(owner_id, {})
+                    sessions = _tracking_sessions(state).get(owner_key, {})
                     for sid in list(sessions.keys())[-5:]:
                         recovered = _recover_wa_drafts_from_memory(state, sid)
                         if recovered:
@@ -967,8 +987,8 @@ def register_superintendente_routes(app, state) -> None:
                 _persist_pending_wa(state, session_key, pending_payload)
                 if alt_key:
                     _persist_pending_wa(state, alt_key, pending_payload)
-                _persist_last_pending_wa(state, owner_id, pending_payload)
-                _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+                _persist_last_pending_wa(state, owner_key, pending_payload)
+                _record_pending_action(state, owner_key, "wa", pending_payload, session_key)
 
                 drafts = pending_payload.get("drafts") if isinstance(pending_payload, dict) else [pending_payload]
                 drafts = drafts or []
@@ -993,9 +1013,9 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_pending_wa(state, session_key, new_payload)
                     if alt_key:
                         _persist_pending_wa(state, alt_key, new_payload)
-                    _persist_last_pending_wa(state, owner_id, new_payload)
-                    _update_last_pending_action(state, owner_id, new_payload)
-                    _record_pending_action(state, owner_id, "wa", new_payload, session_key)
+                    _persist_last_pending_wa(state, owner_key, new_payload)
+                    _update_last_pending_action(state, owner_key, new_payload)
+                    _record_pending_action(state, owner_key, "wa", new_payload, session_key)
                     try:
                         if state.memory_manager and updated:
                             draft = updated[0]
@@ -1022,7 +1042,7 @@ def register_superintendente_routes(app, state) -> None:
             hotel_name=payload.hotel_name,
             context_window=payload.context_window,
             chat_history=payload.chat_history,
-            session_id=payload.session_id,
+            session_id=payload.session_id or session_key,
         )
 
         wa_drafts = _parse_wa_drafts(result)
@@ -1089,8 +1109,8 @@ def register_superintendente_routes(app, state) -> None:
             _persist_pending_wa(state, session_key, pending_payload)
             if alt_key:
                 _persist_pending_wa(state, alt_key, pending_payload)
-            _persist_last_pending_wa(state, owner_id, pending_payload)
-            _record_pending_action(state, owner_id, "wa", pending_payload, session_key)
+            _persist_last_pending_wa(state, owner_key, pending_payload)
+            _record_pending_action(state, owner_key, "wa", pending_payload, session_key)
             try:
                 if state.memory_manager and wa_drafts:
                     draft = wa_drafts[0]
@@ -1113,7 +1133,7 @@ def register_superintendente_routes(app, state) -> None:
 
         kb_remove_payload = _parse_kb_remove_draft_marker(result)
         if kb_remove_payload:
-            _record_pending_action(state, owner_id, "kb_remove", kb_remove_payload, session_key)
+            _record_pending_action(state, owner_key, "kb_remove", kb_remove_payload, session_key)
             return {"result": result}
 
         kb_payload = _parse_kb_draft_marker(result)
@@ -1126,21 +1146,21 @@ def register_superintendente_routes(app, state) -> None:
             _persist_pending_kb(state, session_key, pending_kb)
             if alt_key:
                 _persist_pending_kb(state, alt_key, pending_kb)
-            _record_pending_action(state, owner_id, "kb", pending_kb, session_key)
+            _record_pending_action(state, owner_key, "kb", pending_kb, session_key)
             return {"result": result}
 
         return {"result": result}
 
     @router.post("/sessions")
     async def create_session(payload: CreateSessionRequest, _: None = Depends(_verify_bearer)):
-        owner_id = _resolve_owner_id(payload)
+        owner_key, owner_id, property_id = _resolve_owner_key(payload)
         session_id = _generate_session_id()
         title = (payload.title or "").strip()
         if not title:
             title = f"Chat {datetime.utcnow().strftime('%Y-%m-%d %H:%M')}"
 
         sessions = _tracking_sessions(state)
-        owner_sessions = sessions.setdefault(owner_id, {})
+        owner_sessions = sessions.setdefault(owner_key, {})
         owner_sessions[session_id] = {
             "title": title,
             "created_at": datetime.utcnow().isoformat(),
@@ -1152,13 +1172,15 @@ def register_superintendente_routes(app, state) -> None:
                 state.memory_manager.set_flag(session_id, "history_table", Settings.SUPERINTENDENTE_HISTORY_TABLE)
                 state.memory_manager.set_flag(session_id, "property_name", payload.hotel_name)
                 state.memory_manager.set_flag(session_id, "superintendente_owner_id", owner_id)
+                if property_id:
+                    state.memory_manager.set_flag(session_id, "property_id", property_id)
                 marker = f"[SUPER_SESSION]|title={title}"
                 state.memory_manager.save(
                     conversation_id=session_id,
                     role="system",
                     content=marker,
                     channel="telegram",
-                    original_chat_id=owner_id,
+                    original_chat_id=owner_key,
                 )
             except Exception as exc:
                 log.warning("No se pudo registrar sesión en historia: %s", exc)
@@ -1168,11 +1190,13 @@ def register_superintendente_routes(app, state) -> None:
     @router.get("/sessions")
     async def list_sessions(
         owner_id: str = Query(...),
+        property_id: Optional[str] = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
         _: None = Depends(_verify_bearer),
     ):
         table = Settings.SUPERINTENDENTE_HISTORY_TABLE
-        sessions = _tracking_sessions(state).get(owner_id, {})
+        owner_key = f"{owner_id}:{property_id.strip()}" if property_id else owner_id
+        sessions = _tracking_sessions(state).get(owner_key, {})
         titles = {sid: meta.get("title") for sid, meta in sessions.items()}
 
         items = []
@@ -1180,7 +1204,7 @@ def register_superintendente_routes(app, state) -> None:
             resp = (
                 state.supabase_client.table(table)
                 .select("conversation_id, content, created_at, original_chat_id")
-                .eq("original_chat_id", owner_id)
+                .eq("original_chat_id", owner_key)
                 .order("created_at", desc=True)
                 .limit(limit * 20)
                 .execute()
