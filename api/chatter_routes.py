@@ -39,6 +39,7 @@ class SendMessageRequest(BaseModel):
 
 class ToggleBookAiRequest(BaseModel):
     bookai_enabled: bool = Field(..., description="Activa o desactiva BookAI para el hilo")
+    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
 
 
 class SendTemplateRequest(BaseModel):
@@ -1317,7 +1318,7 @@ def register_chatter_routes(app, state) -> None:
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
-        property_id = _normalize_property_id(property_id)
+        property_id = _normalize_property_id(property_id) or _normalize_property_id(payload.property_id)
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
