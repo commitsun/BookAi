@@ -725,6 +725,12 @@ def register_chatter_routes(app, state) -> None:
                 instance_id = state.memory_manager.get_flag(context_id or chat_id, "instance_id") or state.memory_manager.get_flag(context_id or chat_id, "instance_hotel_code")
             except Exception:
                 instance_id = None
+        # Si hay context_id compuesto y no viene property_id, es ambiguo en multi-instancia.
+        if property_id is None and context_id and ":" in str(context_id):
+            raise HTTPException(
+                status_code=422,
+                detail="property_id requerido para enviar mensajes en WhatsApp multi-instancia",
+            )
         if state.memory_manager and property_id is not None:
             # Si se especifica property_id, forzar contexto al chat_id para evitar
             # usar instance:telefono de otra property.
