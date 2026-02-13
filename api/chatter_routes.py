@@ -255,68 +255,72 @@ def _join_pending_values(values: List[str]) -> Optional[str]:
     return "\n".join(f"{idx}. {text}" for idx, text in enumerate(clean, start=1))
 
 
+def _latest_pending(escs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
+    if not escs:
+        return None
+    return escs[-1]
+
+
 def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
-        summary = _join_pending_values([(esc.get("guest_message") or "").strip() for esc in escs])
-        if summary:
-            result[guest_id] = summary
+        latest = _latest_pending(escs) or {}
+        question = (latest.get("guest_message") or "").strip()
+        if question:
+            result[guest_id] = question
     return result
 
 
 def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
-        summary = _join_pending_values(
-            [(esc.get("escalation_reason") or esc.get("reason") or "").strip() for esc in escs]
-        )
-        if summary:
-            result[guest_id] = summary
+        latest = _latest_pending(escs) or {}
+        reason = (latest.get("escalation_reason") or latest.get("reason") or "").strip()
+        if reason:
+            result[guest_id] = reason
     return result
 
 
 def _pending_types(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
-        unique_types = []
-        for esc in escs:
-            esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
-            if esc_type and esc_type not in unique_types:
-                unique_types.append(esc_type)
-        if not unique_types:
-            continue
-        result[guest_id] = unique_types[0] if len(unique_types) == 1 else ", ".join(unique_types)
+        latest = _latest_pending(escs) or {}
+        esc_type = (latest.get("escalation_type") or latest.get("type") or "").strip()
+        if esc_type:
+            result[guest_id] = esc_type
     return result
 
 
 def _pending_responses(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
-        summary = _join_pending_values([(esc.get("draft_response") or "").strip() for esc in escs])
-        if summary:
-            result[guest_id] = summary
+        latest = _latest_pending(escs) or {}
+        proposed = (latest.get("draft_response") or "").strip()
+        if proposed:
+            result[guest_id] = proposed
     return result
 
 
 def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, list]:
     result: Dict[str, list] = {}
     for guest_id, escs in grouped.items():
-        merged: list = []
-        for esc in escs:
-            esc_id = str(esc.get("escalation_id") or "").strip()
-            messages = esc.get("messages")
-            if not isinstance(messages, list):
-                continue
-            for msg in messages:
-                if not isinstance(msg, dict):
-                    continue
-                enriched = dict(msg)
-                if esc_id:
-                    enriched["escalation_id"] = esc_id
-                merged.append(enriched)
-        if not merged:
+        latest = _latest_pending(escs) or {}
+        esc_id = str(latest.get("escalation_id") or "").strip()
+        messages = latest.get("messages")
+        if not isinstance(messages, list):
             continue
-        result[guest_id] = sorted(merged, key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min)
+        enriched_messages: list = []
+        for msg in messages:
+            if not isinstance(msg, dict):
+                continue
+            enriched = dict(msg)
+            if esc_id:
+                enriched["escalation_id"] = esc_id
+            enriched_messages.append(enriched)
+        result[guest_id] = sorted(
+            enriched_messages,
+            key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min,
+        )
     return result
 
 
