@@ -1,5 +1,6 @@
 import json
 import logging
+import re
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
 from core.observability import ls_context
@@ -15,6 +16,39 @@ mcp = FastMCP("SupervisorInputAgent")
 
 # ✅ LLM centralizado (usa gpt-4.1 desde .env)
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
+
+
+def _collapse_text(value: str, max_len: int = 240) -> str:
+    text = re.sub(r"\s+", " ", (value or "")).strip()
+    if len(text) <= max_len:
+        return text
+    return text[: max_len - 1].rstrip() + "…"
+
+
+def _extract_reason_from_invalid_json(inner: str) -> str:
+    """
+    Intenta rescatar un motivo útil cuando Interno({...}) viene con JSON inválido.
+    Evita motivos genéricos para que el encargado entienda el problema.
+    """
+    if not inner:
+        return "Mensaje marcado para revisión manual por el supervisor de entrada."
+
+    motivo_patterns = [
+        r'["\']motivo["\']\s*:\s*["\']([^"\']+)["\']',
+        r'["\']prueba["\']\s*:\s*["\']([^"\']+)["\']',
+    ]
+    for pattern in motivo_patterns:
+        match = re.search(pattern, inner, re.IGNORECASE)
+        if match and match.group(1).strip():
+            return _collapse_text(match.group(1).strip())
+
+    cleaned = inner.strip().strip("{}")
+    cleaned = re.sub(r"\b(estado|sugerencia)\b\s*:\s*", "", cleaned, flags=re.IGNORECASE)
+    cleaned = cleaned.strip(" ,")
+    if cleaned:
+        return _collapse_text(cleaned)
+    return "Mensaje marcado para revisión manual por el supervisor de entrada."
+
 
 def _get_prompt() -> str:
     return load_prompt("supervisor_input_prompt.txt")
@@ -122,10 +156,11 @@ class SupervisorInputAgent:
                 except json.JSONDecodeError:
                     # 🔍 Detección textual si el JSON no es válido
                     if "no aprobado" in inner.lower() or "rechazado" in inner.lower():
+                        reason = _extract_reason_from_invalid_json(inner)
                         log.warning("🚨 Escalación textual detectada (sin JSON válido)")
                         return {
                             "estado": "No Aprobado",
-                            "motivo": "Detectado texto de rechazo en salida del modelo",
+                            "motivo": reason,
                             "sugerencia": "Revisión manual por el encargado"
                         }
 
