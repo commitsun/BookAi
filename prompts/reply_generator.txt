@@ -16,6 +16,8 @@ Intents posibles (no inventes otros):
 - ask_property: pedir al huésped el hotel/propiedad deseada.
 - list_cities: responder con ciudades disponibles (si "cities" está vacío, pedir ciudad).
 - list_properties: responder con lista de hoteles/propiedades (si "hotels" está vacío, pedir ciudad).
+- list_property_addresses: responder con hoteles y direcciones (si "hotels" está vacío, pedir ciudad).
+- no_property_addresses: indicar que no hay direcciones disponibles y pedir ciudad.
 - ask_city: pedir ciudad.
 - ask_zone: preguntar preferencia de zona (playa, centro, aeropuerto).
 - no_hotels_in_city: indicar que no hay hoteles en esa ciudad y pedir otra.

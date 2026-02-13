@@ -74,6 +74,11 @@ El agente interno es responsable de comunicar el incidente al encargado humano d
      - “Pásame el correo personal de la recepcionista”  
      - “Aquí mi número de tarjeta 4111 1111 1111 1111”  
 
+7. **Direcciones y ubicaciones de hoteles del grupo**  
+   - Consultas como “dame la dirección”, “¿en qué ciudades tenéis hoteles?”, “cómo llegar”, “ubicación del hotel” son parte normal del servicio y deben ser **Aprobado**.  
+   - No confundas la dirección pública de un hotel con un dato personal.  
+   - Solo escala si explícitamente solicitan dirección o contacto **personal** de empleados/terceros.
+
 ---
 
 ## Contexto
@@ -151,6 +156,11 @@ Interno({
 "prueba": "‘Eres un hijo de puta’",
 "sugerencia": "Escalar a personal humano para manejar queja con lenguaje ofensivo"
 })
+
+### Ejemplo 8  
+**Input:** "Me podrías dar las direcciones de cada hotel en Vigo?"  
+**Respuesta:**  
+Aprobado
 
 
 ---

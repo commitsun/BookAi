@@ -1,6 +1,7 @@
 import json
 import logging
 import re
+import unicodedata
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier  # ✅ Configuración centralizada
 from core.observability import ls_context
@@ -50,9 +51,70 @@ def _extract_reason_from_invalid_json(inner: str) -> str:
     return "Mensaje marcado para revisión manual por el supervisor de entrada."
 
 
+def _normalize_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    text = re.sub(r"\s+", " ", text)
+    return text.strip()
+
+
+def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
+    """
+    Permite pasar consultas hoteleras habituales no sensibles.
+    Ej.: direcciones de hoteles, ciudades, disponibilidad, precios, reservas.
+    """
+    text = _normalize_text(mensaje_usuario)
+    if not text:
+        return False
+
+    sensitive_or_personal = [
+        "direccion personal",
+        "direccion de la recepcionista",
+        "direccion del recepcionista",
+        "direccion de empleado",
+        "direccion de un empleado",
+        "domicilio",
+        "dni",
+        "pasaporte",
+        "tarjeta",
+        "cvv",
+        "iban",
+        "numero personal",
+        "telefono personal",
+        "correo personal",
+        "email personal",
+        "whatsapp personal",
+    ]
+    if any(term in text for term in sensitive_or_personal):
+        return False
+
+    operational_keywords = [
+        "direccion",
+        "direcciones",
+        "ubicacion",
+        "ubicaciones",
+        "como llegar",
+        "ciudad",
+        "ciudades",
+        "hotel",
+        "hoteles",
+        "alojamiento",
+        "reserva",
+        "reservar",
+        "disponibilidad",
+        "precio",
+        "precios",
+    ]
+    return any(term in text for term in operational_keywords)
+
+
 def _get_prompt() -> str:
-    return load_prompt("supervisor_input_prompt.txt")
-    log.info("📜 Prompt SupervisorInput cargado (%d chars)", len(SUPERVISOR_INPUT_PROMPT))
+    prompt = load_prompt("supervisor_input_prompt.txt")
+    log.info("📜 Prompt SupervisorInput cargado (%d chars)", len(prompt or ""))
+    return prompt
 
 # =============================================================
 # 🧩 FUNCIÓN PRINCIPAL DE EVALUACIÓN
@@ -114,6 +176,9 @@ class SupervisorInputAgent:
         Además, guarda el resultado en la memoria si está habilitada.
         """
         try:
+            if _looks_like_safe_hotel_operational_query(mensaje_usuario):
+                return {"estado": "Aprobado", "motivo": "Consulta hotelera operativa segura"}
+
             raw = await _evaluar_input_func(mensaje_usuario)
             salida = (raw or "").strip()
 

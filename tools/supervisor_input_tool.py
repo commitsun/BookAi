@@ -10,6 +10,8 @@ Usa configuración centralizada de modelos LLM desde core/config.py.
 
 import json
 import logging
+import re
+import unicodedata
 from pydantic import BaseModel, Field
 from langchain_core.tools import StructuredTool
 from core.utils.utils_prompt import load_prompt
@@ -37,6 +39,59 @@ _SUP_INPUT_PROMPT = load_prompt("supervisor_input_prompt.txt") or (
 _llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
 
+def _normalize_text(value: str) -> str:
+    text = (value or "").strip().lower()
+    if not text:
+        return ""
+    text = unicodedata.normalize("NFKD", text)
+    text = "".join(ch for ch in text if not unicodedata.combining(ch))
+    return re.sub(r"\s+", " ", text).strip()
+
+
+def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
+    text = _normalize_text(mensaje_usuario)
+    if not text:
+        return False
+
+    sensitive_or_personal = [
+        "direccion personal",
+        "direccion de la recepcionista",
+        "direccion del recepcionista",
+        "direccion de empleado",
+        "domicilio",
+        "dni",
+        "pasaporte",
+        "tarjeta",
+        "cvv",
+        "iban",
+        "numero personal",
+        "telefono personal",
+        "correo personal",
+        "email personal",
+    ]
+    if any(term in text for term in sensitive_or_personal):
+        return False
+
+    operational_keywords = [
+        "direccion",
+        "direcciones",
+        "ubicacion",
+        "ubicaciones",
+        "como llegar",
+        "ciudad",
+        "ciudades",
+        "hotel",
+        "hoteles",
+        "alojamiento",
+        "reserva",
+        "reservar",
+        "disponibilidad",
+        "precio",
+        "precios",
+    ]
+    return any(term in text for term in operational_keywords)
+
+
 # =============================================================
 # 🧩 FUNCIÓN PRINCIPAL
 # =============================================================
@@ -48,6 +103,9 @@ def _run_supervisor_input(mensaje_usuario: str) -> str:
     Si el formato no es válido, se fuerza una escalada con payload estándar.
     """
     try:
+        if _looks_like_safe_hotel_operational_query(mensaje_usuario):
+            return "Aprobado"
+
         res = _llm.invoke([
             {"role": "system", "content": _SUP_INPUT_PROMPT},
             {"role": "user", "content": mensaje_usuario},
