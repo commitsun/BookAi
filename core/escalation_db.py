@@ -116,17 +116,17 @@ def append_escalation_message(
 # ======================================================
 # 🧾 Listar escalaciones pendientes de confirmación
 # ======================================================
-def list_pending_escalations(limit: int = 20):
+def list_pending_escalations(limit: int = 20, property_id=None):
     """Devuelve las últimas escalaciones sin confirmar (manager_confirmed = false)."""
     try:
-        res = (
+        query = (
             supabase.table("escalations")
             .select("*")
             .eq("manager_confirmed", False)
-            .order("timestamp", desc=True)
-            .limit(limit)
-            .execute()
         )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        res = query.order("timestamp", desc=True).limit(limit).execute()
         data = res.data or []
         log.info(f"📋 {len(data)} escalaciones pendientes encontradas.")
         return data
@@ -135,35 +135,70 @@ def list_pending_escalations(limit: int = 20):
         return []
 
 
-# ======================================================
-# 🔎 Última escalación pendiente por chat
-# ======================================================
-def get_latest_pending_escalation(guest_chat_id: str) -> dict | None:
-    """Devuelve la escalación pendiente más reciente para un chat específico."""
+def _pending_chat_candidates(guest_chat_id: str) -> tuple[set[str], str]:
+    raw = str(guest_chat_id or "").strip()
+    clean = "".join(ch for ch in raw if ch.isdigit())
+    tail = raw.split(":")[-1].strip() if ":" in raw else ""
+    candidates = {raw, clean, tail}
+    candidates.discard("")
+    return candidates, clean
+
+
+def list_pending_escalations_for_chat(guest_chat_id: str, limit: int = 20, property_id=None) -> list[dict]:
+    """Devuelve TODAS las escalaciones pendientes para un chat, ordenadas por antigüedad."""
     if not guest_chat_id:
-        return None
+        return []
     try:
-        raw = str(guest_chat_id).strip()
-        clean = "".join(ch for ch in raw if ch.isdigit())
-        tail = raw.split(":")[-1].strip() if ":" in raw else ""
-        candidates = {raw, clean, tail}
-        candidates.discard("")
-        like_clause = ""
-        if clean:
-            like_clause = f"guest_chat_id.like.%:{clean}"
+        candidates, clean = _pending_chat_candidates(guest_chat_id)
+        like_clause = f"guest_chat_id.like.%:{clean}" if clean else ""
         or_filters = [f"guest_chat_id.eq.{cand}" for cand in candidates]
         if like_clause:
             or_filters.append(like_clause)
-
-        res = (
+        if not or_filters:
+            return []
+        query = (
             supabase.table("escalations")
             .select("*")
             .eq("manager_confirmed", False)
             .or_(",".join(or_filters))
-            .order("timestamp", desc=True)
-            .limit(1)
-            .execute()
         )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        res = query.order("timestamp", desc=False).limit(limit).execute()
+        return res.data or []
+    except Exception as e:
+        log.error(
+            "⚠️ Error listando escalaciones pendientes para %s: %s",
+            guest_chat_id,
+            e,
+            exc_info=True,
+        )
+        return []
+
+
+# ======================================================
+# 🔎 Última escalación pendiente por chat
+# ======================================================
+def get_latest_pending_escalation(guest_chat_id: str, property_id=None) -> dict | None:
+    """Devuelve la escalación pendiente más reciente para un chat específico."""
+    if not guest_chat_id:
+        return None
+    try:
+        candidates, clean = _pending_chat_candidates(guest_chat_id)
+        like_clause = f"guest_chat_id.like.%:{clean}" if clean else ""
+        or_filters = [f"guest_chat_id.eq.{cand}" for cand in candidates]
+        if like_clause:
+            or_filters.append(like_clause)
+
+        query = (
+            supabase.table("escalations")
+            .select("*")
+            .eq("manager_confirmed", False)
+            .or_(",".join(or_filters))
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        res = query.order("timestamp", desc=True).limit(1).execute()
         data = res.data or []
         return data[0] if data else None
     except Exception as e:
@@ -174,6 +209,29 @@ def get_latest_pending_escalation(guest_chat_id: str) -> dict | None:
             exc_info=True,
         )
         return None
+
+
+def resolve_pending_escalations_for_chat(
+    guest_chat_id: str,
+    final_response: str | None = None,
+    property_id=None,
+) -> list[str]:
+    """Marca como resueltas TODAS las escalaciones pendientes para un chat."""
+    pending = list_pending_escalations_for_chat(guest_chat_id, limit=100, property_id=property_id)
+    resolved_ids: list[str] = []
+    for esc in pending:
+        escalation_id = str(esc.get("escalation_id") or "").strip()
+        if not escalation_id:
+            continue
+        updates = {
+            "manager_confirmed": True,
+            "sent_to_guest": True,
+        }
+        if final_response:
+            updates["final_response"] = final_response
+        update_escalation(escalation_id, updates)
+        resolved_ids.append(escalation_id)
+    return resolved_ids
 
 
 # ======================================================

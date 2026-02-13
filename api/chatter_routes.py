@@ -13,7 +13,11 @@ from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
 from core.db import supabase
-from core.escalation_db import list_pending_escalations, resolve_latest_pending_escalation
+from core.escalation_db import (
+    list_pending_escalations,
+    list_pending_escalations_for_chat,
+    resolve_pending_escalations_for_chat,
+)
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
@@ -125,6 +129,19 @@ def _normalize_pending_key(guest_id: str) -> str:
     return raw
 
 
+def _normalize_pending_property(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
+def _pending_compound_key(guest_chat_id: str, property_id: Any) -> str:
+    guest_key = _normalize_pending_key(guest_chat_id)
+    prop_key = _normalize_pending_property(property_id)
+    return f"{guest_key}|{prop_key or '*'}"
+
+
 def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     folio_keys = (
         "folio_id",
@@ -214,90 +231,144 @@ def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optiona
     return folio_id, checkin, checkout
 
 
-def _pending_actions(limit: int = 200) -> Dict[str, str]:
-    """Devuelve un mapa guest_chat_id -> texto pendiente."""
-    pending = list_pending_escalations(limit=limit) or []
-    result: Dict[str, str] = {}
+def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) -> Dict[str, List[Dict[str, Any]]]:
+    """Agrupa pendientes por chat+property para evitar cruces entre hoteles."""
+    pending = list_pending_escalations(limit=limit, property_id=property_id) or []
+    grouped: Dict[str, List[Dict[str, Any]]] = {}
     for esc in pending:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
         if not guest_id:
             continue
-        if guest_id in result:
-            continue
-        question = (esc.get("guest_message") or "").strip()
-        if not question:
-            continue
-        result[guest_id] = question
-    return result
+        key = _pending_compound_key(guest_id, esc.get("property_id"))
+        grouped.setdefault(key, []).append(esc)
+    for key, escs in grouped.items():
+        grouped[key] = sorted(escs, key=lambda e: _parse_ts(e.get("timestamp")) or datetime.min)
+    return grouped
 
 
-def _pending_reasons(limit: int = 200) -> Dict[str, str]:
-    """Devuelve un mapa guest_chat_id -> razón de escalación (texto humano)."""
-    pending = list_pending_escalations(limit=limit) or []
+def _join_pending_values(values: List[str]) -> Optional[str]:
+    clean = [v.strip() for v in values if isinstance(v, str) and v.strip()]
+    if not clean:
+        return None
+    if len(clean) == 1:
+        return clean[0]
+    return "\n".join(f"{idx}. {text}" for idx, text in enumerate(clean, start=1))
+
+
+def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
-    for esc in pending:
-        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
-        if not guest_id:
-            continue
-        if guest_id in result:
-            continue
-        reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
-        if not reason:
-            continue
-        result[guest_id] = reason
+    for guest_id, escs in grouped.items():
+        summary = _join_pending_values([(esc.get("guest_message") or "").strip() for esc in escs])
+        if summary:
+            result[guest_id] = summary
     return result
 
 
-def _pending_types(limit: int = 200) -> Dict[str, str]:
-    """Devuelve un mapa guest_chat_id -> tipo de escalación (ej. info_not_found)."""
-    pending = list_pending_escalations(limit=limit) or []
+def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
-    for esc in pending:
-        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
-        if not guest_id:
-            continue
-        if guest_id in result:
-            continue
-        esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
-        if not esc_type:
-            continue
-        result[guest_id] = esc_type
+    for guest_id, escs in grouped.items():
+        summary = _join_pending_values(
+            [(esc.get("escalation_reason") or esc.get("reason") or "").strip() for esc in escs]
+        )
+        if summary:
+            result[guest_id] = summary
     return result
 
 
-def _pending_responses(limit: int = 200) -> Dict[str, str]:
-    """Devuelve un mapa guest_chat_id -> respuesta propuesta."""
-    pending = list_pending_escalations(limit=limit) or []
+def _pending_types(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
-    for esc in pending:
-        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
-        if not guest_id:
+    for guest_id, escs in grouped.items():
+        unique_types = []
+        for esc in escs:
+            esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
+            if esc_type and esc_type not in unique_types:
+                unique_types.append(esc_type)
+        if not unique_types:
             continue
-        if guest_id in result:
-            continue
-        proposed = (esc.get("draft_response") or "").strip()
-        if not proposed:
-            continue
-        result[guest_id] = proposed
+        result[guest_id] = unique_types[0] if len(unique_types) == 1 else ", ".join(unique_types)
     return result
 
 
-def _pending_messages(limit: int = 200) -> Dict[str, list]:
-    """Devuelve un mapa guest_chat_id -> historial de mensajes de escalación."""
-    pending = list_pending_escalations(limit=limit) or []
+def _pending_responses(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
+    result: Dict[str, str] = {}
+    for guest_id, escs in grouped.items():
+        summary = _join_pending_values([(esc.get("draft_response") or "").strip() for esc in escs])
+        if summary:
+            result[guest_id] = summary
+    return result
+
+
+def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, list]:
     result: Dict[str, list] = {}
-    for esc in pending:
-        guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
-        if not guest_id:
+    for guest_id, escs in grouped.items():
+        merged: list = []
+        for esc in escs:
+            esc_id = str(esc.get("escalation_id") or "").strip()
+            messages = esc.get("messages")
+            if not isinstance(messages, list):
+                continue
+            for msg in messages:
+                if not isinstance(msg, dict):
+                    continue
+                enriched = dict(msg)
+                if esc_id:
+                    enriched["escalation_id"] = esc_id
+                merged.append(enriched)
+        if not merged:
             continue
-        if guest_id in result:
-            continue
-        messages = esc.get("messages")
-        if not messages:
-            continue
-        if isinstance(messages, list):
-            result[guest_id] = messages
+        result[guest_id] = sorted(merged, key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min)
     return result
+
+
+def _strip_draft_instruction_block(text: str) -> str:
+    if not text:
+        return text
+    cut_markers = [
+        "📝 *Nuevo borrador generado según tus ajustes:*",
+        "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
+        "Se ha generado el siguiente borrador",
+        "Se ha generado el siguiente borrador según tus indicaciones:",
+        "el texto, escribe tus ajustes directamente.",
+        "✏️ Si deseas modificar",
+        "✏️ Si deseas más cambios",
+        "✅ Si estás conforme",
+        "Si deseas modificar el texto",
+        "Si deseas más cambios",
+        "responde con 'OK' para enviarlo al huésped",
+    ]
+    for marker in cut_markers:
+        if marker in text:
+            parts = text.split(marker, 1)
+            if marker.startswith("📝") or marker.startswith("Se ha generado"):
+                text = parts[1].strip() if len(parts) > 1 else ""
+            else:
+                text = parts[0].strip()
+    lines = []
+    for ln in text.splitlines():
+        stripped = ln.strip()
+        if not stripped:
+            continue
+        if stripped.lower().startswith("si deseas"):
+            continue
+        if stripped.lower().startswith("si estás conforme"):
+            continue
+        lines.append(stripped)
+    return "\n".join(lines).strip()
+
+
+def _pending_escalations_summary(escalations: List[Dict[str, Any]]) -> str:
+    if not escalations:
+        return "No hay escalaciones pendientes."
+    lines = []
+    for idx, esc in enumerate(escalations, start=1):
+        esc_id = str(esc.get("escalation_id") or "").strip() or f"esc_{idx}"
+        guest_message = (esc.get("guest_message") or "").strip() or "No disponible"
+        esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip() or "No disponible"
+        reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip() or "No disponible"
+        lines.append(
+            f"{idx}. [{esc_id}] Tipo: {esc_type} | Motivo: {reason} | Mensaje huésped: {guest_message}"
+        )
+    return "\n".join(lines)
 
 
 def _bookai_settings(state) -> Dict[str, bool]:
@@ -512,11 +583,12 @@ def register_chatter_routes(app, state) -> None:
             offset += batch_size
 
         page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
-        pending_map = _pending_actions()
-        pending_reason_map = _pending_reasons()
-        pending_type_map = _pending_types()
-        proposed_map = _pending_responses()
-        pending_messages_map = _pending_messages()
+        pending_grouped = _pending_by_chat(property_id=property_id)
+        pending_map = _pending_actions(pending_grouped)
+        pending_reason_map = _pending_reasons(pending_grouped)
+        pending_type_map = _pending_types(pending_grouped)
+        proposed_map = _pending_responses(pending_grouped)
+        pending_messages_map = _pending_messages(pending_grouped)
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
         if page_keys:
@@ -609,12 +681,12 @@ def register_chatter_routes(app, state) -> None:
                         bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))
                     ),
                     "unread_count": 0,
-                    "needs_action": pending_map.get(cid),
-                    "needs_action_type": pending_type_map.get(cid),
-                    "needs_action_reason": pending_reason_map.get(cid),
-                    "proposed_response": proposed_map.get(cid),
-                    "is_final_response": bool(proposed_map.get(cid)),
-                    "escalation_messages": pending_messages_map.get(cid),
+                    "needs_action": pending_map.get(_pending_compound_key(cid, prop_id)),
+                    "needs_action_type": pending_type_map.get(_pending_compound_key(cid, prop_id)),
+                    "needs_action_reason": pending_reason_map.get(_pending_compound_key(cid, prop_id)),
+                    "proposed_response": proposed_map.get(_pending_compound_key(cid, prop_id)),
+                    "is_final_response": bool(proposed_map.get(_pending_compound_key(cid, prop_id))),
+                    "escalation_messages": pending_messages_map.get(_pending_compound_key(cid, prop_id)),
                     "folio_id": folio_id,
                 }
             )
@@ -819,18 +891,26 @@ def register_chatter_routes(app, state) -> None:
 
         rooms = _rooms(chat_id, property_id, payload.channel.lower())
         try:
-            resolved_id = resolve_latest_pending_escalation(chat_id, final_response=payload.message)
-            if resolved_id:
-                log.info("Escalación %s resuelta automáticamente tras enviar mensaje.", resolved_id)
-                await _emit(
-                    "escalation.resolved",
-                    {
-                        "rooms": rooms,
-                        "chat_id": chat_id,
-                        "escalation_id": resolved_id,
-                        "final_response": payload.message,
-                    },
+            resolved_ids = resolve_pending_escalations_for_chat(
+                chat_id,
+                final_response=payload.message,
+                property_id=property_id,
+            )
+            if resolved_ids:
+                log.info(
+                    "Escalaciones %s resueltas automáticamente tras enviar mensaje.",
+                    ",".join(resolved_ids),
                 )
+                for resolved_id in resolved_ids:
+                    await _emit(
+                        "escalation.resolved",
+                        {
+                            "rooms": rooms,
+                            "chat_id": chat_id,
+                            "escalation_id": resolved_id,
+                            "final_response": payload.message,
+                        },
+                    )
                 await _emit(
                     "chat.updated",
                     {
@@ -846,7 +926,7 @@ def register_chatter_routes(app, state) -> None:
                     },
                 )
         except Exception as exc:
-            log.warning("No se pudo auto-resolver escalación para %s: %s", chat_id, exc)
+            log.warning("No se pudo auto-resolver escalaciones para %s: %s", chat_id, exc)
 
         now_iso = datetime.now(timezone.utc).isoformat()
         await _emit(
@@ -1017,19 +1097,30 @@ def register_chatter_routes(app, state) -> None:
     async def escalation_chat(
         chat_id: str,
         payload: EscalationChatRequest,
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         message = (payload.message or "").strip()
         if not message:
             raise HTTPException(status_code=422, detail="message requerida")
+        property_id = _normalize_property_id(property_id)
+        if property_id is None:
+            property_id = _resolve_property_id_from_history(clean_id)
 
-        from core.escalation_db import get_latest_pending_escalation, append_escalation_message
+        from core.escalation_db import append_escalation_message
 
-        esc = get_latest_pending_escalation(clean_id)
-        if not esc:
+        pending_escalations = list_pending_escalations_for_chat(
+            clean_id,
+            limit=100,
+            property_id=property_id,
+        )
+        if not pending_escalations:
             raise HTTPException(status_code=404, detail="No hay escalación pendiente")
 
+        # Trabajamos sobre la más reciente para el hilo de chat interno,
+        # pero usamos TODAS las pendientes para contexto y borradores.
+        esc = pending_escalations[-1]
         escalation_id = str(esc.get("escalation_id") or "").strip()
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
@@ -1093,10 +1184,11 @@ def register_chatter_routes(app, state) -> None:
 
         intent = _classify_operator_intent(message)
         log.info(
-            "Escalation-chat intent=%s chat_id=%s escalation_id=%s message=%s",
+            "Escalation-chat intent=%s chat_id=%s escalation_id=%s pending_count=%s message=%s",
             intent,
             clean_id,
             escalation_id,
+            len(pending_escalations),
             message,
         )
         wants_draft = intent == "draft"
@@ -1106,85 +1198,63 @@ def register_chatter_routes(app, state) -> None:
             from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
             from core.message_utils import extract_clean_draft
 
-            if escalation_id not in ESCALATIONS_STORE:
-                ESCALATIONS_STORE[escalation_id] = Escalation(
-                    escalation_id=escalation_id,
-                    guest_chat_id=clean_id,
-                    guest_message=guest_message,
-                    escalation_type=esc_type or "manual",
-                    escalation_reason=reason,
-                    context=context,
-                    timestamp=str(esc.get("timestamp") or ""),
-                    draft_response=draft_response or None,
-                    manager_confirmed=bool(esc.get("manager_confirmed") or False),
-                    final_response=(esc.get("final_response") or None),
-                    sent_to_guest=bool(esc.get("sent_to_guest") or False),
+            draft_sections: List[str] = []
+            for idx, pending in enumerate(pending_escalations, start=1):
+                pending_id = str(pending.get("escalation_id") or "").strip()
+                if not pending_id:
+                    continue
+                pending_guest_message = (pending.get("guest_message") or "").strip()
+                pending_type = (pending.get("escalation_type") or pending.get("type") or "").strip()
+                pending_reason = (pending.get("escalation_reason") or pending.get("reason") or "").strip()
+                pending_context = (pending.get("context") or "").strip()
+                pending_draft = (pending.get("draft_response") or "").strip()
+
+                if pending_id not in ESCALATIONS_STORE:
+                    ESCALATIONS_STORE[pending_id] = Escalation(
+                        escalation_id=pending_id,
+                        guest_chat_id=clean_id,
+                        guest_message=pending_guest_message,
+                        escalation_type=pending_type or "manual",
+                        escalation_reason=pending_reason,
+                        context=pending_context,
+                        timestamp=str(pending.get("timestamp") or ""),
+                        draft_response=pending_draft or None,
+                        manager_confirmed=bool(pending.get("manager_confirmed") or False),
+                        final_response=(pending.get("final_response") or None),
+                        sent_to_guest=bool(pending.get("sent_to_guest") or False),
+                    )
+
+                base_response = pending_draft or pending_guest_message or ""
+                if base_response:
+                    ESCALATIONS_STORE[pending_id].draft_response = base_response
+
+                raw_borrador = (
+                    generar_borrador(
+                        escalation_id=pending_id,
+                        manager_response=base_response,
+                        adjustment=message,
+                    )
+                    or ""
+                ).strip()
+                clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
+                clean_draft = _strip_draft_instruction_block(clean_draft)
+                if not clean_draft:
+                    clean_draft = "No tengo suficiente información para generar un borrador."
+
+                draft_sections.append(f"{idx}. [{pending_id}] {clean_draft}")
+
+            draft_response = "\n\n".join(draft_sections).strip()
+            if first_interaction and len(pending_escalations) > 1:
+                ai_message = (
+                    f"Hay {len(pending_escalations)} escalaciones pendientes. "
+                    "Resumen:\n"
+                    f"{_pending_escalations_summary(pending_escalations)}"
                 )
-
-            base_response = draft_response or guest_message or ""
-            if base_response:
-                ESCALATIONS_STORE[escalation_id].draft_response = base_response
-
-            raw_borrador = (generar_borrador(
-                escalation_id=escalation_id,
-                manager_response=base_response,
-                adjustment=message,
-            ) or "").strip()
-
-            def _strip_instruction_block(text: str) -> str:
-                if not text:
-                    return text
-                cut_markers = [
-                    "📝 *Nuevo borrador generado según tus ajustes:*",
-                    "📝 *BORRADOR DE RESPUESTA PROPUESTO:*",
-                    "Se ha generado el siguiente borrador",
-                    "Se ha generado el siguiente borrador según tus indicaciones:",
-                    "el texto, escribe tus ajustes directamente.",
-                    "✏️ Si deseas modificar",
-                    "✏️ Si deseas más cambios",
-                    "✅ Si estás conforme",
-                    "Si deseas modificar el texto",
-                    "Si deseas más cambios",
-                    "responde con 'OK' para enviarlo al huésped",
-                ]
-                for marker in cut_markers:
-                    if marker in text:
-                        parts = text.split(marker, 1)
-                        if marker.startswith("📝") or marker.startswith("Se ha generado"):
-                            text = parts[1].strip() if len(parts) > 1 else ""
-                        else:
-                            text = parts[0].strip()
-                lines = []
-                for ln in text.splitlines():
-                    stripped = ln.strip()
-                    if not stripped:
-                        continue
-                    if stripped.lower().startswith("si deseas"):
-                        continue
-                    if stripped.lower().startswith("si estás conforme"):
-                        continue
-                    lines.append(stripped)
-                return "\n".join(lines).strip()
-
-            clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
-            clean_draft = _strip_instruction_block(clean_draft)
-            if not clean_draft:
-                clean_draft = "No tengo suficiente información para generar un borrador."
-
-            def _brief_escalation_summary(reason: str) -> str:
+            elif first_interaction:
                 base_reason = reason or "Sin motivo registrado"
-                return f"Motivo de la escalación: {base_reason}."
-
-            if first_interaction:
-                ai_message = _brief_escalation_summary(reason)
+                ai_message = f"Motivo de la escalación: {base_reason}."
             else:
                 ai_message = ""
-
-            draft_response = (
-                (ESCALATIONS_STORE.get(escalation_id).draft_response or "").strip()
-                if ESCALATIONS_STORE.get(escalation_id)
-                else draft_response
-            )
         else:
             system_prompt = (
                 "Eres un asistente interno para operadores de hotel. "
@@ -1193,7 +1263,9 @@ def register_chatter_routes(app, state) -> None:
                 "Si falta información, indícalo."
             )
             user_prompt = (
-                "Contexto de escalación:\n"
+                "Contexto de escalaciones pendientes:\n"
+                f"{_pending_escalations_summary(pending_escalations)}\n\n"
+                "Escalación activa:\n"
                 f"- Mensaje del huésped: {guest_message or 'No disponible'}\n"
                 f"- Tipo: {esc_type or 'No disponible'}\n"
                 f"- Motivo: {reason or 'No disponible'}\n"
@@ -1229,6 +1301,7 @@ def register_chatter_routes(app, state) -> None:
                 "escalation_id": escalation_id,
                 "messages": messages,
                 "ai_message": ai_message,
+                "pending_escalations_count": len(pending_escalations),
             },
         )
         await _emit(
@@ -1240,6 +1313,7 @@ def register_chatter_routes(app, state) -> None:
                 "messages": messages,
                 "ai_message": ai_message,
                 "draft_response": draft_response or None,
+                "pending_escalations_count": len(pending_escalations),
             },
         )
 
@@ -1264,6 +1338,12 @@ def register_chatter_routes(app, state) -> None:
         return {
             "chat_id": clean_id,
             "escalation_id": escalation_id,
+            "escalation_ids": [
+                str(e.get("escalation_id") or "").strip()
+                for e in pending_escalations
+                if str(e.get("escalation_id") or "").strip()
+            ],
+            "pending_escalations_count": len(pending_escalations),
             "ai_message": ai_message,
             "messages": messages,
             "proposed_response": proposed_response,
@@ -1274,43 +1354,85 @@ def register_chatter_routes(app, state) -> None:
     async def get_escalation_chat(
         chat_id: str,
         escalation_id: Optional[str] = Query(default=None),
+        property_id: Optional[str] = Query(default=None),
         _: None = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
+        if property_id is None:
+            property_id = _resolve_property_id_from_history(clean_id)
 
-        from core.escalation_db import (
-            get_escalation,
-            get_latest_pending_escalation,
-            get_escalation_messages,
+        pending_escalations = list_pending_escalations_for_chat(
+            clean_id,
+            limit=100,
+            property_id=property_id,
         )
-
-        esc = get_latest_pending_escalation(clean_id)
-        # Si el frontend envía un escalation_id distinto al pendiente, no devolvemos su historial.
-        if not esc:
+        if not pending_escalations:
             raise HTTPException(status_code=404, detail="No hay escalación pendiente")
-        pending_id = str(esc.get("escalation_id") or "").strip()
-        if escalation_id and pending_id and escalation_id.strip() != pending_id:
+
+        pending_ids = [
+            str(e.get("escalation_id") or "").strip()
+            for e in pending_escalations
+            if str(e.get("escalation_id") or "").strip()
+        ]
+        active_escalation = pending_escalations[-1]
+        active_id = str(active_escalation.get("escalation_id") or "").strip()
+
+        if escalation_id and escalation_id.strip() and escalation_id.strip() not in pending_ids:
             return {
                 "chat_id": clean_id,
-                "escalation_id": pending_id,
+                "escalation_id": active_id,
+                "escalation_ids": pending_ids,
+                "pending_escalations_count": len(pending_ids),
                 "messages": [],
-                "proposed_response": (esc.get("draft_response") or "").strip() or None,
-                "is_final_response": bool((esc.get("draft_response") or "").strip()),
+                "proposed_response": (active_escalation.get("draft_response") or "").strip() or None,
+                "is_final_response": bool((active_escalation.get("draft_response") or "").strip()),
             }
 
-        escalation_id = pending_id or str(escalation_id or "").strip()
-        if not escalation_id:
-            raise HTTPException(status_code=404, detail="Escalación inválida")
+        if escalation_id and escalation_id.strip():
+            target_id = escalation_id.strip()
+            target = next((e for e in pending_escalations if str(e.get("escalation_id") or "").strip() == target_id), None)
+            if not target:
+                raise HTTPException(status_code=404, detail="Escalación inválida")
+            draft_response = (target.get("draft_response") or "").strip()
+            messages = target.get("messages") if isinstance(target.get("messages"), list) else []
+            return {
+                "chat_id": clean_id,
+                "escalation_id": target_id,
+                "escalation_ids": pending_ids,
+                "pending_escalations_count": len(pending_ids),
+                "messages": messages,
+                "proposed_response": draft_response or None,
+                "is_final_response": bool(draft_response),
+                "pending_summary": _pending_escalations_summary(pending_escalations),
+            }
 
-        draft_response = (esc.get("draft_response") or "").strip()
-        messages = get_escalation_messages(escalation_id)
+        merged_messages: List[Dict[str, Any]] = []
+        draft_parts: List[str] = []
+        for idx, esc in enumerate(pending_escalations, start=1):
+            esc_id = str(esc.get("escalation_id") or "").strip()
+            for msg in esc.get("messages") or []:
+                if not isinstance(msg, dict):
+                    continue
+                enriched = dict(msg)
+                if esc_id:
+                    enriched["escalation_id"] = esc_id
+                merged_messages.append(enriched)
+            draft = (esc.get("draft_response") or "").strip()
+            if draft:
+                draft_parts.append(f"{idx}. [{esc_id}] {draft}")
+        merged_messages = sorted(merged_messages, key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min)
+        merged_draft = "\n\n".join(draft_parts).strip()
 
         return {
             "chat_id": clean_id,
-            "escalation_id": escalation_id,
-            "messages": messages,
-            "proposed_response": draft_response or None,
-            "is_final_response": bool(draft_response),
+            "escalation_id": active_id,
+            "escalation_ids": pending_ids,
+            "pending_escalations_count": len(pending_ids),
+            "messages": merged_messages,
+            "proposed_response": merged_draft or None,
+            "is_final_response": bool(merged_draft),
+            "pending_summary": _pending_escalations_summary(pending_escalations),
         }
 
     @router.patch("/chats/{chat_id}/bookai")

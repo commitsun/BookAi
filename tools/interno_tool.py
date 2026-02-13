@@ -41,6 +41,7 @@ class Escalation:
     escalation_reason: str
     context: str
     timestamp: str
+    property_id: Optional[str | int] = None
     draft_response: Optional[str] = None
     manager_confirmed: bool = False
     final_response: Optional[str] = None
@@ -227,6 +228,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             escalation_reason=clean_reason,
             context=context_to_store,
             timestamp=datetime.utcnow().isoformat(),
+            property_id=_resolve_property_id(guest_chat_id),
         )
         ESCALATIONS_STORE[escalation_id] = esc
         save_escalation(vars(esc))
