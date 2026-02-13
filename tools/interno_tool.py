@@ -92,6 +92,22 @@ def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
 
 
+def _sanitize_guest_text(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    lines = []
+    for line in raw.splitlines():
+        current = line.strip()
+        current = re.sub(r"^\s*\d+\.\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
+        current = re.sub(r"^\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
+        current = re.sub(r"\s*\[esc_[^\]]+\]\s*", " ", current, flags=re.IGNORECASE)
+        current = re.sub(r"\s{2,}", " ", current).strip()
+        if current:
+            lines.append(current)
+    return "\n".join(lines).strip()
+
+
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     if not _MEMORY_MANAGER or not guest_chat_id:
         return None
@@ -449,7 +465,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
     # ✅ Caso 2: confirmado → envío final
     if confirmed:
-        final_text = (esc.draft_response or adjustments or "").strip()
+        final_text = _sanitize_guest_text(esc.draft_response or adjustments or "")
         if not final_text:
             return "⚠️ No hay texto final disponible para enviar."
 

@@ -231,6 +231,25 @@ def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optiona
     return folio_id, checkin, checkout
 
 
+def _sanitize_guest_outgoing_text(text: str) -> str:
+    """Elimina marcadores internos (p.ej. [esc_xxx]) antes de enviar al huésped."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    clean_lines: List[str] = []
+    for line in raw.splitlines():
+        current = line.strip()
+        # Quita prefijo tipo: "1. [esc_...]" o "[esc_...]"
+        current = re.sub(r"^\s*\d+\.\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
+        current = re.sub(r"^\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
+        # Si no venía con índice, elimina marcadores internos residuales.
+        current = re.sub(r"\s*\[esc_[^\]]+\]\s*", " ", current, flags=re.IGNORECASE)
+        current = re.sub(r"\s{2,}", " ", current).strip()
+        if current:
+            clean_lines.append(current)
+    return "\n".join(clean_lines).strip()
+
+
 def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Agrupa pendientes por chat+property para evitar cruces entre hoteles."""
     pending = list_pending_escalations(limit=limit, property_id=property_id) or []
@@ -801,6 +820,9 @@ def register_chatter_routes(app, state) -> None:
             raise HTTPException(status_code=422, detail="Canal no soportado")
         if not payload.message.strip():
             raise HTTPException(status_code=422, detail="Mensaje vacio")
+        outgoing_message = _sanitize_guest_outgoing_text(payload.message)
+        if not outgoing_message:
+            raise HTTPException(status_code=422, detail="Mensaje vacio tras limpieza")
 
         context_id = _resolve_whatsapp_context_id(state, chat_id)
         instance_id = None
@@ -828,7 +850,7 @@ def register_chatter_routes(app, state) -> None:
 
         await state.channel_manager.send_message(
             chat_id,
-            payload.message,
+            outgoing_message,
             channel="whatsapp",
             context_id=context_id,
         )
@@ -866,7 +888,7 @@ def register_chatter_routes(app, state) -> None:
             state.memory_manager.save(
                 chat_id,
                 role,
-                payload.message,
+                outgoing_message,
                 user_id=payload.user_id if role == "user" else None,
                 user_first_name=payload.user_first_name if role == "user" else None,
                 user_last_name=payload.user_last_name if role == "user" else None,
@@ -881,7 +903,7 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.add_runtime_message(
                     mem_id,
                     role,
-                    payload.message,
+                    outgoing_message,
                     channel=payload.channel.lower(),
                     original_chat_id=chat_id,
                     bypass_force_guest_role=role == "user",
@@ -897,7 +919,7 @@ def register_chatter_routes(app, state) -> None:
         try:
             resolved_ids = resolve_pending_escalations_for_chat(
                 chat_id,
-                final_response=payload.message,
+                final_response=outgoing_message,
                 property_id=property_id,
             )
             if resolved_ids:
@@ -912,7 +934,7 @@ def register_chatter_routes(app, state) -> None:
                             "rooms": rooms,
                             "chat_id": chat_id,
                             "escalation_id": resolved_id,
-                            "final_response": payload.message,
+                            "final_response": outgoing_message,
                         },
                     )
                 await _emit(
@@ -941,7 +963,7 @@ def register_chatter_routes(app, state) -> None:
                 "property_id": property_id,
                 "channel": payload.channel.lower(),
                 "sender": role,
-                "message": payload.message,
+                "message": outgoing_message,
                 "created_at": now_iso,
             },
         )
@@ -952,7 +974,7 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "property_id": property_id,
                 "channel": payload.channel.lower(),
-                "last_message": payload.message,
+                "last_message": outgoing_message,
                 "last_message_at": now_iso,
             },
         )
