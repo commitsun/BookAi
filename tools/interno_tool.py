@@ -21,7 +21,7 @@ from langchain_core.tools import tool
 import html
 
 # 🧩 Core imports
-from core.escalation_db import save_escalation, update_escalation
+from core.escalation_db import save_escalation, update_escalation, get_latest_pending_escalation
 from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
 from core.socket_manager import emit_event
@@ -220,6 +220,51 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
         }
         context_to_store = clean_context if clean_context and clean_context not in generic_contexts else clean_reason
 
+        property_id = _resolve_property_id(guest_chat_id)
+        # Evita escalaciones duplicadas en cascada para el mismo chat/property cuando falta info.
+        existing_pending = get_latest_pending_escalation(guest_chat_id, property_id=property_id)
+        existing_id = str(existing_pending.get("escalation_id") or "").strip() if existing_pending else ""
+        existing_type = (
+            (existing_pending.get("escalation_type") or existing_pending.get("type") or "").strip()
+            if existing_pending
+            else ""
+        )
+        if (
+            existing_id
+            and existing_id != escalation_id
+            and escalation_type == "info_not_found"
+            and existing_type in {"info_not_found", "manual"}
+        ):
+            update_escalation(
+                existing_id,
+                {
+                    "guest_message": guest_message,
+                    "escalation_type": escalation_type,
+                    "escalation_reason": clean_reason,
+                    "context": context_to_store,
+                    "timestamp": datetime.utcnow().isoformat(),
+                    "property_id": property_id,
+                },
+            )
+            try:
+                existing = ESCALATIONS_STORE.get(existing_id)
+                if existing:
+                    existing.guest_message = guest_message
+                    existing.escalation_type = escalation_type
+                    existing.escalation_reason = clean_reason
+                    existing.context = context_to_store
+                    existing.timestamp = datetime.utcnow().isoformat()
+                    existing.property_id = property_id
+            except Exception:
+                pass
+            log.info(
+                "♻️ Reutilizada escalación pendiente %s para chat=%s property_id=%s",
+                existing_id,
+                guest_chat_id,
+                property_id,
+            )
+            return f"Escalación {existing_id} ya pendiente; actualizada con el último contexto."
+
         esc = Escalation(
             escalation_id=escalation_id,
             guest_chat_id=guest_chat_id,
@@ -228,7 +273,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             escalation_reason=clean_reason,
             context=context_to_store,
             timestamp=datetime.utcnow().isoformat(),
-            property_id=_resolve_property_id(guest_chat_id),
+            property_id=property_id,
         )
         ESCALATIONS_STORE[escalation_id] = esc
         save_escalation(vars(esc))
