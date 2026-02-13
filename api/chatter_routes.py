@@ -568,9 +568,12 @@ def register_chatter_routes(app, state) -> None:
                     room_number = memory_manager.get_flag(cid, "room_number")
                 except Exception:
                     pass
-            # Siempre prioriza la reserva más próxima por checkin para la property actual.
+            # Siempre prioriza la reserva más próxima por checkin.
             try:
-                active = get_active_chat_reservation(chat_id=cid, property_id=prop_id)
+                # Si el endpoint viene filtrado por property_id, respeta ese filtro.
+                # En listado global, usa todas las reservas del chat y prioriza la más próxima.
+                reservation_property_filter = property_id if property_id is not None else None
+                active = get_active_chat_reservation(chat_id=cid, property_id=reservation_property_filter)
                 if active:
                     folio_id = active.get("folio_id") or folio_id
                     reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else reservation_locator
