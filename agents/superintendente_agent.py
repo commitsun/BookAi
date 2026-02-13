@@ -170,6 +170,9 @@ class SuperintendenteAgent:
                     limit=context_window,
                 )
             chat_history = chat_history or []
+            user_input_for_agent = await self._rewrite_followup_with_context(user_input, chat_history)
+            if user_input_for_agent != user_input:
+                log.info("Superintendente follow-up reinterpretado: '%s' -> '%s'", user_input, user_input_for_agent)
 
             tools = await self._create_tools(resolved_hotel_name, convo_id)
 
@@ -203,7 +206,7 @@ class SuperintendenteAgent:
 
             result = await executor.ainvoke(
                 input={
-                    "input": user_input,
+                    "input": user_input_for_agent,
                     "chat_history": chat_history,
                 }
             )
@@ -282,6 +285,73 @@ class SuperintendenteAgent:
         except Exception as exc:
             log.error("Error en SuperintendenteAgent: %s", exc, exc_info=True)
             raise
+
+    def _is_followup_candidate(self, text: str) -> bool:
+        clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
+        if not clean:
+            return False
+        tokens = [t for t in re.findall(r"[a-záéíóúñ0-9]+", clean) if t]
+        if not tokens or len(tokens) > 4:
+            return False
+        explicit = {
+            "resumen",
+            "summary",
+            "sintesis",
+            "síntesis",
+            "original",
+            "historial",
+            "completo",
+            "raw",
+            "crudo",
+            "mensajes",
+        }
+        return clean in explicit
+
+    async def _rewrite_followup_with_context(self, user_input: str, chat_history: List[Any]) -> str:
+        raw = (user_input or "").strip()
+        if not raw or not self.llm:
+            return raw
+        if not self._is_followup_candidate(raw):
+            return raw
+
+        recent: list[str] = []
+        for msg in (chat_history or [])[-10:]:
+            mtype = str(getattr(msg, "type", "") or "").lower().strip()
+            content = str(getattr(msg, "content", "") or "").strip()
+            if not content:
+                continue
+            if mtype == "human":
+                role = "user"
+            elif mtype == "system":
+                role = "system"
+            else:
+                role = "assistant"
+            recent.append(f"{role}: {content}")
+        if not recent:
+            return raw
+
+        prompt = (
+            "Reescribe el último mensaje SOLO si es un follow-up ambiguo y depende del contexto reciente. "
+            "Si no lo es, devuélvelo igual. No inventes nombres ni datos.\n\n"
+            "Historial reciente:\n"
+            f"{chr(10).join(recent)}\n\n"
+            f"Último mensaje del usuario: {raw}\n\n"
+            "Devuelve únicamente una frase final accionable."
+        )
+        try:
+            resp = await self.llm.ainvoke(
+                [
+                    {
+                        "role": "system",
+                        "content": "Eres un normalizador de intención para un asistente operativo de hotel.",
+                    },
+                    {"role": "user", "content": prompt},
+                ]
+            )
+            rewritten = (getattr(resp, "content", None) or "").strip()
+            return rewritten or raw
+        except Exception:
+            return raw
 
     async def _try_direct_whatsapp_draft(
         self,

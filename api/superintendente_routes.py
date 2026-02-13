@@ -764,6 +764,76 @@ async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
         return _clean_wa_payload(clean_adj or clean_base)
 
 
+async def _expand_followup_with_context(
+    llm: Any,
+    message: str,
+    recent_messages: list[Any],
+) -> str:
+    """Reformula follow-ups cortos usando el contexto reciente del chat."""
+    raw = (message or "").strip()
+    if not raw:
+        return raw
+
+    token_count = len(re.findall(r"\S+", raw))
+    if token_count > 4:
+        return raw
+
+    compact: list[str] = []
+    for msg in recent_messages[-8:]:
+        role = ""
+        content = ""
+        if isinstance(msg, dict):
+            role = str(msg.get("role") or "").strip().lower()
+            content = str(msg.get("content") or "").strip()
+        else:
+            msg_type = str(getattr(msg, "type", "") or "").strip().lower()
+            content = str(getattr(msg, "content", "") or "").strip()
+            if msg_type in {"human"}:
+                role = "user"
+            elif msg_type in {"system"}:
+                role = "system"
+            else:
+                role = "assistant"
+        if not content:
+            continue
+        if role not in {"user", "assistant", "system"}:
+            role = "assistant"
+        compact.append(f"{role}: {content}")
+    if not compact:
+        return raw
+
+    prompt = (
+        "Dado el historial reciente, convierte el último mensaje del usuario en una instrucción completa "
+        "solo si es un follow-up ambiguo (por ejemplo: 'resumen', 'original', 'sí', 'ese'). "
+        "Si ya es claro por sí mismo, devuélvelo igual. "
+        "No inventes nombres ni datos no presentes en historial.\n\n"
+        "Historial:\n"
+        f"{chr(10).join(compact)}\n\n"
+        f"Último mensaje: {raw}\n\n"
+        "Devuelve solo la instrucción final en una sola línea."
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": (
+                        "Eres un reescritor de intención para un chat operativo de hotel. "
+                        "Tu salida debe ser solo una frase accionable."
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+        rewritten = (getattr(response, "content", None) or "").strip()
+        if not rewritten:
+            return raw
+        return rewritten
+    except Exception as exc:
+        log.debug("No se pudo expandir follow-up con contexto: %s", exc)
+        return raw
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -780,6 +850,16 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
+        if state.memory_manager and message and not _is_short_wa_confirmation(message) and not _is_short_wa_cancel(message):
+            try:
+                recent = state.memory_manager.get_memory_as_messages(session_key, limit=14) or []
+            except Exception:
+                recent = []
+            try:
+                llm_rewriter = getattr(agent, "llm", None) or ModelConfig.get_llm(ModelTier.INTERNAL)
+                message = await _expand_followup_with_context(llm_rewriter, message, recent)
+            except Exception:
+                pass
         auto_send_wa = False  # En Chatter mantenemos borrador + confirmación.
         pending_last = _get_last_pending_action(state, owner_key)
         if state.memory_manager:

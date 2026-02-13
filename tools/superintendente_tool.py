@@ -23,7 +23,7 @@ from core.instance_context import (
     fetch_property_by_name,
     DEFAULT_PROPERTY_TABLE,
 )
-from core.config import Settings
+from core.config import Settings, ModelConfig, ModelTier
 from core.utils.time_context import DEFAULT_TZ
 import pytz
 
@@ -1259,6 +1259,10 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             if not memory_manager:
                 return "⚠️ No hay gestor de memoria configurado."
 
+            normalized_mode = (mode or "").strip().lower()
+            valid_summary = {"resumen", "summary", "sintesis", "síntesis"}
+            valid_raw = {"original", "historial", "completo", "raw", "crudo", "mensajes"}
+
             if property_id is None and memory_manager and chat_id:
                 try:
                     property_id = memory_manager.get_flag(chat_id, "property_id")
@@ -1315,15 +1319,12 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                     )
                 guest_id = resolved_guest_id
 
-            normalized_mode = (mode or "").strip().lower()
             if not normalized_mode:
                 return (
                     "🤖 ¿Quieres un resumen IA o la conversación tal cual?\n"
                     "Responde 'resumen' para que sintetice los puntos clave o 'original' si quieres ver los mensajes completos."
                 )
 
-            valid_summary = {"resumen", "summary", "sintesis", "síntesis"}
-            valid_raw = {"original", "historial", "completo", "raw", "crudo", "mensajes"}
             if normalized_mode not in valid_summary | valid_raw:
                 return (
                     "⚠️ Modo no reconocido. Usa 'resumen' para síntesis o 'original' para ver los mensajes completos."
@@ -1339,13 +1340,24 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             # Recupera de Supabase (limit extendido) y combina con memoria en RAM
             db_msgs = await asyncio.to_thread(
                 get_conversation_history,
-                clean_id,
-                limit * 3,  # pedir más por si hay ruido o system messages
-                None,
-                resolved_property_id,
-                "chat_history",
-                "whatsapp",
+                conversation_id=clean_id,
+                limit=limit * 3,  # pedir más por si hay ruido o system messages
+                since=None,
+                property_id=resolved_property_id,
+                table="chat_history",
+                channel="whatsapp",
             )
+            if resolved_property_id is not None and not db_msgs:
+                # Fallback para historiales antiguos donde property_id no se guardó.
+                db_msgs = await asyncio.to_thread(
+                    get_conversation_history,
+                    conversation_id=clean_id,
+                    limit=limit * 3,
+                    since=None,
+                    property_id=None,
+                    table="chat_history",
+                    channel="whatsapp",
+                )
             combined = (db_msgs or [])
 
             def _parse_ts(ts: Any) -> float:
@@ -1409,11 +1421,42 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             if normalized_mode in valid_raw:
                 return f"🗂️ Conversación recuperada ({count})\n{formatted}"
 
-            return (
-                "🧠 Historial recuperado para resumir\n"
-                f"Mensajes ({count}):\n{formatted}\n"
-                "➡️ Genera un resumen claro para el encargado con los puntos clave, dudas y acciones pendientes."
+            system_prompt = (
+                "Eres un asistente interno para un encargado de hotel. "
+                "Resume conversaciones de WhatsApp con precisión y brevedad operativa."
             )
+            user_prompt = (
+                f"Huésped: {guest_id}\n"
+                f"Total de mensajes analizados: {count}\n\n"
+                "Mensajes:\n"
+                f"{formatted}\n\n"
+                "Genera un resumen útil para operación con este formato:\n"
+                "1) Motivo principal del huésped\n"
+                "2) Datos concretos detectados (fechas, folio, habitación, teléfono)\n"
+                "3) Estado actual y acciones pendientes\n"
+                "4) Riesgos o dudas abiertas"
+            )
+            try:
+                llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+                ai_raw = await asyncio.to_thread(
+                    llm.invoke,
+                    [
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                )
+                summary = (getattr(ai_raw, "content", None) or str(ai_raw or "")).strip()
+            except Exception as exc:
+                log.warning("No se pudo generar resumen con LLM: %s", exc)
+                summary = ""
+
+            if not summary:
+                summary = (
+                    "No pude generar el resumen automáticamente. "
+                    "Prueba de nuevo o pide 'original' para ver los mensajes completos."
+                )
+
+            return f"🧠 Resumen de conversaciones recientes ({count})\n{summary}"
         except Exception as exc:
             log.error("Error revisando conversaciones: %s", exc)
             return f"❌ Error: {exc}"
