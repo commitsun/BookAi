@@ -13,7 +13,7 @@ from typing import Any, Optional, Callable
 from langchain.tools import StructuredTool
 from pydantic import BaseModel, Field
 
-from core.db import get_conversation_history
+from core.db import get_conversation_history, get_active_chat_reservation
 from core.db import supabase
 from core.mcp_client import get_tools
 from core.instance_context import (
@@ -1421,6 +1421,47 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             if normalized_mode in valid_raw:
                 return f"🗂️ Conversación recuperada ({count})\n{formatted}"
 
+            # Contexto estructurado para que el LLM no omita datos operativos del chat.
+            reservation_ctx: dict[str, Any] = {}
+            try:
+                active = get_active_chat_reservation(chat_id=clean_id, property_id=resolved_property_id)
+                if isinstance(active, dict):
+                    reservation_ctx.update(active)
+            except Exception:
+                pass
+
+            try:
+                if memory_manager:
+                    for key in ("folio_id", "reservation_locator", "checkin", "checkout", "room_number", "reservation_status"):
+                        if key in reservation_ctx and reservation_ctx.get(key) not in (None, ""):
+                            continue
+                        value = memory_manager.get_flag(clean_id, key)
+                        if value not in (None, ""):
+                            reservation_ctx[key] = value
+            except Exception:
+                pass
+
+            property_name_ctx = None
+            if resolved_property_id is not None:
+                try:
+                    prop_payload = fetch_property_by_id(DEFAULT_PROPERTY_TABLE, resolved_property_id)
+                    if isinstance(prop_payload, dict):
+                        property_name_ctx = prop_payload.get("name") or prop_payload.get("property_name")
+                except Exception:
+                    property_name_ctx = None
+
+            ctx_lines = [
+                f"- property_id: {resolved_property_id if resolved_property_id is not None else 'N/D'}",
+                f"- property_name: {property_name_ctx or hotel_name or 'N/D'}",
+                f"- folio_id: {reservation_ctx.get('folio_id') or 'N/D'}",
+                f"- reservation_locator: {reservation_ctx.get('reservation_locator') or 'N/D'}",
+                f"- checkin: {reservation_ctx.get('checkin') or 'N/D'}",
+                f"- checkout: {reservation_ctx.get('checkout') or 'N/D'}",
+                f"- room_number: {reservation_ctx.get('room_number') or 'N/D'}",
+                f"- reservation_status: {reservation_ctx.get('reservation_status') or 'N/D'}",
+            ]
+            reservation_block = "\n".join(ctx_lines)
+
             system_prompt = (
                 "Eres un asistente interno para un encargado de hotel. "
                 "Resume conversaciones de WhatsApp con precisión y brevedad operativa."
@@ -1428,6 +1469,8 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             user_prompt = (
                 f"Huésped: {guest_id}\n"
                 f"Total de mensajes analizados: {count}\n\n"
+                "Contexto de reserva/chat:\n"
+                f"{reservation_block}\n\n"
                 "Mensajes:\n"
                 f"{formatted}\n\n"
                 "Genera un resumen útil para operación con este formato:\n"

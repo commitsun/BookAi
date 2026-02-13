@@ -16,7 +16,7 @@ from pydantic import BaseModel, Field
 from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
 from core.instance_context import ensure_instance_credentials
-from core.message_utils import sanitize_wa_message, looks_like_new_instruction
+from core.message_utils import sanitize_wa_message, looks_like_new_instruction, build_kb_preview
 
 log = logging.getLogger("SuperintendenteRoutes")
 
@@ -725,6 +725,49 @@ def _format_wa_preview(drafts: list[dict]) -> str:
     return "\n".join(lines)
 
 
+def _format_kb_remove_preview(pending: dict) -> str:
+    total = int(pending.get("total_matches", 0) or 0)
+    preview = pending.get("preview") or []
+    criteria = pending.get("criteria") or ""
+    date_from = pending.get("date_from") or ""
+    date_to = pending.get("date_to") or ""
+
+    def _sanitize_preview_snippet(text: str) -> str:
+        if not text:
+            return ""
+        lines = []
+        for ln in str(text).splitlines():
+            low = ln.lower()
+            if "borrador para agregar" in low or "[kb_" in low or "[kb-" in low:
+                continue
+            lines.append(ln.strip())
+        cleaned = " ".join(l for l in lines if l).strip()
+        return cleaned[:320] + ("..." if len(cleaned) > 320 else "")
+
+    header = [f"🧹 Borrador para eliminar de la KB ({total} registro(s))."]
+    if criteria:
+        header.append(f"Criterio: {criteria}")
+    if date_from or date_to:
+        header.append(f"Rango: {date_from or 'n/a'} -> {date_to or 'n/a'}")
+
+    body_lines = []
+    for item in preview:
+        topic = item.get("topic") or "Entrada"
+        fecha = item.get("fecha") or ""
+        snippet = _sanitize_preview_snippet(item.get("snippet") or "")
+        body_lines.append(f"- {fecha} {topic}: {snippet}")
+
+    footer = (
+        "\n✅ Responde 'ok' para eliminar estos registros.\n"
+        "📝 Di qué conservar o ajusta el criterio para refinar.\n"
+        "❌ Responde 'no' para cancelar."
+    )
+
+    if body_lines and total <= 12:
+        return "\n".join(header + body_lines) + footer
+    return "\n".join(header) + footer
+
+
 async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
     clean_base = sanitize_wa_message(base_message or "")
     clean_adj = sanitize_wa_message(adjustments or "")
@@ -1405,7 +1448,10 @@ def register_superintendente_routes(app, state) -> None:
         kb_remove_payload = _parse_kb_remove_draft_marker(result)
         if kb_remove_payload:
             _record_pending_action(state, owner_key, "kb_remove", kb_remove_payload, session_key)
-            return {"result": result}
+            removal_payload = kb_remove_payload.get("payload") if isinstance(kb_remove_payload, dict) else None
+            if isinstance(removal_payload, dict):
+                return {"result": _format_kb_remove_preview(removal_payload)}
+            return {"result": "🧹 Borrador de eliminación preparado. Responde 'ok' para confirmar o 'no' para cancelar."}
 
         kb_payload = _parse_kb_draft_marker(result)
         if kb_payload:
@@ -1418,7 +1464,12 @@ def register_superintendente_routes(app, state) -> None:
             if alt_key:
                 _persist_pending_kb(state, alt_key, pending_kb)
             _record_pending_action(state, owner_key, "kb", pending_kb, session_key)
-            return {"result": result}
+            preview = build_kb_preview(
+                pending_kb.get("topic") or "Información",
+                pending_kb.get("category") or "general",
+                pending_kb.get("content") or "",
+            )
+            return {"result": preview}
 
         detail_payload = _pull_recent_reservation_detail(state, session_key, alt_key, owner_id)
         if detail_payload:
