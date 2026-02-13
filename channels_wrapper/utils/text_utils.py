@@ -7,6 +7,59 @@ from langchain_openai import ChatOpenAI
 
 log = logging.getLogger("fragmentation")
 
+_END_PUNCTUATION_RE = re.compile(r"[.!?…:;)\]]$")
+
+
+def _normalize_fragment_punctuation(fragment: str) -> str:
+    text = (fragment or "").strip()
+    if not text:
+        return ""
+    if _END_PUNCTUATION_RE.search(text):
+        return text
+    if re.search(r"https?://|www\.", text, re.IGNORECASE):
+        return text
+    if "\n" in text:
+        return text
+    if len(text) < 18:
+        return text
+    if text.endswith((",", "-", "•")):
+        return text.rstrip(", -•") + "."
+    return text + "."
+
+
+def _split_long_unpunctuated_fragment(fragment: str) -> list[str]:
+    text = (fragment or "").strip()
+    if not text:
+        return []
+    if len(text) < 220:
+        return [text]
+
+    parts: list[str] = []
+    remaining = text
+    hard_limit = 210
+    soft_target = 150
+    break_chars = ",;:"
+
+    while len(remaining) > hard_limit:
+        window = remaining[:hard_limit]
+        cut = -1
+        for ch in break_chars:
+            idx = window.rfind(ch, soft_target // 2)
+            if idx > cut:
+                cut = idx + 1
+        if cut <= 0:
+            cut = window.rfind(" ")
+        if cut <= 0:
+            cut = hard_limit
+        head = remaining[:cut].strip()
+        if head:
+            parts.append(head)
+        remaining = remaining[cut:].strip()
+
+    if remaining:
+        parts.append(remaining)
+    return [_normalize_fragment_punctuation(part) for part in parts if part]
+
 # ============================================================
 # 🔹 Fallback clásico: fragmentación natural tipo “n8n”
 # ============================================================
@@ -62,8 +115,8 @@ Eres un experto en dividir textos largos en mensajes cortos y naturales.
 Sigue estas reglas:
 1. Divide el texto original en fragmentos consecutivos, sin alterar el orden.
 2. Usa un máximo de {max_fragments} fragmentos ("A1", "A2", ..., "A{max_fragments}").
-3. Elimina signos de apertura "¿" o "¡", pero deja los de cierre ("?", "!").
-4. Elimina comas al final de frase y puntos finales.
+3. Conserva la puntuación original; no quites puntos, comas, dos puntos, interrogaciones ni exclamaciones.
+4. Si una frase del texto original termina en punto, interrogación o exclamación, respétalo.
 5. No borres los dos puntos ":" si hay listados.
 6. Elimina expresiones robóticas o latinoamericanas como "en qué puedo asistirte", "con gusto te ayudo", "estoy aquí para ayudarte".
 7. Si el texto es muy largo, resume sin perder lo esencial.
@@ -89,7 +142,11 @@ Texto a fragmentar:
         try:
             data = json.loads(raw)
             if isinstance(data, dict):
-                return [v.strip() for v in data.values() if isinstance(v, str) and v.strip()]
+                base = [v.strip() for v in data.values() if isinstance(v, str) and v.strip()]
+                fixed: list[str] = []
+                for item in base:
+                    fixed.extend(_split_long_unpunctuated_fragment(item))
+                return [_normalize_fragment_punctuation(v) for v in fixed if v.strip()]
         except json.JSONDecodeError:
             log.warning("⚠️ No se pudo parsear JSON de la IA, usando fallback clásico.")
             return fragment_text_intelligently(text)
@@ -133,6 +190,11 @@ async def send_fragmented_async(send_callable, user_id: str, reply: str):
             fragments = fragment_text_intelligently(reply)
     except Exception:
         fragments = fragment_text_intelligently(reply)
+
+    normalized: list[str] = []
+    for frag in fragments:
+        normalized.extend(_split_long_unpunctuated_fragment(frag))
+    fragments = [_normalize_fragment_punctuation(frag) for frag in normalized if frag and frag.strip()]
 
     total = len(fragments)
 

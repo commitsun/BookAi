@@ -24,7 +24,7 @@ TRACK_FILE = "/tmp/escalation_tracking.pkl"
 class AppState:
     """Contenedor liviano del estado global y dependencias compartidas."""
 
-    def __init__(self, idle_seconds: float = 6.0):
+    def __init__(self, idle_seconds: float = 15.0):
         self.log = logging.getLogger("AppState")
 
         # Dependencias de agentes y canales
