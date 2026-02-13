@@ -238,6 +238,31 @@ class MainAgent:
             "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
         )
 
+    def _should_attach_to_pending_escalation(self, user_input: str) -> bool:
+        text = (user_input or "").strip()
+        if not text:
+            return False
+        try:
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            system_prompt = (
+                "Clasifica el mensaje del huésped en UNA etiqueta exacta: attach o normal.\n"
+                "attach: el huésped pide explícitamente consultar/añadir/insistir con el encargado "
+                "sobre la solicitud ya escalada.\n"
+                "normal: cualquier otro caso, incluidas preguntas nuevas que pueda responder el asistente.\n"
+                "Responde SOLO con: attach o normal."
+            )
+            user_prompt = f"Mensaje del huésped:\n{text}\n\nEtiqueta:"
+            raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+            return label == "attach"
+        except Exception:
+            return False
+
     def _needs_property_context(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1142,7 +1167,27 @@ class MainAgent:
                 has_active_res_context = False
                 self._get_guest_lang(chat_id, user_input)
                 if self.memory_manager.get_flag(chat_id, "escalation_in_progress"):
-                    return "##INCISO## Un momento, sigo verificando tu solicitud con el encargado."
+                    if self._should_attach_to_pending_escalation(user_input):
+                        candidate = (user_input or "").strip()
+                        last_forwarded = (
+                            self.memory_manager.get_flag(chat_id, "last_escalation_followup_message")
+                            if self.memory_manager
+                            else None
+                        )
+                        if candidate and candidate != str(last_forwarded or "").strip():
+                            await self._delegate_escalation_to_interno(
+                                user_input=candidate,
+                                chat_id=chat_id,
+                                motivo="Ampliación del huésped mientras la escalación está en curso",
+                                escalation_type="info_not_found",
+                                context="Escalación en progreso: incorporar esta nueva petición al hilo pendiente",
+                            )
+                            self.memory_manager.set_flag(
+                                chat_id,
+                                "last_escalation_followup_message",
+                                candidate,
+                            )
+                        return "Un momento, sigo verificando tu solicitud con el encargado."
 
                 pending = await self._handle_pending_confirmation(chat_id, user_input)
                 if pending is not None:
