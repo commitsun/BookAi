@@ -92,6 +92,17 @@ def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
 
 
+def _normalize_guest_chat_id(guest_chat_id: str) -> str:
+    """Normaliza ids compuestos (instancia:telefono) al chat_id que usa Chatter."""
+    raw = str(guest_chat_id or "").strip()
+    if not raw:
+        return ""
+    if ":" in raw:
+        tail = raw.split(":")[-1].strip()
+        return _clean_chat_id(tail) or tail
+    return _clean_chat_id(raw) or raw
+
+
 def _sanitize_guest_text(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
@@ -118,6 +129,49 @@ def _merge_escalation_text(previous: str, addition: str) -> str:
     if add.lower() in prev.lower():
         return prev
     return f"{prev} {add}".strip()
+
+
+def _synthesize_escalation_query(previous: str, addition: str) -> str:
+    """Sintetiza en una sola consulta lo ya pendiente + la nueva ampliación."""
+    prev = (previous or "").strip()
+    add = (addition or "").strip()
+    if not prev:
+        return add
+    if not add:
+        return prev
+    if add.lower() in prev.lower():
+        return prev
+    try:
+        llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+        system_prompt = (
+            "Eres asistente interno hotelero. Fusiona las consultas del huésped en UNA sola frase breve y clara, "
+            "sin perder información relevante.\n"
+            "Reglas:\n"
+            "- Devuelve SOLO la frase final.\n"
+            "- No uses listas ni numeración.\n"
+            "- Mantén el idioma original (español).\n"
+            "- Máximo 35 palabras."
+        )
+        user_prompt = (
+            "Consulta previa:\n"
+            f"{prev}\n\n"
+            "Nueva ampliación:\n"
+            f"{add}\n\n"
+            "Consulta sintetizada:"
+        )
+        raw = llm.invoke(
+            [
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": user_prompt},
+            ]
+        )
+        text = (getattr(raw, "content", None) or str(raw or "")).strip()
+        text = re.sub(r"\s+", " ", text).strip()
+        if text:
+            return text
+    except Exception:
+        pass
+    return _merge_escalation_text(prev, add)
 
 
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
@@ -193,7 +247,7 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
 
 
 def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
-    clean_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+    clean_id = _normalize_guest_chat_id(guest_chat_id) or guest_chat_id
     rooms = [f"chat:{clean_id}", "channel:whatsapp"]
     prop_id = _resolve_property_id(guest_chat_id)
     if prop_id is not None:
@@ -263,7 +317,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             and escalation_type == "info_not_found"
             and existing_type in {"info_not_found", "manual"}
         ):
-            merged_guest_message = _merge_escalation_text(
+            merged_guest_message = _synthesize_escalation_query(
                 str(existing_pending.get("guest_message") or ""),
                 guest_message,
             )
@@ -316,7 +370,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 except Exception:
                     log.debug("No se pudo enviar actualización de escalación %s por Telegram", existing_id)
             try:
-                clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+                clean_chat_id = _normalize_guest_chat_id(guest_chat_id) or guest_chat_id
                 rooms = _rooms_for_escalation(guest_chat_id)
                 _fire_event(
                     "escalation.updated",
@@ -471,7 +525,7 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         update_escalation(escalation_id, {"draft_response": draft})
 
         rooms = _rooms_for_escalation(esc.guest_chat_id)
-        clean_chat_id = _clean_chat_id(esc.guest_chat_id) or esc.guest_chat_id
+        clean_chat_id = _normalize_guest_chat_id(esc.guest_chat_id) or esc.guest_chat_id
         _fire_event(
             "escalation.updated",
             {
@@ -568,7 +622,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "sent_to_guest": True,
             })
 
-            clean_chat_id = _clean_chat_id(esc.guest_chat_id) or esc.guest_chat_id
+            clean_chat_id = _normalize_guest_chat_id(esc.guest_chat_id) or esc.guest_chat_id
             rooms = _rooms_for_escalation(esc.guest_chat_id)
             _fire_event(
                 "escalation.resolved",

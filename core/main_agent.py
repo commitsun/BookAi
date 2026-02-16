@@ -240,20 +240,42 @@ class MainAgent:
             "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
         )
 
-    def _should_attach_to_pending_escalation(self, user_input: str) -> bool:
+    def _should_attach_to_pending_escalation(self, chat_id: str, user_input: str) -> bool:
         text = (user_input or "").strip()
         if not text:
             return False
         try:
+            pending_context = ""
+            if self.memory_manager and chat_id:
+                try:
+                    pending_context = (
+                        self.memory_manager.get_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING) or {}
+                    )
+                    if isinstance(pending_context, dict):
+                        pending_context = (
+                            str(pending_context.get("guest_message") or "")
+                            or str(pending_context.get("reason") or "")
+                        )
+                    else:
+                        pending_context = str(pending_context or "")
+                except Exception:
+                    pending_context = ""
             llm = ModelConfig.get_llm(ModelTier.INTERNAL)
             system_prompt = (
                 "Clasifica el mensaje del huésped en UNA etiqueta exacta: attach o normal.\n"
-                "attach: el huésped pide explícitamente consultar/añadir/insistir con el encargado "
-                "sobre la solicitud ya escalada.\n"
-                "normal: cualquier otro caso, incluidas preguntas nuevas que pueda responder el asistente.\n"
+                "Hay una escalación activa pendiente con el encargado.\n"
+                "attach: el mensaje amplía/continúa esa consulta pendiente o añade otra pregunta para "
+                "incluir en la misma gestión, incluso si no lo dice explícitamente.\n"
+                "normal: sólo si el mensaje es claramente independiente de la gestión pendiente y no "
+                "requiere incorporarse al hilo con el encargado.\n"
                 "Responde SOLO con: attach o normal."
             )
-            user_prompt = f"Mensaje del huésped:\n{text}\n\nEtiqueta:"
+            user_prompt = (
+                "Consulta pendiente (si existe):\n"
+                f"{pending_context or 'No disponible'}\n\n"
+                "Mensaje nuevo del huésped:\n"
+                f"{text}\n\nEtiqueta:"
+            )
             raw = llm.invoke(
                 [
                     {"role": "system", "content": system_prompt},
@@ -1269,7 +1291,7 @@ class MainAgent:
                 has_active_res_context = False
                 self._get_guest_lang(chat_id, user_input)
                 if self.memory_manager.get_flag(chat_id, "escalation_in_progress"):
-                    if self._should_attach_to_pending_escalation(user_input):
+                    if self._should_attach_to_pending_escalation(chat_id, user_input):
                         candidate = (user_input or "").strip()
                         last_forwarded = (
                             self.memory_manager.get_flag(chat_id, "last_escalation_followup_message")
