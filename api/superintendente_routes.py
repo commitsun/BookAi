@@ -91,6 +91,130 @@ def _parse_session_title(content: str) -> Optional[str]:
     return None
 
 
+def _persist_session_title_db(
+    state: Any,
+    *,
+    conversation_id: str,
+    owner_key: str,
+    title: str,
+) -> None:
+    clean_convo = str(conversation_id or "").strip()
+    clean_owner = str(owner_key or "").strip()
+    clean_title = str(title or "").strip()
+    if not clean_convo or not clean_owner or not clean_title:
+        return
+    try:
+        (
+            state.supabase_client.table(Settings.SUPERINTENDENTE_HISTORY_TABLE)
+            .update({"session_title": clean_title})
+            .eq("conversation_id", clean_convo)
+            .eq("original_chat_id", clean_owner)
+            .execute()
+        )
+    except Exception as exc:
+        # Si la columna aún no existe en DB, no rompemos el flujo.
+        log.debug("No se pudo persistir session_title en DB: %s", exc)
+
+
+def _is_generic_session_title(title: Optional[str]) -> bool:
+    text = re.sub(r"\s+", " ", str(title or "").strip().lower())
+    if not text:
+        return True
+    if text in {"chat", "nueva conversación", "nueva conversacion"}:
+        return True
+    return text.startswith("chat ") or text.startswith("nueva conversación ") or text.startswith("nueva conversacion ")
+
+
+def _is_internal_super_message(content: str) -> bool:
+    text = str(content or "").strip()
+    if not text:
+        return True
+    if not text.startswith("["):
+        return False
+    internal_prefixes = (
+        "[SUPER_SESSION]|",
+        "[CTX]",
+        "[WA_DRAFT]|",
+        "[WA_SENT]|",
+        "[KB_DRAFT]|",
+        "[KB_REMOVE_DRAFT]|",
+        "[BROADCAST_DRAFT]|",
+        "[TPL_DRAFT]|",
+    )
+    return text.startswith(internal_prefixes)
+
+
+def _sanitize_generated_title(raw: str) -> Optional[str]:
+    text = re.sub(r"\s+", " ", str(raw or "").strip())
+    if not text:
+        return None
+    text = text.splitlines()[0].strip().strip("\"'`")
+    text = re.sub(r"^[\-\d\.\)\s]+", "", text).strip()
+    text = re.sub(r"[.!?]+$", "", text).strip()
+    if not text:
+        return None
+    words = text.split()
+    if len(words) > 8:
+        text = " ".join(words[:8]).strip()
+    if len(text) > 70:
+        text = text[:70].rsplit(" ", 1)[0].strip() or text[:70].strip()
+    if _is_generic_session_title(text):
+        return None
+    return text
+
+
+def _fallback_title_from_seed(seed: str) -> str:
+    text = re.sub(r"\s+", " ", str(seed or "").strip())
+    text = text.strip("\"'`")
+    if not text:
+        return "Conversación"
+    text = re.split(r"[.!?\n]", text, maxsplit=1)[0].strip() or text
+    words = text.split()
+    if len(words) > 6:
+        text = " ".join(words[:6]).strip()
+    if len(text) > 64:
+        text = text[:64].rsplit(" ", 1)[0].strip() or text[:64].strip()
+    return text or "Conversación"
+
+
+async def _generate_session_title_with_ai(
+    llm: Any,
+    *,
+    user_seed: str,
+    assistant_seed: Optional[str] = None,
+    hotel_name: Optional[str] = None,
+) -> Optional[str]:
+    if not llm:
+        return None
+
+    prompt = (
+        "Genera un titulo corto para una conversación de gestión hotelera.\n"
+        "Reglas:\n"
+        "- 2 a 6 palabras.\n"
+        "- En español.\n"
+        "- Sin comillas, sin emojis, sin punto final.\n"
+        "- Debe describir el tema principal.\n\n"
+        f"Hotel: {hotel_name or 'N/A'}\n"
+        f"Mensaje clave del encargado: {user_seed}\n"
+        f"Respuesta/acción relevante: {assistant_seed or 'N/A'}\n\n"
+        "Devuelve solo el titulo."
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {
+                    "role": "system",
+                    "content": "Eres un asistente que nombra conversaciones operativas con titulos concretos.",
+                },
+                {"role": "user", "content": prompt},
+            ]
+        )
+        return _sanitize_generated_title(getattr(response, "content", None) or "")
+    except Exception as exc:
+        log.debug("No se pudo generar título de sesión con IA: %s", exc)
+        return None
+
+
 def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     owner = (payload.owner_id or "").strip()
     if owner:
@@ -1536,6 +1660,12 @@ def register_superintendente_routes(app, state) -> None:
             "created_at": datetime.utcnow().isoformat(),
         }
         state.save_tracking()
+        _persist_session_title_db(
+            state,
+            conversation_id=session_id,
+            owner_key=owner_key,
+            title=title,
+        )
 
         if state.memory_manager:
             try:
@@ -1570,10 +1700,11 @@ def register_superintendente_routes(app, state) -> None:
         titles = {sid: meta.get("title") for sid, meta in sessions.items()}
 
         items = []
+        rows: list[dict[str, Any]]
         try:
             resp = (
                 state.supabase_client.table(table)
-                .select("conversation_id, content, created_at, original_chat_id")
+                .select("conversation_id, content, created_at, original_chat_id, role, session_title")
                 .eq("original_chat_id", owner_key)
                 .order("created_at", desc=True)
                 .limit(limit * 20)
@@ -1584,6 +1715,15 @@ def register_superintendente_routes(app, state) -> None:
             log.warning("No se pudo leer historial superintendente: %s", exc)
             rows = []
 
+        rows_by_conversation: dict[str, list[dict[str, Any]]] = {}
+        for row in rows:
+            convo_id = str(row.get("conversation_id") or "").strip()
+            if not convo_id:
+                continue
+            rows_by_conversation.setdefault(convo_id, []).append(row)
+
+        tracking_dirty = False
+        ai_titles_budget = 8
         seen = set()
         for row in rows:
             convo_id = str(row.get("conversation_id") or "").strip()
@@ -1592,7 +1732,54 @@ def register_superintendente_routes(app, state) -> None:
             seen.add(convo_id)
             last_message = row.get("content")
             last_at = row.get("created_at")
-            title = titles.get(convo_id) or _parse_session_title(str(last_message or "")) or "Chat"
+            db_title = str(row.get("session_title") or "").strip() or None
+            title = db_title or titles.get(convo_id) or _parse_session_title(str(last_message or "")) or "Chat"
+            if _is_generic_session_title(title):
+                convo_rows = rows_by_conversation.get(convo_id) or []
+                user_seed = ""
+                assistant_seed = ""
+                for sample in convo_rows:
+                    role = str(sample.get("role") or "").strip().lower()
+                    content = str(sample.get("content") or "").strip()
+                    if not content or _is_internal_super_message(content):
+                        continue
+                    if role in {"user", "guest"} and not user_seed:
+                        user_seed = content
+                    elif role in {"assistant", "bookai"} and not assistant_seed:
+                        assistant_seed = content
+                    if user_seed and assistant_seed:
+                        break
+
+                fallback_seed = user_seed or assistant_seed or ("" if _is_internal_super_message(str(last_message or "")) else str(last_message or ""))
+                candidate_title = None
+                if fallback_seed and ai_titles_budget > 0:
+                    llm = (
+                        getattr(getattr(state, "superintendente_agent", None), "llm", None)
+                        or ModelConfig.get_llm(ModelTier.INTERNAL)
+                    )
+                    candidate_title = await _generate_session_title_with_ai(
+                        llm,
+                        user_seed=user_seed or fallback_seed,
+                        assistant_seed=assistant_seed or None,
+                    )
+                    ai_titles_budget -= 1
+                if not candidate_title and fallback_seed:
+                    candidate_title = _fallback_title_from_seed(fallback_seed)
+                if candidate_title:
+                    title = candidate_title
+                    owner_sessions = _tracking_sessions(state).setdefault(owner_key, {})
+                    current_meta = owner_sessions.get(convo_id) or {}
+                    if current_meta.get("title") != candidate_title:
+                        current_meta["title"] = candidate_title
+                        current_meta.setdefault("created_at", datetime.utcnow().isoformat())
+                        owner_sessions[convo_id] = current_meta
+                        tracking_dirty = True
+                    _persist_session_title_db(
+                        state,
+                        conversation_id=convo_id,
+                        owner_key=owner_key,
+                        title=candidate_title,
+                    )
             items.append(
                 {
                     "session_id": convo_id,
@@ -1618,6 +1805,9 @@ def register_superintendente_routes(app, state) -> None:
                 )
                 if len(items) >= limit:
                     break
+
+        if tracking_dirty:
+            state.save_tracking()
 
         return {"items": items}
 
