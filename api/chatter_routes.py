@@ -30,7 +30,7 @@ log = logging.getLogger("ChatterRoutes")
 # Modelos de entrada
 # ---------------------------------------------------------------------------
 class SendMessageRequest(BaseModel):
-    user_id: str = Field(..., description="ID del usuario en Roomdoo")
+    user_id: int = Field(..., description="ID numérico del usuario en Roomdoo")
     user_first_name: Optional[str] = Field(default=None, description="Nombre del usuario")
     user_last_name: Optional[str] = Field(default=None, description="Primer apellido del usuario")
     user_last_name2: Optional[str] = Field(default=None, description="Segundo apellido del usuario")

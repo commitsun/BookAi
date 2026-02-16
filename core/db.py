@@ -108,7 +108,7 @@ def save_message(
     content: str,
     escalation_id: str | None = None,
     client_name: str | None = None,
-    user_id: str | None = None,
+    user_id: int | str | None = None,
     user_first_name: str | None = None,
     user_last_name: str | None = None,
     user_last_name2: str | None = None,
@@ -148,8 +148,11 @@ def save_message(
             data["escalation_id"] = escalation_id
         if client_name:
             data["client_name"] = client_name
-        if user_id:
-            data["user_id"] = str(user_id)
+        if user_id is not None and str(user_id).strip() != "":
+            try:
+                data["user_id"] = int(str(user_id).strip())
+            except Exception:
+                logging.warning("⚠️ user_id no numérico, se omite: %s", user_id)
         if user_first_name:
             data["user_first_name"] = str(user_first_name)
         if user_last_name:

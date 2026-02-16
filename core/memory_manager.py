@@ -265,7 +265,7 @@ class MemoryManager:
         content: str,
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
-        user_id: Optional[str] = None,
+        user_id: Optional[int | str] = None,
         user_first_name: Optional[str] = None,
         user_last_name: Optional[str] = None,
         user_last_name2: Optional[str] = None,
@@ -378,8 +378,11 @@ class MemoryManager:
             entry["escalation_id"] = escalation_id
         if client_name and is_guest:
             entry["client_name"] = client_name
-        if user_id:
-            entry["user_id"] = str(user_id)
+        if user_id is not None and str(user_id).strip() != "":
+            try:
+                entry["user_id"] = int(str(user_id).strip())
+            except Exception:
+                pass
         if user_first_name:
             entry["user_first_name"] = str(user_first_name)
         if user_last_name:
@@ -441,7 +444,7 @@ class MemoryManager:
         content: str,
         escalation_id: Optional[str] = None,
         client_name: Optional[str] = None,
-        user_id: Optional[str] = None,
+        user_id: Optional[int | str] = None,
         user_first_name: Optional[str] = None,
         user_last_name: Optional[str] = None,
         user_last_name2: Optional[str] = None,
@@ -479,8 +482,11 @@ class MemoryManager:
             entry["escalation_id"] = escalation_id
         if client_name and is_guest:
             entry["client_name"] = client_name
-        if user_id:
-            entry["user_id"] = str(user_id)
+        if user_id is not None and str(user_id).strip() != "":
+            try:
+                entry["user_id"] = int(str(user_id).strip())
+            except Exception:
+                pass
         if user_first_name:
             entry["user_first_name"] = str(user_first_name)
         if user_last_name:
