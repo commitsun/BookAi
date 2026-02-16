@@ -1151,46 +1151,6 @@ def register_chatter_routes(app, state) -> None:
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
 
-        def _classify_operator_intent(text: str) -> str:
-            """
-            Clasifica la intención del operador:
-            - "draft": quiere que se genere un borrador al huésped
-            - "adjustment": quiere ajustar/refinar un borrador existente
-            - "context": solo pregunta contexto o hace consultas internas
-            """
-            if not text:
-                return "context"
-            system_prompt = (
-                "Clasifica la intención del operador en SOLO una etiqueta:\n"
-                "draft, adjustment, context.\n"
-                "draft = el operador pide redactar/generar/enviar una respuesta al huésped.\n"
-                "adjustment = el operador pide modificar/ajustar un borrador existente.\n"
-                "context = el operador pide contexto o info interna, sin generar respuesta.\n"
-                "Ejemplos:\n"
-                "- \"pregúntale qué le ocurre\" => draft\n"
-                "- \"añade que le subiremos algo\" => adjustment\n"
-                "- \"quita la última frase\" => adjustment\n"
-                "- \"¿qué dijo exactamente?\" => context\n"
-                "- \"responde al huésped\" => draft\n"
-                "- \"hazlo más corto\" => adjustment\n"
-                "Responde SOLO con la etiqueta."
-            )
-            user_prompt = f"Mensaje del operador:\n{text}\nEtiqueta:"
-            try:
-                llm = ModelConfig.get_llm(ModelTier.INTERNAL)
-                raw = llm.invoke(
-                    [
-                        {"role": "system", "content": system_prompt},
-                        {"role": "user", "content": user_prompt},
-                    ]
-                )
-                label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
-                if label in {"draft", "adjustment", "context"}:
-                    return label
-            except Exception:
-                pass
-            return "context"
-
         pre_messages = esc.get("messages") or []
         first_interaction = not isinstance(pre_messages, list) or len(pre_messages) == 0
 
@@ -1208,108 +1168,64 @@ def register_chatter_routes(app, state) -> None:
         context = (esc.get("context") or "").strip()
         draft_response = (esc.get("draft_response") or "").strip()
 
-        intent = _classify_operator_intent(message)
         log.info(
-            "Escalation-chat intent=%s chat_id=%s escalation_id=%s pending_count=%s message=%s",
-            intent,
+            "Escalation-chat draft-only mode chat_id=%s escalation_id=%s pending_count=%s message=%s",
             clean_id,
             escalation_id,
             len(pending_escalations),
             message,
         )
-        wants_draft = intent == "draft"
-        wants_adjustment = intent == "adjustment"
+        from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
+        from core.message_utils import extract_clean_draft
 
-        if wants_draft or wants_adjustment:
-            from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
-            from core.message_utils import extract_clean_draft
+        draft_sections: List[str] = []
+        for idx, pending in enumerate(pending_escalations, start=1):
+            pending_id = str(pending.get("escalation_id") or "").strip()
+            if not pending_id:
+                continue
+            pending_guest_message = (pending.get("guest_message") or "").strip()
+            pending_type = (pending.get("escalation_type") or pending.get("type") or "").strip()
+            pending_reason = (pending.get("escalation_reason") or pending.get("reason") or "").strip()
+            pending_context = (pending.get("context") or "").strip()
+            pending_draft = (pending.get("draft_response") or "").strip()
 
-            draft_sections: List[str] = []
-            for idx, pending in enumerate(pending_escalations, start=1):
-                pending_id = str(pending.get("escalation_id") or "").strip()
-                if not pending_id:
-                    continue
-                pending_guest_message = (pending.get("guest_message") or "").strip()
-                pending_type = (pending.get("escalation_type") or pending.get("type") or "").strip()
-                pending_reason = (pending.get("escalation_reason") or pending.get("reason") or "").strip()
-                pending_context = (pending.get("context") or "").strip()
-                pending_draft = (pending.get("draft_response") or "").strip()
-
-                if pending_id not in ESCALATIONS_STORE:
-                    ESCALATIONS_STORE[pending_id] = Escalation(
-                        escalation_id=pending_id,
-                        guest_chat_id=clean_id,
-                        guest_message=pending_guest_message,
-                        escalation_type=pending_type or "manual",
-                        escalation_reason=pending_reason,
-                        context=pending_context,
-                        timestamp=str(pending.get("timestamp") or ""),
-                        draft_response=pending_draft or None,
-                        manager_confirmed=bool(pending.get("manager_confirmed") or False),
-                        final_response=(pending.get("final_response") or None),
-                        sent_to_guest=bool(pending.get("sent_to_guest") or False),
-                    )
-
-                base_response = pending_draft or pending_guest_message or ""
-                if base_response:
-                    ESCALATIONS_STORE[pending_id].draft_response = base_response
-
-                raw_borrador = (
-                    generar_borrador(
-                        escalation_id=pending_id,
-                        manager_response=base_response,
-                        adjustment=message,
-                    )
-                    or ""
-                ).strip()
-                clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
-                clean_draft = _strip_draft_instruction_block(clean_draft)
-                if not clean_draft:
-                    clean_draft = "No tengo suficiente información para generar un borrador."
-
-                draft_sections.append(f"{idx}. [{pending_id}] {clean_draft}")
-
-            draft_response = "\n\n".join(draft_sections).strip()
-            if first_interaction and len(pending_escalations) > 1:
-                ai_message = (
-                    f"Hay {len(pending_escalations)} escalaciones pendientes. "
-                    "Resumen:\n"
-                    f"{_pending_escalations_summary(pending_escalations)}"
+            if pending_id not in ESCALATIONS_STORE:
+                ESCALATIONS_STORE[pending_id] = Escalation(
+                    escalation_id=pending_id,
+                    guest_chat_id=clean_id,
+                    guest_message=pending_guest_message,
+                    escalation_type=pending_type or "manual",
+                    escalation_reason=pending_reason,
+                    context=pending_context,
+                    timestamp=str(pending.get("timestamp") or ""),
+                    draft_response=pending_draft or None,
+                    manager_confirmed=bool(pending.get("manager_confirmed") or False),
+                    final_response=(pending.get("final_response") or None),
+                    sent_to_guest=bool(pending.get("sent_to_guest") or False),
+                    property_id=pending.get("property_id"),
                 )
-            elif first_interaction:
-                base_reason = reason or "Sin motivo registrado"
-                ai_message = f"Motivo de la escalación: {base_reason}."
-            else:
-                ai_message = ""
-        else:
-            system_prompt = (
-                "Eres un asistente interno para operadores de hotel. "
-                "Responde preguntas sobre el contexto de la escalación con claridad y brevedad. "
-                "No generes la respuesta final al huésped a menos que el operador lo solicite explícitamente. "
-                "Si falta información, indícalo."
-            )
-            user_prompt = (
-                "Contexto de escalaciones pendientes:\n"
-                f"{_pending_escalations_summary(pending_escalations)}\n\n"
-                "Escalación activa:\n"
-                f"- Mensaje del huésped: {guest_message or 'No disponible'}\n"
-                f"- Tipo: {esc_type or 'No disponible'}\n"
-                f"- Motivo: {reason or 'No disponible'}\n"
-                f"- Contexto: {context or 'No disponible'}\n"
-                f"- Borrador actual: {draft_response or 'No disponible'}\n\n"
-                f"Pregunta del operador:\n{message}"
-            )
 
-            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
-            ai_raw = llm.invoke(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
-            ai_message = (getattr(ai_raw, "content", None) or str(ai_raw or "")).strip()
-            if not ai_message:
-                ai_message = "No tengo suficiente información para responder."
+            base_response = pending_draft or pending_guest_message or ""
+            if base_response:
+                ESCALATIONS_STORE[pending_id].draft_response = base_response
+
+            raw_borrador = (
+                generar_borrador(
+                    escalation_id=pending_id,
+                    manager_response=base_response,
+                    adjustment=message,
+                )
+                or ""
+            ).strip()
+            clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
+            clean_draft = _strip_draft_instruction_block(clean_draft)
+            if not clean_draft:
+                clean_draft = "No tengo suficiente información para generar un borrador."
+
+            draft_sections.append(f"{idx}. [{pending_id}] {clean_draft}")
+
+        draft_response = "\n\n".join(draft_sections).strip()
+        ai_message = "Borrador actualizado."
 
         ai_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
@@ -1354,12 +1270,8 @@ def register_chatter_routes(app, state) -> None:
                 },
             )
 
-        if wants_draft or wants_adjustment:
-            proposed_response = draft_response or None
-            is_final_response = bool(draft_response)
-        else:
-            proposed_response = None
-            is_final_response = False
+        proposed_response = draft_response or None
+        is_final_response = bool(draft_response)
 
         return {
             "chat_id": clean_id,
