@@ -115,6 +115,7 @@ def save_message(
     channel: str | None = None,
     property_id: str | int | None = None,
     original_chat_id: str | None = None,
+    structured_payload: dict | list | None = None,
     table: str = "chat_history",
 ) -> None:
     """
@@ -159,6 +160,8 @@ def save_message(
             data["channel"] = channel
         if property_id is not None:
             data["property_id"] = property_id
+        if structured_payload is not None:
+            data["structured_payload"] = structured_payload
 
         try:
             supabase.table(table).insert(data).execute()
@@ -187,6 +190,9 @@ def save_message(
                 retry = True
             if "original_chat_id" in data:
                 data.pop("original_chat_id", None)
+                retry = True
+            if "structured_payload" in data:
+                data.pop("structured_payload", None)
                 retry = True
             if retry:
                 supabase.table(table).insert(data).execute()
@@ -221,7 +227,8 @@ def get_conversation_history(
     try:
         clean_id = str(conversation_id).replace("+", "").strip()
 
-        query = supabase.table(table).select("role, content, created_at")
+        select_fields = "role, content, created_at, structured_payload"
+        query = supabase.table(table).select(select_fields)
         if property_id is not None:
             query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
         else:
@@ -235,11 +242,30 @@ def get_conversation_history(
         if since is not None:
             query = query.gte("created_at", since.isoformat())
 
-        response = (
-            query.order("created_at", desc=False)
-            .limit(limit)
-            .execute()
-        )
+        try:
+            response = (
+                query.order("created_at", desc=False)
+                .limit(limit)
+                .execute()
+            )
+        except Exception:
+            # Compatibilidad: tablas antiguas sin structured_payload.
+            query = supabase.table(table).select("role, content, created_at")
+            if property_id is not None:
+                query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+            else:
+                query = query.eq("conversation_id", clean_id)
+            if original_chat_id:
+                query = query.eq("original_chat_id", str(original_chat_id).replace("+", "").strip())
+            if channel:
+                query = query.eq("channel", channel)
+            if since is not None:
+                query = query.gte("created_at", since.isoformat())
+            response = (
+                query.order("created_at", desc=False)
+                .limit(limit)
+                .execute()
+            )
 
         messages = response.data or []
         logging.info(f"🧩 Historial recuperado ({len(messages)} mensajes) para {clean_id}")
@@ -248,6 +274,48 @@ def get_conversation_history(
     except Exception as e:
         logging.error(f"⚠️ Error obteniendo historial: {e}", exc_info=True)
         return []
+
+
+def attach_structured_payload_to_latest_message(
+    *,
+    conversation_id: str,
+    structured_payload: dict | list,
+    table: str = "chat_history",
+    role: str = "bookai",
+) -> bool:
+    """
+    Adjunta structured_payload al último mensaje de una conversación para un rol dado.
+    Devuelve True si actualizó al menos una fila.
+    """
+    clean_id = str(conversation_id or "").replace("+", "").strip()
+    if not clean_id or structured_payload is None:
+        return False
+    try:
+        resp = (
+            supabase.table(table)
+            .select("id")
+            .eq("conversation_id", clean_id)
+            .eq("role", str(role or "bookai").strip().lower())
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+        )
+        rows = resp.data or []
+        if not rows:
+            return False
+        row_id = rows[0].get("id")
+        if row_id is None:
+            return False
+        (
+            supabase.table(table)
+            .update({"structured_payload": structured_payload})
+            .eq("id", row_id)
+            .execute()
+        )
+        return True
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo adjuntar structured_payload: %s", exc)
+        return False
 
 
 def get_last_property_id_for_conversation(

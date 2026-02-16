@@ -15,6 +15,7 @@ from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
+from core.db import attach_structured_payload_to_latest_message
 from core.instance_context import ensure_instance_credentials
 from core.message_utils import sanitize_wa_message, looks_like_new_instruction, build_kb_preview
 
@@ -1607,6 +1608,12 @@ def register_superintendente_routes(app, state) -> None:
                     "csv_delimiter": ";",
                 }
             }
+            attach_structured_payload_to_latest_message(
+                conversation_id=session_key,
+                structured_payload=response["structured"],
+                table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
+                role="bookai",
+            )
             try:
                 for key in [session_key, alt_key, owner_id]:
                     if key:
@@ -1626,6 +1633,12 @@ def register_superintendente_routes(app, state) -> None:
                     "csv_delimiter": ";",
                 }
             }
+            attach_structured_payload_to_latest_message(
+                conversation_id=session_key,
+                structured_payload=response["structured"],
+                table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
+                role="bookai",
+            )
             try:
                 for key in [session_key, alt_key, owner_id]:
                     if key:
@@ -1635,7 +1648,7 @@ def register_superintendente_routes(app, state) -> None:
             return response
         fallback_detail = _extract_detail_from_text(result)
         if fallback_detail:
-            return {
+            response = {
                 "structured": {
                     "kind": "reservation_detail",
                     "data": fallback_detail,
@@ -1643,6 +1656,13 @@ def register_superintendente_routes(app, state) -> None:
                     "csv_delimiter": ";",
                 }
             }
+            attach_structured_payload_to_latest_message(
+                conversation_id=session_key,
+                structured_payload=response["structured"],
+                table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
+                role="bookai",
+            )
+            return response
         return {"result": result}
 
     @router.post("/sessions")
@@ -1815,6 +1835,7 @@ def register_superintendente_routes(app, state) -> None:
     async def list_session_messages(
         session_id: str,
         limit: int = Query(default=50, ge=1, le=200),
+        include_internal: bool = Query(default=False),
         _: None = Depends(_verify_bearer),
     ):
         from core.db import get_conversation_history
@@ -1824,6 +1845,12 @@ def register_superintendente_routes(app, state) -> None:
             limit=limit,
             table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
         )
+        if not include_internal:
+            rows = [
+                row
+                for row in (rows or [])
+                if not _is_internal_super_message(str((row or {}).get("content") or ""))
+            ]
         return {"session_id": session_id, "items": rows}
 
     app.include_router(router)
