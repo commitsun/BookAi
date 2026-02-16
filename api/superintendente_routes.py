@@ -486,6 +486,47 @@ def _extract_detail_from_text(text: str) -> Optional[dict]:
     }
 
 
+def _extract_reservations_from_text(text: str) -> Optional[dict]:
+    if not text or "Folio ID:" not in text or text.count("Folio ID:") < 2:
+        return None
+
+    def _pick(raw: str, label: str) -> Optional[str]:
+        m = re.search(rf"{label}\s*:\s*([^|\n]+)", raw, re.IGNORECASE)
+        return m.group(1).strip() if m else None
+
+    items: list[dict[str, Any]] = []
+    for line in str(text).splitlines():
+        raw = line.strip()
+        if "Folio ID:" not in raw or "|" not in raw:
+            continue
+        left = raw.split("|", 1)[0].strip()
+        if not left or left.lower().startswith(("aquí tienes", "estas son")):
+            continue
+        item = {
+            "partner_name": left,
+            "folio_id": _pick(raw, "Folio ID"),
+            "folio_code": _pick(raw, "Código"),
+            "checkin": _pick(raw, "Check-in"),
+            "checkout": _pick(raw, "Check-out"),
+            "state": _pick(raw, "Estado"),
+            "amount_total": _pick(raw, "Total"),
+            "pending_amount": _pick(raw, "Pendiente"),
+            "partner_phone": _pick(raw, "Tel"),
+            "partner_email": _pick(raw, "Email"),
+        }
+        if item["folio_id"]:
+            items.append(item)
+
+    if not items:
+        return None
+    return {
+        "kind": "reservations",
+        "data": {"items": items},
+        "csv": None,
+        "csv_delimiter": ";",
+    }
+
+
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
     return msg
 
@@ -1728,6 +1769,9 @@ def register_superintendente_routes(app, state) -> None:
             "title": title,
             "name": title,
             "session_title": title,
+            "chat_title": title,
+            "display_name": title,
+            "label": title,
         }
 
     @router.get("/sessions")
@@ -1745,11 +1789,18 @@ def register_superintendente_routes(app, state) -> None:
         items = []
         rows: list[dict[str, Any]]
         try:
-            resp = (
+            query = (
                 state.supabase_client.table(table)
                 .select("conversation_id, content, created_at, original_chat_id, role, session_title")
-                .eq("original_chat_id", owner_key)
-                .order("created_at", desc=True)
+            )
+            if property_id:
+                # Compat: mensajes en sesión pueden persistirse con original_chat_id=owner_id
+                # (sin property) o owner_key (owner:property).
+                query = query.in_("original_chat_id", [owner_key, owner_id])
+            else:
+                query = query.eq("original_chat_id", owner_key)
+            resp = (
+                query.order("created_at", desc=True)
                 .limit(limit * 20)
                 .execute()
             )
@@ -1772,13 +1823,22 @@ def register_superintendente_routes(app, state) -> None:
             convo_id = str(row.get("conversation_id") or "").strip()
             if not convo_id or convo_id in seen:
                 continue
+            convo_rows = rows_by_conversation.get(convo_id) or []
+            # Evita mostrar pseudo-sesiones de contexto (p.ej. conversation_id == property_id)
+            # cuando solo contienen marcadores internos como [CTX]/[SUPER_SESSION].
+            if property_id and convo_id == str(property_id).strip():
+                has_real_content = any(
+                    not _is_internal_super_message(str((sample or {}).get("content") or ""))
+                    for sample in convo_rows
+                )
+                if not has_real_content:
+                    continue
             seen.add(convo_id)
             last_message = row.get("content")
             last_at = row.get("created_at")
             db_title = str(row.get("session_title") or "").strip() or None
             title = db_title or titles.get(convo_id) or _parse_session_title(str(last_message or "")) or "Chat"
             if _is_generic_session_title(title):
-                convo_rows = rows_by_conversation.get(convo_id) or []
                 user_seed = ""
                 assistant_seed = ""
                 for sample in convo_rows:
@@ -1829,6 +1889,9 @@ def register_superintendente_routes(app, state) -> None:
                     "title": title,
                     "name": title,
                     "session_title": title,
+                    "chat_title": title,
+                    "display_name": title,
+                    "label": title,
                     "last_message": last_message,
                     "last_message_at": last_at,
                 }
@@ -1846,6 +1909,9 @@ def register_superintendente_routes(app, state) -> None:
                         "title": meta.get("title") or "Chat",
                         "name": meta.get("title") or "Chat",
                         "session_title": meta.get("title") or "Chat",
+                        "chat_title": meta.get("title") or "Chat",
+                        "display_name": meta.get("title") or "Chat",
+                        "label": meta.get("title") or "Chat",
                         "last_message": None,
                         "last_message_at": meta.get("created_at"),
                     }
@@ -1878,6 +1944,19 @@ def register_superintendente_routes(app, state) -> None:
             # Compat: el frontend del chatter suele esperar `structured`.
             if item.get("structured") is None and item.get("structured_payload") is not None:
                 item["structured"] = item.get("structured_payload")
+            if item.get("structured") is None:
+                detail = _extract_detail_from_text(str(item.get("content") or ""))
+                if detail:
+                    item["structured"] = {
+                        "kind": "reservation_detail",
+                        "data": detail,
+                        "csv": _build_reservation_detail_csv(detail),
+                        "csv_delimiter": ";",
+                    }
+                else:
+                    recovered = _extract_reservations_from_text(str(item.get("content") or ""))
+                    if recovered:
+                        item["structured"] = recovered
             normalized_rows.append(item)
         if not include_internal:
             normalized_rows = [
