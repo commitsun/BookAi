@@ -442,29 +442,47 @@ def _build_reservation_detail_csv(detail: dict) -> Optional[str]:
 def _extract_detail_from_text(text: str) -> Optional[dict]:
     if not text:
         return None
-    if text.count("Folio ID:") != 1:
+    if "Folio ID:" not in text:
         return None
-    name = ""
-    try:
-        name = text.split("| Folio ID:")[0].strip()
-    except Exception:
-        name = ""
+
+    def _clean(value: Optional[str]) -> Optional[str]:
+        if value is None:
+            return None
+        v = str(value).strip()
+        if not v:
+            return None
+        v = re.sub(r"^\*+|\*+$", "", v).strip()
+        return v or None
+
     def _m(pattern: str) -> Optional[str]:
-        m = re.search(pattern, text, re.IGNORECASE)
-        return m.group(1).strip() if m else None
+        m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
+        return _clean(m.group(1)) if m else None
+
+    # Preferir siempre el formato etiquetado (multilínea).
+    name = _m(r"^\s*Nombre:\s*(.+)$")
+    if not name:
+        m_title = re.search(r"detalle de la reserva de\s+([^:\n]+)", text, re.IGNORECASE)
+        if m_title:
+            name = _clean(m_title.group(1))
+    # Fallback para formato en una sola línea con pipes.
+    if not name and "| Folio ID:" in text:
+        try:
+            name = _clean(text.split("| Folio ID:", 1)[0].strip())
+        except Exception:
+            name = None
 
     return {
         "folio_id": _m(r"Folio ID:\s*([A-Za-z0-9]+)"),
         "folio_code": _m(r"Código:\s*([A-Za-z0-9/\\-]+)"),
-        "partner_name": name or _m(r"Nombre:\s*([^|\\n]+)"),
-        "partner_phone": _m(r"Tel:\s*([^|\\n]+)"),
-        "partner_email": _m(r"Email:\s*([^|\\n]+)"),
-        "state": _m(r"Estado:\s*([^|\\n]+)"),
+        "partner_name": name,
+        "partner_phone": _m(r"Tel:\s*([^\n|]+)"),
+        "partner_email": _m(r"Email:\s*([^\n|]+)"),
+        "state": _m(r"Estado:\s*([^\n|]+)"),
         "amount_total": _m(r"Total:\s*([0-9]+(?:[.,][0-9]+)?)"),
         "pending_amount": _m(r"Pendiente:\s*([0-9]+(?:[.,][0-9]+)?)"),
-        "checkin": _m(r"Check-in:\s*([^|\\n]+)"),
-        "checkout": _m(r"Check-out:\s*([^|\\n]+)"),
-        "portal_url": _m(r"(https?://\\S+)"),
+        "checkin": _m(r"Check-in:\s*([^\n|]+)"),
+        "checkout": _m(r"Check-out:\s*([^\n|]+)"),
+        "portal_url": _m(r"(https?://\S+)"),
     }
 
 
@@ -1705,7 +1723,12 @@ def register_superintendente_routes(app, state) -> None:
             except Exception as exc:
                 log.warning("No se pudo registrar sesión en historia: %s", exc)
 
-        return {"session_id": session_id, "title": title}
+        return {
+            "session_id": session_id,
+            "title": title,
+            "name": title,
+            "session_title": title,
+        }
 
     @router.get("/sessions")
     async def list_sessions(
@@ -1804,6 +1827,8 @@ def register_superintendente_routes(app, state) -> None:
                 {
                     "session_id": convo_id,
                     "title": title,
+                    "name": title,
+                    "session_title": title,
                     "last_message": last_message,
                     "last_message_at": last_at,
                 }
@@ -1819,6 +1844,8 @@ def register_superintendente_routes(app, state) -> None:
                     {
                         "session_id": session_id,
                         "title": meta.get("title") or "Chat",
+                        "name": meta.get("title") or "Chat",
+                        "session_title": meta.get("title") or "Chat",
                         "last_message": None,
                         "last_message_at": meta.get("created_at"),
                     }
@@ -1845,12 +1872,19 @@ def register_superintendente_routes(app, state) -> None:
             limit=limit,
             table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
         )
+        normalized_rows: list[dict[str, Any]] = []
+        for row in (rows or []):
+            item = dict(row or {})
+            # Compat: el frontend del chatter suele esperar `structured`.
+            if item.get("structured") is None and item.get("structured_payload") is not None:
+                item["structured"] = item.get("structured_payload")
+            normalized_rows.append(item)
         if not include_internal:
-            rows = [
+            normalized_rows = [
                 row
-                for row in (rows or [])
+                for row in (normalized_rows or [])
                 if not _is_internal_super_message(str((row or {}).get("content") or ""))
             ]
-        return {"session_id": session_id, "items": rows}
+        return {"session_id": session_id, "items": normalized_rows}
 
     app.include_router(router)
