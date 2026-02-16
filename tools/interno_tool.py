@@ -315,6 +315,38 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     )
                 except Exception:
                     log.debug("No se pudo enviar actualización de escalación %s por Telegram", existing_id)
+            try:
+                clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
+                rooms = _rooms_for_escalation(guest_chat_id)
+                _fire_event(
+                    "escalation.updated",
+                    {
+                        "chat_id": clean_chat_id,
+                        "escalation_id": existing_id,
+                        "guest_message": merged_guest_message,
+                        "escalation_type": escalation_type,
+                        "escalation_reason": merged_reason,
+                        "context": merged_context,
+                        "property_id": property_id,
+                    },
+                    rooms=rooms,
+                )
+                _fire_event(
+                    "chat.updated",
+                    {
+                        "chat_id": clean_chat_id,
+                        "needs_action": merged_guest_message,
+                        "needs_action_type": escalation_type,
+                        "needs_action_reason": merged_reason,
+                        "proposed_response": (existing_pending.get("draft_response") or "").strip() or None,
+                        "is_final_response": bool((existing_pending.get("draft_response") or "").strip()),
+                        "escalation_id": existing_id,
+                        "property_id": property_id,
+                    },
+                    rooms=rooms,
+                )
+            except Exception:
+                log.debug("No se pudo emitir actualización realtime de escalación %s", existing_id)
             log.info(
                 "♻️ Reutilizada escalación pendiente %s para chat=%s property_id=%s",
                 existing_id,
