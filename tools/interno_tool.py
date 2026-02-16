@@ -108,6 +108,18 @@ def _sanitize_guest_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _merge_escalation_text(previous: str, addition: str) -> str:
+    prev = (previous or "").strip()
+    add = (addition or "").strip()
+    if not prev:
+        return add
+    if not add:
+        return prev
+    if add.lower() in prev.lower():
+        return prev
+    return f"{prev} {add}".strip()
+
+
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     if not _MEMORY_MANAGER or not guest_chat_id:
         return None
@@ -251,13 +263,25 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             and escalation_type == "info_not_found"
             and existing_type in {"info_not_found", "manual"}
         ):
+            merged_guest_message = _merge_escalation_text(
+                str(existing_pending.get("guest_message") or ""),
+                guest_message,
+            )
+            merged_reason = _merge_escalation_text(
+                str(existing_pending.get("escalation_reason") or existing_pending.get("reason") or ""),
+                clean_reason,
+            )
+            merged_context = _merge_escalation_text(
+                str(existing_pending.get("context") or ""),
+                context_to_store,
+            )
             update_escalation(
                 existing_id,
                 {
-                    "guest_message": guest_message,
+                    "guest_message": merged_guest_message,
                     "escalation_type": escalation_type,
-                    "escalation_reason": clean_reason,
-                    "context": context_to_store,
+                    "escalation_reason": merged_reason,
+                    "context": merged_context,
                     "timestamp": datetime.utcnow().isoformat(),
                     "property_id": property_id,
                 },
@@ -265,14 +289,32 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             try:
                 existing = ESCALATIONS_STORE.get(existing_id)
                 if existing:
-                    existing.guest_message = guest_message
+                    existing.guest_message = merged_guest_message
                     existing.escalation_type = escalation_type
-                    existing.escalation_reason = clean_reason
-                    existing.context = context_to_store
+                    existing.escalation_reason = merged_reason
+                    existing.context = merged_context
                     existing.timestamp = datetime.utcnow().isoformat()
                     existing.property_id = property_id
             except Exception:
                 pass
+            if C.TELEGRAM_CHAT_ID and C.TELEGRAM_BOT_TOKEN:
+                try:
+                    update_msg = (
+                        "🔁 <b>ACTUALIZACIÓN DE CONSULTA ESCALADA</b>\n"
+                        f"🆔 <b>ID:</b> <code>{html.escape(existing_id)}</code>\n"
+                        f"📱 <b>Chat ID:</b> <code>{html.escape(guest_chat_id)}</code>\n\n"
+                        "➕ <b>Nueva ampliación del huésped:</b>\n"
+                        f"{html.escape(guest_message)}\n\n"
+                        "📌 <b>Consulta acumulada:</b>\n"
+                        f"{html.escape(merged_guest_message)}"
+                    )
+                    requests.post(
+                        f"https://api.telegram.org/bot{C.TELEGRAM_BOT_TOKEN}/sendMessage",
+                        json={"chat_id": str(C.TELEGRAM_CHAT_ID), "text": update_msg, "parse_mode": "HTML"},
+                        timeout=10,
+                    )
+                except Exception:
+                    log.debug("No se pudo enviar actualización de escalación %s por Telegram", existing_id)
             log.info(
                 "♻️ Reutilizada escalación pendiente %s para chat=%s property_id=%s",
                 existing_id,

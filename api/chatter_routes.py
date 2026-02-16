@@ -1151,9 +1151,6 @@ def register_chatter_routes(app, state) -> None:
         if not escalation_id:
             raise HTTPException(status_code=404, detail="Escalación inválida")
 
-        pre_messages = esc.get("messages") or []
-        first_interaction = not isinstance(pre_messages, list) or len(pre_messages) == 0
-
         operator_ts = datetime.now(timezone.utc).isoformat()
         messages = append_escalation_message(
             escalation_id=escalation_id,
@@ -1162,10 +1159,6 @@ def register_chatter_routes(app, state) -> None:
             timestamp=operator_ts,
         )
 
-        guest_message = (esc.get("guest_message") or "").strip()
-        esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
-        reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
-        context = (esc.get("context") or "").strip()
         draft_response = (esc.get("draft_response") or "").strip()
 
         log.info(
@@ -1225,15 +1218,7 @@ def register_chatter_routes(app, state) -> None:
             draft_sections.append(f"{idx}. [{pending_id}] {clean_draft}")
 
         draft_response = "\n\n".join(draft_sections).strip()
-        ai_message = "Borrador actualizado."
-
-        ai_ts = datetime.now(timezone.utc).isoformat()
-        messages = append_escalation_message(
-            escalation_id=escalation_id,
-            role="ai",
-            content=ai_message,
-            timestamp=ai_ts,
-        )
+        ai_message = None
 
         await _emit(
             "escalation.chat.updated",
