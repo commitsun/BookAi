@@ -158,6 +158,26 @@ def _explicit_language_request(text: str) -> Optional[str]:
     return None
 
 
+def _is_short_ambiguous_snippet(text: str) -> bool:
+    """
+    Detecta fragmentos muy cortos y ambiguos (p.ej. nombres de hotel/ciudad)
+    que no deberían forzar un cambio de idioma por sí solos.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    if any(ch in raw for ch in ".!?;:"):
+        return False
+    words = [w for w in raw.split() if w]
+    if len(words) > 2:
+        return False
+    if len(raw) > 28:
+        return False
+    if re.search(r"\d", raw):
+        return False
+    return True
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -234,6 +254,8 @@ class LanguageManager:
                 threshold = 0.75
 
             if prob >= threshold:
+                if prev_lang and code != base_lang and _is_short_ambiguous_snippet(text):
+                    return base_lang
                 return code if code in supported else base_lang
             if prev_lang:
                 return base_lang
@@ -257,6 +279,8 @@ class LanguageManager:
                 return base_lang
 
             if out not in supported:
+                return base_lang
+            if prev_lang and out != base_lang and _is_short_ambiguous_snippet(text):
                 return base_lang
             return out
         except Exception as e:
