@@ -1,9 +1,11 @@
 import os
 from io import BytesIO
+from datetime import datetime, timezone
 from typing import Dict, List, Optional, Set
 from uuid import uuid4
 
 import boto3
+import tiktoken
 from dotenv import load_dotenv
 from langchain_openai import OpenAIEmbeddings
 from langchain_text_splitters import RecursiveCharacterTextSplitter
@@ -27,6 +29,7 @@ AWS_REGION = os.getenv("AWS_DEFAULT_REGION", "eu-west-1")
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 s3 = boto3.client("s3", region_name=AWS_REGION)
 embeddings_model = OpenAIEmbeddings(model="text-embedding-3-small")
+ENCODER = tiktoken.get_encoding("cl100k_base")
 
 
 # =====================================
@@ -85,11 +88,12 @@ def load_text_from_s3(key: str) -> str:
 
 
 def chunk_text(text: str, chunk_size: int = 1000, overlap: int = 200) -> List[str]:
-    """Divide el texto en fragmentos (chunks) usando LangChain."""
+    """Divide el texto en chunks con tamaño por tokens para mejorar recuperación."""
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
         chunk_overlap=overlap,
         separators=["\n\n", "\n", ".", " "],
+        length_function=lambda s: len(ENCODER.encode(s)),
     )
     return splitter.split_text(text)
 
@@ -123,19 +127,34 @@ def list_s3_files(prefix: str) -> List[Dict[str, str]]:
 # =====================================
 # 🧠 Gestión de Supabase (estado de archivos)
 # =====================================
-def fetch_existing_file_etag(table_name: str, file_name: str) -> Optional[str]:
-    """Devuelve el etag almacenado para un archivo ya vectorizado (None si no existe)."""
+def fetch_existing_file_etag(
+    table_name: str, source_key: str, legacy_source: Optional[str] = None
+) -> Optional[str]:
+    """Devuelve el etag almacenado para una fuente ya vectorizada (None si no existe)."""
     try:
         response = (
             supabase.table(table_name)
             .select("metadata")
-            .eq("metadata->>source", file_name)
+            .eq("metadata->>source_key", source_key)
             .limit(1)
             .execute()
         )
     except Exception as exc:
-        print(f"⚠️ No se pudo leer estado previo de {file_name}: {exc}")
+        print(f"⚠️ No se pudo leer estado previo de {source_key}: {exc}")
         return None
+
+    if not response.data and legacy_source:
+        try:
+            response = (
+                supabase.table(table_name)
+                .select("metadata")
+                .eq("metadata->>source", legacy_source)
+                .limit(1)
+                .execute()
+            )
+        except Exception as exc:
+            print(f"⚠️ No se pudo leer estado previo legacy de {legacy_source}: {exc}")
+            return None
 
     if not response.data:
         return None
@@ -155,24 +174,46 @@ def list_vectorized_sources(table_name: str) -> Set[str]:
     sources: Set[str] = set()
     for row in response.data or []:
         meta = row.get("metadata") or {}
-        if meta.get("source"):
-            sources.add(meta["source"])
+        source_key = meta.get("source_key")
+        source = meta.get("source")
+        if source_key:
+            sources.add(source_key)
+        elif source:
+            sources.add(source)
     return sources
 
 
-def delete_file_from_supabase(table_name: str, file_name: str) -> None:
+def delete_file_from_supabase(
+    table_name: str, source_key: str, legacy_source: Optional[str] = None
+) -> None:
     """Elimina los embeddings de un archivo concreto sin tocar el resto de la tabla."""
+    deleted_total = 0
     try:
         response = (
             supabase.table(table_name)
             .delete()
-            .eq("metadata->>source", file_name)
+            .eq("metadata->>source_key", source_key)
             .execute()
         )
         deleted = len(response.data or []) if hasattr(response, "data") else 0
-        print(f"🗑️  Eliminados {deleted} registros de {file_name} en {table_name}.")
+        deleted_total += deleted
     except Exception as exc:
-        print(f"⚠️ No se pudo eliminar {file_name} de {table_name}: {exc}")
+        print(f"⚠️ No se pudo eliminar {source_key} de {table_name}: {exc}")
+
+    if legacy_source:
+        try:
+            response = (
+                supabase.table(table_name)
+                .delete()
+                .eq("metadata->>source", legacy_source)
+                .execute()
+            )
+            deleted = len(response.data or []) if hasattr(response, "data") else 0
+            deleted_total += deleted
+        except Exception as exc:
+            print(f"⚠️ No se pudo eliminar legacy {legacy_source} de {table_name}: {exc}")
+
+    print(f"🗑️  Eliminados {deleted_total} registros de {source_key} en {table_name}.")
 
 
 def purge_table(table_name: str) -> None:
@@ -190,6 +231,7 @@ def purge_table(table_name: str) -> None:
 def save_chunks_to_supabase(
     table_name: str,
     doc_name: str,
+    source_key: str,
     chunks: List[str],
     *,
     etag: Optional[str],
@@ -208,9 +250,11 @@ def save_chunks_to_supabase(
             "embedding": vector,
             "metadata": {
                 "source": doc_name,
+                "source_key": source_key,
                 "chunk": idx,
                 "etag": etag,
                 "last_modified": last_modified,
+                "indexed_at": datetime.now(timezone.utc).isoformat(),
             },
         }
         for idx, (chunk, vector) in enumerate(zip(chunks, vectors))
@@ -243,7 +287,7 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
 
     print(f"📂 Archivos detectados en S3 ({len(s3_files)}): {[f['file_name'] for f in s3_files]}")
 
-    current_sources = {f["file_name"] for f in s3_files}
+    current_sources = {f["key"] for f in s3_files}
     vectorized_sources = list_vectorized_sources(table_name)
 
     # 1) Limpiar embeddings de archivos que ya no existen en S3
@@ -254,12 +298,22 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
 
     # 2) Procesar nuevos o modificados
     for file_info in s3_files:
+        source_key = file_info["key"]
         file_name = file_info["file_name"]
         etag = file_info["etag"]
         last_modified = file_info["last_modified"]
 
-        # Siempre revectorizamos cada archivo para asegurar sincronía 1:1 con S3.
-        delete_file_from_supabase(table_name, file_name)
+        existing_etag = fetch_existing_file_etag(
+            table_name,
+            source_key,
+            legacy_source=file_name,
+        )
+        if existing_etag and existing_etag == etag:
+            print(f"⏭️  Sin cambios en {source_key}, se omite revectorización.")
+            continue
+
+        # Solo revectorizamos cuando hay cambios (etag distinto) o primera carga.
+        delete_file_from_supabase(table_name, source_key, legacy_source=file_name)
         print(f"🔄 Revectorizando {file_name} ...")
 
         try:
@@ -284,6 +338,7 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
             save_chunks_to_supabase(
                 table_name,
                 file_name,
+                source_key,
                 chunks,
                 etag=etag,
                 last_modified=last_modified,
