@@ -13,6 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 from core.config import Settings
 from core.template_registry import TemplateRegistry
 from core.instance_context import ensure_instance_credentials
+from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation
 
@@ -550,6 +551,17 @@ def register_template_routes(app, state) -> None:
                 )
             except Exception as exc:
                 log.warning("No se pudo registrar el envío en memoria: %s", exc)
+            try:
+                await sync_guest_offer_state_from_sent_wa(
+                    state,
+                    guest_id=chat_id,
+                    sent_message=rendered or wa_template,
+                    source="template_api",
+                    session_id=context_id or chat_id,
+                    property_id=(payload.meta.property_id if payload.meta else None),
+                )
+            except Exception:
+                pass
 
             return {
                 "status": "sent",

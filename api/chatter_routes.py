@@ -20,6 +20,7 @@ from core.escalation_db import (
 )
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials
+from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
@@ -887,6 +888,17 @@ def register_chatter_routes(app, state) -> None:
             channel="whatsapp",
             context_id=context_id,
         )
+        try:
+            await sync_guest_offer_state_from_sent_wa(
+                state,
+                guest_id=chat_id,
+                sent_message=outgoing_message,
+                source="chatter_manual",
+                session_id=context_id or chat_id,
+                property_id=property_id,
+            )
+        except Exception:
+            pass
         try:
             sender = (payload.sender or "bookai").strip().lower()
             if sender in {"user", "hotel", "staff"}:
@@ -1761,6 +1773,17 @@ def register_chatter_routes(app, state) -> None:
             )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)
+        try:
+            await sync_guest_offer_state_from_sent_wa(
+                state,
+                guest_id=chat_id,
+                sent_message=rendered or template_name,
+                source="chatter_template",
+                session_id=context_id or chat_id,
+                property_id=property_id,
+            )
+        except Exception:
+            pass
 
         now_iso = datetime.now(timezone.utc).isoformat()
         rooms = _rooms(chat_id, property_id, "whatsapp")

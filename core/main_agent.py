@@ -1195,11 +1195,38 @@ class MainAgent:
     def _is_multi_property_instance(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
-        candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
-        if isinstance(candidates, list) and len(candidates) > 1:
-            return True
         instance_code = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+        candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
+        candidates_instance = self.memory_manager.get_flag(chat_id, "property_disambiguation_instance_id")
+        # Solo confiar en candidatos si pertenecen a la misma instancia actual.
+        if (
+            instance_code
+            and isinstance(candidates, list)
+            and str(candidates_instance or "").strip()
+            and str(candidates_instance).strip() == str(instance_code).strip()
+        ):
+            unique_ids = {
+                str((cand or {}).get("property_id") or "").strip()
+                for cand in candidates
+                if isinstance(cand, dict) and str((cand or {}).get("property_id") or "").strip()
+            }
+            if len(unique_ids) > 1:
+                return True
+            if len(unique_ids) == 1:
+                # Si la instancia actual tiene una sola property en candidatos, fijar contexto y no preguntar "otro hotel".
+                only = next((cand for cand in candidates if isinstance(cand, dict)), None) or {}
+                try:
+                    tool = create_property_context_tool(
+                        memory_manager=self.memory_manager,
+                        chat_id=chat_id,
+                    )
+                    tool.invoke({"property_id": only.get("property_id"), "property_name": only.get("name")})
+                except Exception as exc:
+                    log.warning("No se pudo fijar property unica desde candidatos: %s", exc)
+                return False
+
         if not instance_code:
+            # Sin instancia, evitar pregunta de "otro hotel" por defecto.
             return False
         table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
         if not table:
@@ -1208,12 +1235,22 @@ class MainAgent:
             rows = fetch_properties_by_code(table, str(instance_code))
         except Exception:
             rows = []
-        if len(rows) > 1:
+        # Contar properties únicas para evitar falsos positivos por duplicados de consulta.
+        unique_props = set()
+        for row in rows or []:
+            if not isinstance(row, dict):
+                continue
+            pid = str(row.get("property_id") or "").strip()
+            pname = str(row.get("name") or row.get("property_name") or "").strip().lower()
+            key = pid or pname
+            if key:
+                unique_props.add(key)
+        if len(unique_props) > 1:
             return True
-        if len(rows) == 1:
-            row = rows[0] or {}
+        if len(unique_props) == 1 and rows:
+            row = next((r for r in rows if isinstance(r, dict)), {}) or {}
             prop_id = row.get("property_id")
-            prop_code = row.get("name")
+            prop_code = row.get("name") or row.get("property_name")
             if prop_id or prop_code:
                 try:
                     tool = create_property_context_tool(
