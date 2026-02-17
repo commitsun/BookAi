@@ -11,7 +11,7 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
-from typing import ClassVar, List, Optional
+from typing import ClassVar, List, Optional, Tuple
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -141,6 +141,10 @@ class KBSearchTool(BaseTool):
             focus = [w for w in words if w not in stop]
             return focus[-1] if focus else words[-1]
 
+        def _preview(text: str, max_len: int = 240) -> str:
+            one_line = " ".join((text or "").split())
+            return (one_line[:max_len] + "…") if len(one_line) > max_len else one_line
+
         try:
             tools = await get_tools(server_name="InfoAgent")
             if not tools:
@@ -182,13 +186,24 @@ class KBSearchTool(BaseTool):
 
             raw_reply = await kb_tool.ainvoke(payload)
             base_payload = payload.copy()
-            def _is_invalid(text: str) -> bool:
+            if isinstance(raw_reply, list):
+                log.info("KBSearchTool: chunks recuperados=%s", len(raw_reply))
+
+            def _is_invalid(text: str) -> Tuple[bool, str]:
                 if not text or len(text) < 10:
-                    return True
+                    return True, "empty_or_short"
                 lowered = text.lower()
-                error_tokens = ["traceback", "error", "exception", "select", "schema"]
-                if any(tok in lowered for tok in error_tokens):
-                    return True
+                technical_error_patterns = [
+                    r"\btraceback\b",
+                    r"\bexception\b",
+                    r"\bsyntax error\b",
+                    r"\brelation .* does not exist\b",
+                    r"\bcolumn .* does not exist\b",
+                    r"\btool .* error\b",
+                    r"\bhttp(?:\s+request)?\s+\d{3}\b",
+                ]
+                if any(re.search(pattern, lowered) for pattern in technical_error_patterns):
+                    return True, "technical_error_pattern"
                 no_info_tokens = [
                     "no dispongo",
                     "no tengo información",
@@ -197,11 +212,13 @@ class KBSearchTool(BaseTool):
                     "no se encontró",
                 ]
                 if any(tok in lowered for tok in no_info_tokens):
-                    return True
-                return False
+                    return True, "no_info_pattern"
+                return False, "ok"
 
             cleaned = normalize_reply(raw_reply, question, "InfoAgent").strip()
-            fallback_needed = _is_invalid(cleaned) or "no dispone" in cleaned.lower() or "no cuenta con" in cleaned.lower()
+            is_invalid, invalid_reason = _is_invalid(cleaned)
+            log.info("KBSearchTool: respuesta KB (preview): %s", _preview(cleaned))
+            fallback_needed = is_invalid or "no dispone" in cleaned.lower() or "no cuenta con" in cleaned.lower()
 
             if fallback_needed:
                 focus = _extract_focus_term(question)
@@ -210,12 +227,17 @@ class KBSearchTool(BaseTool):
                     retry_payload = base_payload.copy()
                     retry_payload["input"] = focus
                     raw_retry = await kb_tool.ainvoke(retry_payload)
+                    if isinstance(raw_retry, list):
+                        log.info("KBSearchTool: chunks recuperados (reintento)=%s", len(raw_retry))
                     cleaned_retry = normalize_reply(raw_retry, focus, "InfoAgent").strip()
-                    if not _is_invalid(cleaned_retry):
+                    retry_invalid, retry_reason = _is_invalid(cleaned_retry)
+                    log.info("KBSearchTool: respuesta KB reintento (preview): %s", _preview(cleaned_retry))
+                    if not retry_invalid:
                         log.info("KBSearchTool: información obtenida correctamente (reintento).")
                         return cleaned_retry
-                if _is_invalid(cleaned):
-                    log.info("KBSearchTool: KB no tiene información útil tras reintento.")
+                    log.info("KBSearchTool: reintento inválido (motivo=%s).", retry_reason)
+                if is_invalid:
+                    log.info("KBSearchTool: KB no tiene información útil tras reintento (motivo=%s).", invalid_reason)
                     return None
 
             log.info("KBSearchTool: información obtenida correctamente.")

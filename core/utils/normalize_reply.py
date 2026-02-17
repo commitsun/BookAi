@@ -32,6 +32,18 @@ def _extract_text_from_raw(raw: Any) -> str:
     if isinstance(raw, list):
         texts = []
         for item in raw:
+            # Caso típico del retriever MCP: {"type":"text","text":"{\"pageContent\":\"...\"}"}
+            if isinstance(item, dict) and "text" in item:
+                txt = item.get("text", "")
+                if isinstance(txt, str):
+                    try:
+                        inner = json.loads(txt)
+                        if isinstance(inner, dict) and "pageContent" in inner:
+                            texts.append(inner["pageContent"])
+                            continue
+                    except json.JSONDecodeError:
+                        pass
+
             # PRIMERO: intentamos extracción profunda (Gemini, dicts, etc.)
             extracted = _extract_text_from_raw(item)
             if extracted:
