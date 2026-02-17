@@ -6,6 +6,7 @@ import logging
 import re
 from datetime import datetime, timezone
 
+from core.language_manager import language_manager
 from core.main_agent import create_main_agent
 from core.instance_context import hydrate_dynamic_context
 
@@ -31,8 +32,26 @@ async def process_user_message(
     try:
         mem_id = memory_id or chat_id
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
+        guest_lang = "es"
         if state.memory_manager:
             state.memory_manager.set_flag(mem_id, "default_channel", channel)
+            try:
+                prev_lang = state.memory_manager.get_flag(mem_id, "guest_lang")
+                detected_lang = language_manager.detect_language(user_message, prev_lang=prev_lang)
+                guest_lang = (detected_lang or prev_lang or "es").strip().lower() or "es"
+                state.memory_manager.set_flag(mem_id, "guest_lang", guest_lang)
+            except Exception as exc:
+                log.debug("No se pudo detectar/guardar guest_lang en pipeline: %s", exc)
+
+        def _ensure_guest_language(text: str) -> str:
+            if not text:
+                return text
+            if guest_lang == "es":
+                return text
+            try:
+                return language_manager.ensure_language(text, guest_lang)
+            except Exception:
+                return text
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
@@ -85,7 +104,7 @@ async def process_user_message(
                 re.IGNORECASE,
             )
             if recent_summary and confirmation:
-                response_raw = "¡Perfecto! Queda confirmada. Si necesitas algo más, dímelo."
+                response_raw = _ensure_guest_language("¡Perfecto! Queda confirmada. Si necesitas algo más, dímelo.")
                 try:
                     state.memory_manager.save(
                         mem_id,
@@ -135,7 +154,7 @@ async def process_user_message(
             )
         )
         if not response_raw and asks_localizador and localizador and not wants_details:
-            response_raw = f"El localizador de tu reserva es {localizador}."
+            response_raw = _ensure_guest_language(f"El localizador de tu reserva es {localizador}.")
             try:
                 state.memory_manager.save(
                     mem_id,

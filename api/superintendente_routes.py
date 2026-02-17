@@ -17,9 +17,20 @@ from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
 from core.db import attach_structured_payload_to_latest_message
 from core.instance_context import ensure_instance_credentials
+from core.language_manager import language_manager
 from core.message_utils import sanitize_wa_message, looks_like_new_instruction, build_kb_preview
 
 log = logging.getLogger("SuperintendenteRoutes")
+_SUPER_STATE: Any | None = None
+_INTERNAL_MARKERS = (
+    "[WA_DRAFT]|",
+    "[WA_SENT]|",
+    "[KB_DRAFT]|",
+    "[KB_REMOVE_DRAFT]|",
+    "[BROADCAST_DRAFT]|",
+    "[TPL_DRAFT]|",
+    "[SUPER_SESSION]|",
+)
 
 
 # ---------------------------------------------------------------------------
@@ -528,7 +539,81 @@ def _extract_reservations_from_text(text: str) -> Optional[dict]:
 
 
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
-    return msg
+    if not msg:
+        return msg
+    state = _SUPER_STATE
+    memory = getattr(state, "memory_manager", None) if state else None
+    if not memory:
+        return msg
+
+    clean_guest = _normalize_guest_id(guest_id)
+    keys = [k for k in (clean_guest, f"+{clean_guest}" if clean_guest else "", str(guest_id or "").strip()) if k]
+
+    lang = None
+    source_key = None
+    for key in keys:
+        try:
+            value = memory.get_flag(key, "guest_lang")
+        except Exception:
+            value = None
+        if value:
+            lang = str(value).strip().lower()
+            source_key = key
+            break
+
+    if not lang:
+        sample = None
+        for key in keys:
+            try:
+                history = memory.get_memory(key, limit=20) or []
+            except Exception:
+                history = []
+            for entry in reversed(history):
+                role = str(entry.get("role") or "").lower()
+                if role not in {"guest", "user"}:
+                    continue
+                content = str(entry.get("content") or "").strip()
+                if content:
+                    sample = content
+                    source_key = key
+                    break
+            if sample:
+                break
+        if sample:
+            try:
+                lang = language_manager.detect_language(sample, prev_lang=None)
+            except Exception:
+                lang = None
+
+    lang = (lang or "es").strip().lower() or "es"
+    if source_key:
+        try:
+            memory.set_flag(source_key, "guest_lang", lang)
+            if clean_guest and clean_guest != source_key:
+                memory.set_flag(clean_guest, "guest_lang", lang)
+        except Exception:
+            pass
+
+    if lang == "es":
+        return msg
+    try:
+        return language_manager.ensure_language(msg, lang)
+    except Exception:
+        return msg
+
+
+def _ensure_owner_language(msg: str, owner_lang: Optional[str]) -> str:
+    if not msg:
+        return msg
+    if any(marker in msg for marker in _INTERNAL_MARKERS):
+        return msg
+    lang = (owner_lang or "es").strip().lower() or "es"
+    if lang == "es":
+        return msg
+    try:
+        return language_manager.ensure_language(msg, lang)
+    except Exception:
+        return msg
 
 
 def _parse_wa_drafts(raw_text: str) -> list[dict]:
@@ -1065,6 +1150,8 @@ async def _expand_followup_with_context(
 # Registro de rutas
 # ---------------------------------------------------------------------------
 def register_superintendente_routes(app, state) -> None:
+    global _SUPER_STATE
+    _SUPER_STATE = state
     router = APIRouter(prefix="/api/v1/superintendente", tags=["superintendente"])
 
     @router.post("/ask")
@@ -1077,6 +1164,18 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
+        owner_lang = "es"
+        if state.memory_manager:
+            try:
+                prev_owner_lang = state.memory_manager.get_flag(session_key, "owner_lang")
+                owner_lang = language_manager.detect_language(message, prev_lang=prev_owner_lang)
+                owner_lang = (owner_lang or prev_owner_lang or "es").strip().lower() or "es"
+                state.memory_manager.set_flag(session_key, "owner_lang", owner_lang)
+                if alt_key:
+                    state.memory_manager.set_flag(alt_key, "owner_lang", owner_lang)
+                state.memory_manager.set_flag(owner_id, "owner_lang", owner_lang)
+            except Exception:
+                pass
         if state.memory_manager and message and not _is_short_wa_confirmation(message) and not _is_short_wa_cancel(message):
             try:
                 recent = state.memory_manager.get_memory_as_messages(session_key, limit=14) or []
@@ -1542,6 +1641,7 @@ def register_superintendente_routes(app, state) -> None:
             chat_history=payload.chat_history,
             session_id=payload.session_id or session_key,
         )
+        result = _ensure_owner_language(str(result or ""), owner_lang)
 
         wa_drafts = _parse_wa_drafts(result)
         if wa_drafts:

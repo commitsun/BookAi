@@ -26,6 +26,7 @@ from core.message_utils import (
 )
 from core.db import get_conversation_history
 from core.instance_context import DEFAULT_PROPERTY_TABLE, ensure_instance_credentials, fetch_property_by_id
+from core.language_manager import language_manager
 
 log = logging.getLogger("TelegramWebhook")
 log.setLevel(logging.INFO)
@@ -113,7 +114,63 @@ def register_telegram_routes(app, state):
 
     def _ensure_guest_language(msg: str, guest_id: str) -> str:
         """Mantiene el idioma del huésped al reenviar mensajes del superintendente."""
-        return msg
+        if not msg or not getattr(state, "memory_manager", None):
+            return msg
+
+        clean_guest = _normalize_guest_id(guest_id)
+        keys = [k for k in (clean_guest, f"+{clean_guest}" if clean_guest else "", str(guest_id or "").strip()) if k]
+        lang = None
+        source_key = None
+
+        for key in keys:
+            try:
+                value = state.memory_manager.get_flag(key, "guest_lang")
+            except Exception:
+                value = None
+            if value:
+                lang = str(value).strip().lower()
+                source_key = key
+                break
+
+        if not lang:
+            sample = None
+            for key in keys:
+                try:
+                    history = state.memory_manager.get_memory(key, limit=20) or []
+                except Exception:
+                    history = []
+                for entry in reversed(history):
+                    role = str(entry.get("role") or "").lower()
+                    if role not in {"guest", "user"}:
+                        continue
+                    content = str(entry.get("content") or "").strip()
+                    if content:
+                        sample = content
+                        source_key = key
+                        break
+                if sample:
+                    break
+            if sample:
+                try:
+                    lang = language_manager.detect_language(sample, prev_lang=None)
+                except Exception:
+                    lang = None
+
+        lang = (lang or "es").strip().lower() or "es"
+        if source_key:
+            try:
+                state.memory_manager.set_flag(source_key, "guest_lang", lang)
+                if clean_guest and clean_guest != source_key:
+                    state.memory_manager.set_flag(clean_guest, "guest_lang", lang)
+            except Exception:
+                pass
+
+        if lang == "es":
+            return msg
+        try:
+            return language_manager.ensure_language(msg, lang)
+        except Exception:
+            return msg
 
     def _looks_like_new_instruction(text: str) -> bool:
         """
