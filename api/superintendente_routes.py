@@ -47,7 +47,10 @@ class SuperintendenteContext(BaseModel):
     )
     hotel_name: str = Field(..., description="Nombre del hotel en contexto")
     session_id: Optional[str] = Field(default=None, description="ID de sesión del superintendente")
-    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
+    property_id: Optional[int | str] = Field(
+        default=None,
+        description="ID de property (numérico o string, opcional)",
+    )
 
 
 class AskSuperintendenteRequest(SuperintendenteContext):

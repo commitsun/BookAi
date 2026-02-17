@@ -41,12 +41,18 @@ class SendMessageRequest(BaseModel):
     message: str = Field(..., description="Texto del mensaje a enviar")
     channel: str = Field(default="whatsapp", description="Canal de salida")
     sender: Optional[str] = Field(default="bookai", description="Emisor (guest/cliente, bookai)")
-    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
+    property_id: Optional[int | str] = Field(
+        default=None,
+        description="ID de property (numérico o string, opcional).",
+    )
 
 
 class ToggleBookAiRequest(BaseModel):
     bookai_enabled: bool = Field(..., description="Activa o desactiva BookAI para el hilo")
-    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
+    property_id: Optional[int | str] = Field(
+        default=None,
+        description="ID de property (numérico o string, opcional).",
+    )
 
 
 class SendTemplateRequest(BaseModel):
@@ -60,7 +66,10 @@ class SendTemplateRequest(BaseModel):
         description="Texto renderizado de la plantilla (opcional, para contexto)",
     )
     channel: str = Field(default="whatsapp", description="Canal de salida")
-    property_id: Optional[str] = Field(default=None, description="ID de property (opcional)")
+    property_id: Optional[int | str] = Field(
+        default=None,
+        description="ID de property (numérico o string, opcional).",
+    )
 
 
 class ProposedResponseRequest(BaseModel):
