@@ -30,7 +30,10 @@ log = logging.getLogger("ChatterRoutes")
 # Modelos de entrada
 # ---------------------------------------------------------------------------
 class SendMessageRequest(BaseModel):
-    user_id: int = Field(..., description="ID numérico del usuario en Roomdoo")
+    user_id: Optional[int | str] = Field(
+        default=None,
+        description="ID del usuario en Roomdoo (numérico o string, opcional por compatibilidad).",
+    )
     user_first_name: Optional[str] = Field(default=None, description="Nombre del usuario")
     user_last_name: Optional[str] = Field(default=None, description="Primer apellido del usuario")
     user_last_name2: Optional[str] = Field(default=None, description="Segundo apellido del usuario")
@@ -105,6 +108,18 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
     if text.isdigit():
         return int(text)
     return text or None
+
+
+def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return int(text)
+    except ValueError:
+        return None
 
 
 def _map_sender(role: str) -> str:
@@ -816,6 +831,7 @@ def register_chatter_routes(app, state) -> None:
     async def send_message(payload: SendMessageRequest, _: None = Depends(_verify_bearer)):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
         property_id = _normalize_property_id(payload.property_id)
+        user_id = _normalize_user_id(payload.user_id)
         if payload.channel.lower() != "whatsapp":
             raise HTTPException(status_code=422, detail="Canal no soportado")
         if not payload.message.strip():
@@ -833,10 +849,18 @@ def register_chatter_routes(app, state) -> None:
                 instance_id = None
         # Si hay context_id compuesto y no viene property_id, es ambiguo en multi-instancia.
         if property_id is None and context_id and ":" in str(context_id):
-            raise HTTPException(
-                status_code=422,
-                detail="property_id requerido para enviar mensajes en WhatsApp multi-instancia",
-            )
+            # Fallback para clientes que aún no envían property_id explícito.
+            property_id = _resolve_property_id_from_history(chat_id, payload.channel.lower())
+            if property_id is None and state.memory_manager:
+                try:
+                    property_id = state.memory_manager.get_flag(chat_id, "property_id")
+                except Exception:
+                    property_id = None
+            if property_id is None:
+                raise HTTPException(
+                    status_code=422,
+                    detail="property_id requerido para enviar mensajes en WhatsApp multi-instancia",
+                )
         if state.memory_manager and property_id is not None:
             # Si se especifica property_id, forzar contexto al chat_id para evitar
             # usar instance:telefono de otra property.
@@ -889,7 +913,7 @@ def register_chatter_routes(app, state) -> None:
                 chat_id,
                 role,
                 outgoing_message,
-                user_id=payload.user_id if role == "user" else None,
+                user_id=user_id if role == "user" else None,
                 user_first_name=payload.user_first_name if role == "user" else None,
                 user_last_name=payload.user_last_name if role == "user" else None,
                 user_last_name2=payload.user_last_name2 if role == "user" else None,
@@ -907,7 +931,7 @@ def register_chatter_routes(app, state) -> None:
                     channel=payload.channel.lower(),
                     original_chat_id=chat_id,
                     bypass_force_guest_role=role == "user",
-                    user_id=payload.user_id if role == "user" else None,
+                    user_id=user_id if role == "user" else None,
                     user_first_name=payload.user_first_name if role == "user" else None,
                     user_last_name=payload.user_last_name if role == "user" else None,
                     user_last_name2=payload.user_last_name2 if role == "user" else None,

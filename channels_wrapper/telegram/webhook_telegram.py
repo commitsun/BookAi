@@ -35,6 +35,15 @@ AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() ==
 
 def register_telegram_routes(app, state):
     """Registra el endpoint de Telegram y comparte estado con el pipeline."""
+    internal_markers = (
+        "[WA_DRAFT]|",
+        "[WA_SENT]|",
+        "[KB_DRAFT]|",
+        "[KB_REMOVE_DRAFT]|",
+        "[BROADCAST_DRAFT]|",
+        "[TPL_DRAFT]|",
+        "[SUPER_SESSION]|",
+    )
 
     def _extract_phone(text: str) -> str | None:
         """Extrae el primer número estilo teléfono con 6-15 dígitos."""
@@ -165,6 +174,26 @@ def register_telegram_routes(app, state):
             except Exception:
                 pass
 
+        if lang == "es":
+            return msg
+        try:
+            return language_manager.ensure_language(msg, lang)
+        except Exception:
+            return msg
+
+    def _ensure_owner_language(msg: str, owner_id: str, owner_lang_hint: str | None = None) -> str:
+        if not msg:
+            return msg
+        if any(marker in msg for marker in internal_markers):
+            return msg
+        lang = (owner_lang_hint or "").strip().lower()
+        if not lang and getattr(state, "memory_manager", None):
+            try:
+                lang = (state.memory_manager.get_flag(owner_id, "owner_lang") or "").strip().lower()
+            except Exception:
+                lang = ""
+        if not lang:
+            lang = "es"
         if lang == "es":
             return msg
         try:
@@ -1392,6 +1421,15 @@ def register_telegram_routes(app, state):
             if super_mode or in_super_session:
                 payload = text.split(" ", 1)[1].strip() if " " in text else ""
                 hotel_name = state.superintendente_chats.get(chat_id, {}).get("hotel_name", ACTIVE_HOTEL_NAME)
+                owner_lang = "es"
+                if getattr(state, "memory_manager", None):
+                    try:
+                        prev_owner_lang = state.memory_manager.get_flag(chat_id, "owner_lang")
+                        owner_lang = language_manager.detect_language(payload or text, prev_lang=prev_owner_lang)
+                        owner_lang = (owner_lang or prev_owner_lang or "es").strip().lower() or "es"
+                        state.memory_manager.set_flag(chat_id, "owner_lang", owner_lang)
+                    except Exception:
+                        owner_lang = "es"
                 if payload:
                     prop_id = _extract_property_id(payload)
                     if prop_id is not None and state.memory_manager:
@@ -1680,6 +1718,7 @@ def register_telegram_routes(app, state):
                         return JSONResponse({"status": "kb_draft_fallback"})
 
                     formatted = format_superintendente_message(response)
+                    formatted = _ensure_owner_language(formatted, chat_id, owner_lang_hint=owner_lang)
                     if not formatted.strip():
                         if "[WA_DRAFT]|" in (response or ""):
                             formatted = (
