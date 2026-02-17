@@ -37,6 +37,33 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _humanize_offer_type(value: Any) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return "cortesía"
+    return raw.replace("_", " ").strip()
+
+
+def _humanize_missing_fields(fields: list[str] | None) -> str:
+    mapping = {
+        "schedule": "horario",
+        "location": "ubicación",
+        "booking_method": "método de reserva",
+        "conditions": "condiciones",
+        "price": "precio",
+        "duration": "duración",
+    }
+    normalized = []
+    for field in fields or []:
+        key = str(field or "").strip().lower()
+        if not key:
+            continue
+        normalized.append(mapping.get(key, key.replace("_", " ")))
+    if not normalized:
+        return "detalles operativos"
+    return ", ".join(dict.fromkeys(normalized))
+
+
 def _load_active_super_offer(memory_manager: Any, *keys: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     if not memory_manager:
         return None, None
@@ -340,20 +367,31 @@ async def process_user_message(
                 and _safe_float(intent_eval.get("confidence"), 0.0) >= 0.65
             ):
                 requested = ", ".join(intent_eval.get("requested_fields") or []) or "details"
-                offer_type = str(pending_offer.get("type") or "offer")
+                offer_type = _humanize_offer_type(pending_offer.get("type"))
+                missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
+                original_text = str(pending_offer.get("original_text") or "").strip()
                 await state.interno_agent.escalate(
                     guest_chat_id=chat_id,
                     guest_message=user_message,
                     escalation_type="offer_details_missing",
-                    reason=f"Oferta pendiente sin detalles operativos ({offer_type})",
+                    reason=(
+                        f"Oferta pendiente sin datos confirmados: {offer_type}. "
+                        f"Faltan: {missing_human}."
+                    ),
                     context=(
                         f"offer_key={pending_offer_key}\n"
                         f"offer_type={offer_type}\n"
+                        f"missing_fields={missing_human}\n"
                         f"requested_fields={requested}\n"
+                        f"guest_question={user_message}\n"
+                        f"original_offer_text={original_text}\n"
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}"
                     ),
                 )
-                response_raw = _ensure_guest_language("Lo reviso con recepción y te confirmo en breve.")
+                response_raw = _ensure_guest_language(
+                    "Gracias por escribirnos. Estamos validando con recepción el horario, lugar y condiciones "
+                    "de esta cortesía para confirmártelo en breve."
+                )
                 forced_offer_escalation = True
                 try:
                     state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
@@ -396,18 +434,28 @@ async def process_user_message(
                 not consistency.get("is_consistent", True)
                 and _safe_float(consistency.get("confidence"), 0.0) >= 0.70
             ):
+                offer_type = _humanize_offer_type(pending_offer.get("type"))
+                missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 await state.interno_agent.escalate(
                     guest_chat_id=chat_id,
                     guest_message=user_message,
                     escalation_type="offer_consistency_guard",
-                    reason=consistency.get("reason") or "Respuesta potencialmente inconsistente con oferta pendiente.",
+                    reason=(
+                        consistency.get("reason")
+                        or f"Respuesta potencialmente inconsistente con la oferta pendiente ({offer_type})."
+                    ),
                     context=(
                         f"offer_key={pending_offer_key}\n"
+                        f"offer_type={offer_type}\n"
+                        f"missing_fields={missing_human}\n"
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}\n"
                         f"proposed_response={response_raw}"
                     ),
                 )
-                response_raw = _ensure_guest_language("Lo reviso con recepción y te confirmo en breve.")
+                response_raw = _ensure_guest_language(
+                    "Estamos revisando con recepción los detalles exactos de esta cortesía para darte una "
+                    "confirmación correcta en breve."
+                )
                 try:
                     state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
                 except Exception as exc:
