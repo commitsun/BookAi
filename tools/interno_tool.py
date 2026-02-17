@@ -174,6 +174,30 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
     return _merge_escalation_text(prev, add)
 
 
+def _escalation_priority(escalation_type: str) -> int:
+    t = (escalation_type or "").strip().lower()
+    if t == "inappropriate":
+        return 4
+    if t == "bad_response":
+        return 3
+    if t == "info_not_found":
+        return 2
+    if t == "manual":
+        return 1
+    return 0
+
+
+def _pick_escalation_type(existing_type: str, incoming_type: str) -> str:
+    """Conserva el tipo más crítico entre el pendiente y el nuevo."""
+    a = (existing_type or "").strip()
+    b = (incoming_type or "").strip()
+    if not a:
+        return b or "manual"
+    if not b:
+        return a or "manual"
+    return a if _escalation_priority(a) >= _escalation_priority(b) else b
+
+
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     if not _MEMORY_MANAGER or not guest_chat_id:
         return None
@@ -311,12 +335,8 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             if existing_pending
             else ""
         )
-        if (
-            existing_id
-            and existing_id != escalation_id
-            and escalation_type == "info_not_found"
-            and existing_type in {"info_not_found", "manual"}
-        ):
+        if existing_id and existing_id != escalation_id:
+            merged_type = _pick_escalation_type(existing_type, escalation_type)
             merged_guest_message = _synthesize_escalation_query(
                 str(existing_pending.get("guest_message") or ""),
                 guest_message,
@@ -333,7 +353,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 existing_id,
                 {
                     "guest_message": merged_guest_message,
-                    "escalation_type": escalation_type,
+                    "escalation_type": merged_type,
                     "escalation_reason": merged_reason,
                     "context": merged_context,
                     "timestamp": datetime.utcnow().isoformat(),
@@ -344,7 +364,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 existing = ESCALATIONS_STORE.get(existing_id)
                 if existing:
                     existing.guest_message = merged_guest_message
-                    existing.escalation_type = escalation_type
+                    existing.escalation_type = merged_type
                     existing.escalation_reason = merged_reason
                     existing.context = merged_context
                     existing.timestamp = datetime.utcnow().isoformat()
@@ -390,7 +410,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     {
                         "chat_id": clean_chat_id,
                         "needs_action": merged_guest_message,
-                        "needs_action_type": escalation_type,
+                        "needs_action_type": merged_type,
                         "needs_action_reason": merged_reason,
                         "proposed_response": (existing_pending.get("draft_response") or "").strip() or None,
                         "is_final_response": bool((existing_pending.get("draft_response") or "").strip()),
