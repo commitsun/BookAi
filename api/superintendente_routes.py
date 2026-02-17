@@ -259,6 +259,24 @@ def _normalize_guest_id(guest_id: str | None) -> str:
     return str(guest_id or "").replace("+", "").strip()
 
 
+def _normalize_super_role(raw_role: Any) -> str:
+    role = str(raw_role or "").strip().lower()
+    if role in {"assistant", "bookai", "system", "tool"}:
+        return "assistant"
+    if role in {"user", "guest"}:
+        return "user"
+    return "assistant"
+
+
+def _normalize_super_sender(raw_role: Any) -> str:
+    role = str(raw_role or "").strip().lower()
+    if role in {"assistant", "bookai", "system", "tool"}:
+        return "bookai"
+    if role in {"user", "guest"}:
+        return "guest"
+    return "bookai"
+
+
 def _is_short_wa_confirmation(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -2047,22 +2065,40 @@ def register_superintendente_routes(app, state) -> None:
         normalized_rows: list[dict[str, Any]] = []
         for row in (rows or []):
             item = dict(row or {})
+            content = str(item.get("content") or "")
+            raw_role = item.get("role")
+            structured = item.get("structured")
+            structured_payload = item.get("structured_payload")
+
+            # Compat extra: si structured_payload llega serializado, intentamos parsearlo.
+            if structured is None and isinstance(structured_payload, str):
+                try:
+                    structured_payload = json.loads(structured_payload)
+                except Exception:
+                    structured_payload = None
+
             # Compat: el frontend del chatter suele esperar `structured`.
-            if item.get("structured") is None and item.get("structured_payload") is not None:
-                item["structured"] = item.get("structured_payload")
-            if item.get("structured") is None:
-                detail = _extract_detail_from_text(str(item.get("content") or ""))
+            if structured is None and structured_payload is not None:
+                structured = structured_payload
+            if structured is None:
+                detail = _extract_detail_from_text(content)
                 if detail:
-                    item["structured"] = {
+                    structured = {
                         "kind": "reservation_detail",
                         "data": detail,
                         "csv": _build_reservation_detail_csv(detail),
                         "csv_delimiter": ";",
                     }
                 else:
-                    recovered = _extract_reservations_from_text(str(item.get("content") or ""))
+                    recovered = _extract_reservations_from_text(content)
                     if recovered:
-                        item["structured"] = recovered
+                        structured = recovered
+
+            item["role"] = _normalize_super_role(raw_role)
+            item["sender"] = _normalize_super_sender(raw_role)
+            item["message"] = content
+            item["structured"] = structured
+            item["structured_payload"] = structured_payload or structured
             normalized_rows.append(item)
         if not include_internal:
             normalized_rows = [
