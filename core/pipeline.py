@@ -2,15 +2,150 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from datetime import datetime, timezone
+from typing import Any, Optional
 
+from core.config import ModelConfig, ModelTier
 from core.language_manager import language_manager
 from core.main_agent import create_main_agent
 from core.instance_context import hydrate_dynamic_context
 
 log = logging.getLogger("Pipeline")
+SUPER_OFFER_FLAG = "super_offer_pending"
+
+
+def _extract_json_object(raw: str) -> dict[str, Any] | None:
+    if not raw:
+        return None
+    match = re.search(r"\{[\s\S]*\}", raw)
+    if not match:
+        return None
+    try:
+        data = json.loads(match.group(0))
+        return data if isinstance(data, dict) else None
+    except Exception:
+        return None
+
+
+def _safe_float(value: Any, default: float = 0.0) -> float:
+    try:
+        return float(value)
+    except Exception:
+        return default
+
+
+def _load_active_super_offer(memory_manager: Any, *keys: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
+    if not memory_manager:
+        return None, None
+    now = datetime.utcnow()
+    for key in [str(k).strip() for k in keys if str(k or "").strip()]:
+        try:
+            payload = memory_manager.get_flag(key, SUPER_OFFER_FLAG)
+        except Exception:
+            payload = None
+        if not isinstance(payload, dict):
+            continue
+        expires_at_raw = str(payload.get("expires_at") or "").strip()
+        if expires_at_raw:
+            try:
+                expires_at = datetime.fromisoformat(expires_at_raw.replace("Z", ""))
+                if expires_at <= now:
+                    memory_manager.clear_flag(key, SUPER_OFFER_FLAG)
+                    continue
+            except Exception:
+                memory_manager.clear_flag(key, SUPER_OFFER_FLAG)
+                continue
+        if not payload.get("details_missing", True):
+            continue
+        return payload, key
+    return None, None
+
+
+async def _classify_guest_offer_intent(
+    llm: Any,
+    *,
+    user_message: str,
+    pending_offer: dict[str, Any],
+) -> dict[str, Any]:
+    text = (user_message or "").strip()
+    if not llm or not text or not pending_offer:
+        return {"intent": "other", "confidence": 0.0}
+    prompt = (
+        "Clasifica la intención del huésped respecto a una oferta pendiente del hotel.\n"
+        "Devuelve solo JSON con este esquema exacto:\n"
+        "{"
+        "\"intent\":\"ask_offer_details|other\","
+        "\"requested_fields\":[\"schedule|location|booking_method|conditions|price|duration\"],"
+        "\"confidence\":0.0"
+        "}\n"
+        "Usa semántica contextual, no keywords.\n\n"
+        f"Oferta pendiente: {json.dumps(pending_offer, ensure_ascii=False)}\n"
+        f"Mensaje huésped: {text}"
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {"role": "system", "content": "Eres un clasificador semántico de intención conversacional."},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        data = _extract_json_object((getattr(response, "content", None) or "").strip()) or {}
+    except Exception:
+        data = {}
+    intent = str(data.get("intent") or "other").strip().lower()
+    if intent not in {"ask_offer_details", "other"}:
+        intent = "other"
+    req = data.get("requested_fields")
+    if not isinstance(req, list):
+        req = []
+    req = [str(x).strip() for x in req if str(x).strip()]
+    return {
+        "intent": intent,
+        "requested_fields": req,
+        "confidence": _safe_float(data.get("confidence"), 0.0),
+    }
+
+
+async def _check_offer_response_consistency(
+    llm: Any,
+    *,
+    user_message: str,
+    pending_offer: dict[str, Any],
+    agent_response: str,
+) -> dict[str, Any]:
+    if not llm or not pending_offer or not agent_response:
+        return {"is_consistent": True, "confidence": 1.0, "reason": ""}
+    prompt = (
+        "Valida consistencia de respuesta frente a una oferta hotelera pendiente sin detalles confirmados.\n"
+        "Devuelve solo JSON con este esquema exacto:\n"
+        "{"
+        "\"is_consistent\":true|false,"
+        "\"reason\":\"string\","
+        "\"confidence\":0.0"
+        "}\n"
+        "Marca is_consistent=false si la respuesta inventa o mezcla servicios no confirmados para esa oferta.\n\n"
+        f"Oferta pendiente: {json.dumps(pending_offer, ensure_ascii=False)}\n"
+        f"Mensaje huésped: {user_message}\n"
+        f"Respuesta propuesta: {agent_response}"
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {"role": "system", "content": "Eres un guardrail de consistencia para operaciones hoteleras."},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        data = _extract_json_object((getattr(response, "content", None) or "").strip()) or {}
+    except Exception:
+        data = {}
+    return {
+        "is_consistent": bool(data.get("is_consistent", True)),
+        "reason": str(data.get("reason") or "").strip(),
+        "confidence": _safe_float(data.get("confidence"), 0.0),
+    }
 
 
 async def process_user_message(
@@ -83,9 +218,17 @@ async def process_user_message(
         except Exception as exc:
             log.warning("⚠️ No se pudo obtener memoria: %s", exc)
             history = []
+        pending_offer, pending_offer_key = _load_active_super_offer(state.memory_manager, mem_id, chat_id)
+        semantic_llm = None
+        if pending_offer:
+            try:
+                semantic_llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            except Exception:
+                semantic_llm = None
 
         # Evitar duplicados: si el huésped confirma y ya se envió un resumen reciente con localizador.
         response_raw = None
+        forced_offer_escalation = False
         try:
             recent_summary = False
             raw_hist = state.memory_manager.get_memory(mem_id, limit=8) if state.memory_manager else []
@@ -186,6 +329,37 @@ async def process_user_message(
         except Exception as exc:
             log.warning("No se pudo hidratar contexto dinamico: %s", exc)
 
+        if not response_raw and pending_offer:
+            intent_eval = await _classify_guest_offer_intent(
+                semantic_llm,
+                user_message=user_message,
+                pending_offer=pending_offer,
+            )
+            if (
+                intent_eval.get("intent") == "ask_offer_details"
+                and _safe_float(intent_eval.get("confidence"), 0.0) >= 0.65
+            ):
+                requested = ", ".join(intent_eval.get("requested_fields") or []) or "details"
+                offer_type = str(pending_offer.get("type") or "offer")
+                await state.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_message,
+                    escalation_type="offer_details_missing",
+                    reason=f"Oferta pendiente sin detalles operativos ({offer_type})",
+                    context=(
+                        f"offer_key={pending_offer_key}\n"
+                        f"offer_type={offer_type}\n"
+                        f"requested_fields={requested}\n"
+                        f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}"
+                    ),
+                )
+                response_raw = _ensure_guest_language("Lo reviso con recepción y te confirmo en breve.")
+                forced_offer_escalation = True
+                try:
+                    state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+                except Exception as exc:
+                    log.warning("No se pudo guardar respuesta de escalación por oferta pendiente: %s", exc)
+
         if not response_raw:
             main_agent = create_main_agent(
                 memory_manager=state.memory_manager,
@@ -211,6 +385,33 @@ async def process_user_message(
             return None
 
         response_raw = response_raw.strip()
+        if pending_offer and response_raw and not forced_offer_escalation:
+            consistency = await _check_offer_response_consistency(
+                semantic_llm,
+                user_message=user_message,
+                pending_offer=pending_offer,
+                agent_response=response_raw,
+            )
+            if (
+                not consistency.get("is_consistent", True)
+                and _safe_float(consistency.get("confidence"), 0.0) >= 0.70
+            ):
+                await state.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_message,
+                    escalation_type="offer_consistency_guard",
+                    reason=consistency.get("reason") or "Respuesta potencialmente inconsistente con oferta pendiente.",
+                    context=(
+                        f"offer_key={pending_offer_key}\n"
+                        f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}\n"
+                        f"proposed_response={response_raw}"
+                    ),
+                )
+                response_raw = _ensure_guest_language("Lo reviso con recepción y te confirmo en breve.")
+                try:
+                    state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+                except Exception as exc:
+                    log.warning("No se pudo guardar fallback por guardrail de oferta: %s", exc)
         log.info("🤖 Respuesta del MainAgent: %s", response_raw[:300])
 
         output_validation = await state.supervisor_output.validate(
