@@ -37,11 +37,11 @@ _INTERNAL_MARKERS = (
 # Modelos de entrada
 # ---------------------------------------------------------------------------
 class SuperintendenteContext(BaseModel):
-    owner_id: Optional[str] = Field(
+    owner_id: Optional[int | str] = Field(
         default=None,
         description="ID del encargado/owner (identidad interna)",
     )
-    encargado_id: Optional[str] = Field(
+    encargado_id: Optional[int | str] = Field(
         default=None,
         description="ID legado del encargado (compatibilidad temporal)",
     )
@@ -228,10 +228,10 @@ async def _generate_session_title_with_ai(
 
 
 def _resolve_owner_id(payload: SuperintendenteContext) -> str:
-    owner = (payload.owner_id or "").strip()
+    owner = str(payload.owner_id).strip() if payload.owner_id is not None else ""
     if owner:
         return owner
-    legacy = (payload.encargado_id or "").strip()
+    legacy = str(payload.encargado_id).strip() if payload.encargado_id is not None else ""
     if legacy:
         return legacy
     raise HTTPException(status_code=422, detail="owner_id requerido")
@@ -1876,12 +1876,15 @@ def register_superintendente_routes(app, state) -> None:
 
     @router.get("/sessions")
     async def list_sessions(
-        owner_id: str = Query(...),
+        owner_id: Optional[int | str] = Query(default=None),
         property_id: Optional[str] = Query(default=None),
         limit: int = Query(default=50, ge=1, le=200),
         _: None = Depends(_verify_bearer),
     ):
         table = Settings.SUPERINTENDENTE_HISTORY_TABLE
+        owner_id = str(owner_id).strip() if owner_id is not None else ""
+        if not owner_id:
+            return {"items": []}
         owner_key = f"{owner_id}:{property_id.strip()}" if property_id else owner_id
         sessions = _tracking_sessions(state).get(owner_key, {})
         titles = {sid: meta.get("title") for sid, meta in sessions.items()}
