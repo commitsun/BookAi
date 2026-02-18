@@ -516,9 +516,8 @@ async def process_user_message(
                         prop_id = state.memory_manager.get_flag(mem_id, "property_id")
                     except Exception:
                         prop_id = None
-                rooms = [f"chat:{chat_id}"]
-                if mem_id and mem_id != chat_id:
-                    rooms.append(f"chat:{mem_id}")
+                target_chat_room = mem_id or chat_id
+                rooms = [f"chat:{target_chat_room}"]
                 if prop_id is not None:
                     rooms.append(f"property:{prop_id}")
                 if channel:

@@ -193,9 +193,8 @@ def register_whatsapp_routes(app, state):
                     state.memory_manager.set_flag(sender, "property_id", property_id)
                 except Exception:
                     pass
-            rooms = [f"chat:{sender}"]
-            if memory_id and memory_id != sender:
-                rooms.append(f"chat:{memory_id}")
+            target_chat_room = memory_id or sender
+            rooms = [f"chat:{target_chat_room}"]
             if property_id is not None:
                 rooms.append(f"property:{property_id}")
             rooms.append("channel:whatsapp")
