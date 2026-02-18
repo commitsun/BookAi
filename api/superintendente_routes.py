@@ -1328,6 +1328,7 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
+        original_message = message
 
         def _persist_visible_super_response(reply_text: str, *, persist_user: bool = False) -> None:
             if not getattr(state, "memory_manager", None):
@@ -1336,11 +1337,11 @@ def register_superintendente_routes(app, state) -> None:
             if not text:
                 return
             try:
-                if persist_user and message:
+                if persist_user and original_message:
                     state.memory_manager.save(
                         conversation_id=session_key,
                         role="user",
-                        content=message,
+                        content=original_message,
                         channel="telegram",
                         original_chat_id=owner_id,
                     )
@@ -2283,11 +2284,21 @@ def register_superintendente_routes(app, state) -> None:
             table=Settings.SUPERINTENDENTE_HISTORY_TABLE,
         )
         normalized_rows: list[dict[str, Any]] = []
+        visible_assistant_keys: set[str] = set()
+        for base_row in (rows or []):
+            raw = str((base_row or {}).get("content") or "").strip()
+            role = _normalize_super_role((base_row or {}).get("role"))
+            if not raw or _is_internal_super_message(raw) or role != "assistant":
+                continue
+            key = re.sub(r"\s+", " ", raw).strip().lower()
+            if key:
+                visible_assistant_keys.add(key)
         for row in (rows or []):
             item = dict(row or {})
             raw_content = str(item.get("content") or "")
             rendered_internal = _render_internal_super_message(raw_content)
             content = rendered_internal or raw_content
+            raw_is_internal = _is_internal_super_message(raw_content)
             raw_role = item.get("role")
             structured = item.get("structured")
             structured_payload = item.get("structured_payload")
@@ -2323,18 +2334,30 @@ def register_superintendente_routes(app, state) -> None:
             item["structured"] = structured
             item["structured_payload"] = structured_payload or structured
             item["_rendered_internal"] = bool(rendered_internal)
+            item["_raw_internal"] = raw_is_internal
             normalized_rows.append(item)
         if not include_internal:
-            normalized_rows = [
-                row
-                for row in (normalized_rows or [])
-                if (
-                    not _is_internal_super_message(str((row or {}).get("content") or ""))
-                    or bool((row or {}).get("_rendered_internal"))
-                )
-            ]
+            filtered_rows: list[dict[str, Any]] = []
+            seen_internal_rendered: set[str] = set()
+            for row in (normalized_rows or []):
+                raw_internal = bool((row or {}).get("_raw_internal"))
+                rendered = bool((row or {}).get("_rendered_internal"))
+                content_text = str((row or {}).get("content") or "")
+                role = str((row or {}).get("role") or "")
+                if raw_internal and not rendered:
+                    continue
+                if raw_internal and rendered and role == "assistant":
+                    dedupe_key = re.sub(r"\s+", " ", content_text).strip().lower()
+                    if dedupe_key in visible_assistant_keys:
+                        continue
+                    if dedupe_key in seen_internal_rendered:
+                        continue
+                    seen_internal_rendered.add(dedupe_key)
+                filtered_rows.append(row)
+            normalized_rows = filtered_rows
         for row in normalized_rows:
             row.pop("_rendered_internal", None)
+            row.pop("_raw_internal", None)
         return {"session_id": session_id, "items": normalized_rows}
 
     app.include_router(router)
