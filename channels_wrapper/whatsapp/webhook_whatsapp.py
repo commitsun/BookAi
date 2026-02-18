@@ -194,6 +194,8 @@ def register_whatsapp_routes(app, state):
                 except Exception:
                     pass
             rooms = [f"chat:{sender}"]
+            if memory_id and memory_id != sender:
+                rooms.append(f"chat:{memory_id}")
             if property_id is not None:
                 rooms.append(f"property:{property_id}")
             rooms.append("channel:whatsapp")
@@ -202,7 +204,9 @@ def register_whatsapp_routes(app, state):
                 await socket_mgr.emit(
                     "chat.message.created",
                     {
-                        "chat_id": sender,
+                        "chat_id": memory_id or sender,
+                        "guest_chat_id": sender,
+                        "context_id": memory_id or sender,
                         "property_id": property_id,
                         "channel": "whatsapp",
                         "sender": "guest",
@@ -214,7 +218,9 @@ def register_whatsapp_routes(app, state):
                 await socket_mgr.emit(
                     "chat.updated",
                     {
-                        "chat_id": sender,
+                        "chat_id": memory_id or sender,
+                        "guest_chat_id": sender,
+                        "context_id": memory_id or sender,
                         "property_id": property_id,
                         "channel": "whatsapp",
                         "last_message": text,

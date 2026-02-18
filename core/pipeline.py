@@ -514,11 +514,11 @@ async def process_user_message(
                 if state.memory_manager:
                     try:
                         prop_id = state.memory_manager.get_flag(mem_id, "property_id")
-                        if prop_id is None:
-                            prop_id = state.memory_manager.get_flag(chat_id, "property_id")
                     except Exception:
                         prop_id = None
                 rooms = [f"chat:{chat_id}"]
+                if mem_id and mem_id != chat_id:
+                    rooms.append(f"chat:{mem_id}")
                 if prop_id is not None:
                     rooms.append(f"property:{prop_id}")
                 if channel:
@@ -528,7 +528,9 @@ async def process_user_message(
                     "chat.message.created",
                     {
                         "rooms": rooms,
-                        "chat_id": str(chat_id),
+                        "chat_id": str(mem_id or chat_id),
+                        "guest_chat_id": str(chat_id),
+                        "context_id": str(mem_id or chat_id),
                         "property_id": prop_id,
                         "channel": channel,
                         "sender": "bookai",
@@ -541,7 +543,9 @@ async def process_user_message(
                     "chat.updated",
                     {
                         "rooms": rooms,
-                        "chat_id": str(chat_id),
+                        "chat_id": str(mem_id or chat_id),
+                        "guest_chat_id": str(chat_id),
+                        "context_id": str(mem_id or chat_id),
                         "property_id": prop_id,
                         "channel": channel,
                         "last_message": response_raw,
