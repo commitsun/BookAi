@@ -160,6 +160,26 @@ def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_url_button_indexes(components: Any) -> list[int]:
+    if not isinstance(components, list):
+        return []
+    indexes: list[int] = []
+    for comp in components:
+        if not isinstance(comp, dict):
+            continue
+        if str(comp.get("type") or "").strip().upper() != "BUTTONS":
+            continue
+        buttons = comp.get("buttons") or []
+        if not isinstance(buttons, list):
+            continue
+        for idx, button in enumerate(buttons):
+            if not isinstance(button, dict):
+                continue
+            if str(button.get("type") or "").strip().upper() == "URL":
+                indexes.append(idx)
+    return indexes
+
+
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
@@ -420,10 +440,35 @@ def register_template_routes(app, state) -> None:
 
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
+            outbound_parameters = parameters
+            if template_def:
+                url_button_indexes = _extract_url_button_indexes(template_def.components)
+                # Fallback: algunas tablas legacy no guardan `components` en Supabase.
+                # Para la plantilla de confirmación con botón URL dinámico,
+                # asumimos índice 0 si no hay metadata pero sí localizador.
+                if (
+                    not url_button_indexes
+                    and template_def.code == "booking_confirmation_aldahotels_v1"
+                    and reservation_locator
+                ):
+                    url_button_indexes = [0]
+                if url_button_indexes and reservation_locator:
+                    outbound_parameters = {
+                        "body": parameters,
+                        "buttons": [
+                            {
+                                "index": idx,
+                                "sub_type": "url",
+                                "text": reservation_locator,
+                            }
+                            for idx in url_button_indexes
+                        ],
+                    }
+
             await state.channel_manager.send_template_message(
                 chat_id,
                 wa_template,
-                parameters=parameters,
+                parameters=outbound_parameters,
                 language=language,
                 channel="whatsapp",
                 context_id=context_id,

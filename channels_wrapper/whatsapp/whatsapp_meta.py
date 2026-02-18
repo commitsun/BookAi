@@ -197,6 +197,8 @@ class WhatsAppChannel(BaseChannel):
             if params is None:
                 return []
             if isinstance(params, dict):
+                if "body" in params:
+                    return _iter_params(params.get("body"))
                 return params.values()
             if isinstance(params, (list, tuple)):
                 return params
@@ -230,6 +232,33 @@ class WhatsAppChannel(BaseChannel):
             if norm:
                 body_params.append(norm)
         components = [{"type": "body", "parameters": body_params}] if body_params else []
+
+        if isinstance(parameters, dict):
+            raw_buttons = parameters.get("buttons")
+            if isinstance(raw_buttons, list):
+                for btn in raw_buttons:
+                    if not isinstance(btn, dict):
+                        continue
+                    raw_value = btn.get("text")
+                    if raw_value is None:
+                        raw_value = btn.get("value")
+                    if raw_value is None:
+                        continue
+                    idx = btn.get("index", 0)
+                    sub_type = str(btn.get("sub_type") or "url").strip().lower() or "url"
+                    components.append(
+                        {
+                            "type": "button",
+                            "sub_type": sub_type,
+                            "index": str(idx),
+                            "parameters": [
+                                {
+                                    "type": "text",
+                                    "text": str(raw_value),
+                                }
+                            ],
+                        }
+                    )
 
         payload = {
             "messaging_product": "whatsapp",
