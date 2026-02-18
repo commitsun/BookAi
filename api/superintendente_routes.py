@@ -159,6 +159,24 @@ def _is_internal_super_message(content: str) -> bool:
     return text.startswith(internal_prefixes)
 
 
+def _render_internal_super_message(content: str) -> Optional[str]:
+    text = str(content or "").strip()
+    if not text:
+        return None
+    if text.startswith("[WA_DRAFT]|"):
+        drafts = _parse_wa_drafts(text)
+        if drafts:
+            return _format_wa_preview(drafts)
+        return None
+    if text.startswith("[WA_SENT]|"):
+        parts = text.split("|", 2)
+        guest_id = _normalize_guest_id(parts[1] if len(parts) > 1 else "")
+        if guest_id:
+            return f"✅ Mensaje enviado al huésped: {guest_id}"
+        return "✅ Mensaje enviado al huésped."
+    return None
+
+
 def _sanitize_generated_title(raw: str) -> Optional[str]:
     text = re.sub(r"\s+", " ", str(raw or "").strip())
     if not text:
@@ -1310,6 +1328,32 @@ def register_superintendente_routes(app, state) -> None:
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
+
+        def _persist_visible_super_response(reply_text: str, *, persist_user: bool = False) -> None:
+            if not getattr(state, "memory_manager", None):
+                return
+            text = str(reply_text or "").strip()
+            if not text:
+                return
+            try:
+                if persist_user and message:
+                    state.memory_manager.save(
+                        conversation_id=session_key,
+                        role="user",
+                        content=message,
+                        channel="telegram",
+                        original_chat_id=owner_id,
+                    )
+                state.memory_manager.save(
+                    conversation_id=session_key,
+                    role="assistant",
+                    content=text,
+                    channel="telegram",
+                    original_chat_id=owner_id,
+                )
+            except Exception:
+                pass
+
         owner_lang = "es"
         if state.memory_manager:
             try:
@@ -1420,7 +1464,9 @@ def register_superintendente_routes(app, state) -> None:
                     sent += 1
 
                 guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in recovered if d.get("guest_id")])
-                return {"result": f"✅ Mensaje enviado a {sent}/{len(recovered)} huésped(es): {guest_list}"}
+                response_text = f"✅ Mensaje enviado a {sent}/{len(recovered)} huésped(es): {guest_list}"
+                _persist_visible_super_response(response_text, persist_user=True)
+                return {"result": response_text}
 
         # --------------------------------------------------------
         # ✅ Resolver último pendiente (WA / KB / KB_REMOVE)
@@ -1597,14 +1643,18 @@ def register_superintendente_routes(app, state) -> None:
                                 _persist_pending_wa(state, alt_key, None)
                             _persist_last_pending_wa(state, owner_key, None)
                             _pop_trailing_pending_type(state, owner_key, "wa")
-                            return {"result": "❌ Envío cancelado. Si necesitas otro borrador, dímelo."}
+                            response_text = "❌ Envío cancelado. Si necesitas otro borrador, dímelo."
+                            _persist_visible_super_response(response_text, persist_user=True)
+                            return {"result": response_text}
 
                         if action == "confirm" or _is_short_wa_confirmation(message):
                             drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                             drafts = drafts or []
                             if not drafts:
                                 _pop_last_pending_action(state, owner_key)
-                                return {"result": "⚠️ No hay borrador pendiente para enviar."}
+                                response_text = "⚠️ No hay borrador pendiente para enviar."
+                                _persist_visible_super_response(response_text, persist_user=True)
+                                return {"result": response_text}
 
                             if state.memory_manager:
                                 try:
@@ -1661,7 +1711,9 @@ def register_superintendente_routes(app, state) -> None:
                             guest_list = ", ".join(
                                 [_normalize_guest_id(d.get("guest_id")) for d in drafts if d.get("guest_id")]
                             )
-                            return {"result": f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"}
+                            response_text = f"✅ Mensaje enviado a {sent}/{len(drafts)} huésped(es): {guest_list}"
+                            _persist_visible_super_response(response_text, persist_user=True)
+                            return {"result": response_text}
 
                         drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                         drafts = drafts or []
@@ -1695,7 +1747,9 @@ def register_superintendente_routes(app, state) -> None:
                                         }
                                     )
                             if not updated:
-                                return {"result": "⚠️ No pude recuperar el borrador anterior. ¿Quieres que lo genere de nuevo?"}
+                                response_text = "⚠️ No pude recuperar el borrador anterior. ¿Quieres que lo genere de nuevo?"
+                                _persist_visible_super_response(response_text, persist_user=True)
+                                return {"result": response_text}
                         pending_payload: Any = {"drafts": updated} if len(updated) > 1 else updated[0]
                         state.superintendente_pending_wa[session_key] = pending_payload
                         if alt_key:
@@ -1724,7 +1778,9 @@ def register_superintendente_routes(app, state) -> None:
                                     )
                         except Exception:
                             pass
-                        return {"result": _format_wa_preview(updated)}
+                        response_text = _format_wa_preview(updated)
+                        _persist_visible_super_response(response_text, persist_user=True)
+                        return {"result": response_text}
 
         if (
             not pending_last
@@ -1799,7 +1855,9 @@ def register_superintendente_routes(app, state) -> None:
                                 )
                     except Exception:
                         pass
-                    return {"result": _format_wa_preview(updated)}
+                    response_text = _format_wa_preview(updated)
+                    _persist_visible_super_response(response_text, persist_user=True)
+                    return {"result": response_text}
 
         result = await agent.ainvoke(
             user_input=message,
@@ -1857,7 +1915,9 @@ def register_superintendente_routes(app, state) -> None:
                         pass
                     sent += 1
                 guest_list = ", ".join([_normalize_guest_id(d.get("guest_id")) for d in wa_drafts if d.get("guest_id")])
-                return {"result": f"✅ Mensaje enviado a {sent}/{len(wa_drafts)} huésped(es): {guest_list}"}
+                response_text = f"✅ Mensaje enviado a {sent}/{len(wa_drafts)} huésped(es): {guest_list}"
+                _persist_visible_super_response(response_text, persist_user=False)
+                return {"result": response_text}
             if state.memory_manager:
                 try:
                     ctx_property_id = state.memory_manager.get_flag(session_key, "property_id")
@@ -1906,7 +1966,9 @@ def register_superintendente_routes(app, state) -> None:
                         )
             except Exception:
                 pass
-            return {"result": _format_wa_preview(wa_drafts)}
+            response_text = _format_wa_preview(wa_drafts)
+            _persist_visible_super_response(response_text, persist_user=False)
+            return {"result": response_text}
 
         kb_remove_payload = _parse_kb_remove_draft_marker(result)
         if kb_remove_payload:
@@ -2223,7 +2285,9 @@ def register_superintendente_routes(app, state) -> None:
         normalized_rows: list[dict[str, Any]] = []
         for row in (rows or []):
             item = dict(row or {})
-            content = str(item.get("content") or "")
+            raw_content = str(item.get("content") or "")
+            rendered_internal = _render_internal_super_message(raw_content)
+            content = rendered_internal or raw_content
             raw_role = item.get("role")
             structured = item.get("structured")
             structured_payload = item.get("structured_payload")
@@ -2248,22 +2312,29 @@ def register_superintendente_routes(app, state) -> None:
                         "csv_delimiter": ";",
                     }
                 else:
-                    recovered = _extract_reservations_from_text(content)
+                    recovered = _extract_reservations_from_text(raw_content)
                     if recovered:
                         structured = recovered
 
             item["role"] = _normalize_super_role(raw_role)
             item["sender"] = _normalize_super_sender(raw_role)
             item["message"] = content
+            item["content"] = content
             item["structured"] = structured
             item["structured_payload"] = structured_payload or structured
+            item["_rendered_internal"] = bool(rendered_internal)
             normalized_rows.append(item)
         if not include_internal:
             normalized_rows = [
                 row
                 for row in (normalized_rows or [])
-                if not _is_internal_super_message(str((row or {}).get("content") or ""))
+                if (
+                    not _is_internal_super_message(str((row or {}).get("content") or ""))
+                    or bool((row or {}).get("_rendered_internal"))
+                )
             ]
+        for row in normalized_rows:
+            row.pop("_rendered_internal", None)
         return {"session_id": session_id, "items": normalized_rows}
 
     app.include_router(router)
