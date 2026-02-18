@@ -1207,21 +1207,26 @@ class MainAgent:
         except Exception:
             rows = []
         # Contar properties únicas de la instancia actual para evitar falsos positivos.
+        # Solo consideramos evidencia "fuerte" cuando el registro trae instance_id.
         unique_props = set()
+        has_instance_evidence = False
         for row in rows or []:
             if not isinstance(row, dict):
                 continue
             row_instance = str(row.get("instance_id") or row.get("instance_url") or "").strip()
-            if row_instance and str(row_instance) != str(instance_code).strip():
+            if not row_instance:
+                continue
+            has_instance_evidence = True
+            if str(row_instance) != str(instance_code).strip():
                 continue
             pid = str(row.get("property_id") or "").strip()
             pname = str(row.get("name") or row.get("property_name") or "").strip().lower()
             key = pid or pname
             if key:
                 unique_props.add(key)
-        if len(unique_props) > 1:
+        if has_instance_evidence and len(unique_props) > 1:
             return True
-        if len(unique_props) == 1 and rows:
+        if has_instance_evidence and len(unique_props) == 1 and rows:
             row = next((r for r in rows if isinstance(r, dict)), {}) or {}
             prop_id = row.get("property_id")
             prop_code = row.get("name") or row.get("property_name")
@@ -1243,13 +1248,16 @@ class MainAgent:
             isinstance(candidates, list)
             and str(candidates_instance or "").strip()
             and str(candidates_instance).strip() == str(instance_code).strip()
+            and bool(self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING))
         ):
             filtered_candidates = []
             for cand in candidates:
                 if not isinstance(cand, dict):
                     continue
                 cand_instance = str(cand.get("instance_id") or "").strip()
-                if cand_instance and cand_instance != str(instance_code).strip():
+                if not cand_instance:
+                    continue
+                if cand_instance != str(instance_code).strip():
                     continue
                 filtered_candidates.append(cand)
             unique_ids = {
@@ -1270,6 +1278,28 @@ class MainAgent:
                 except Exception as exc:
                     log.warning("No se pudo fijar property unica desde candidatos: %s", exc)
         return False
+
+    def _normalize_switch_question_for_single_property(self, chat_id: str, response: str) -> str:
+        text = (response or "").strip()
+        if not text:
+            return text
+        norm = self._normalize_text(text)
+        asks_other_hotel = ("otro hotel" in norm) or ("otros hoteles" in norm)
+        asks_booking = ("reserva" in norm) or ("reservar" in norm)
+        if not (asks_other_hotel and asks_booking):
+            return text
+        if self._is_multi_property_instance(chat_id):
+            return text
+        current = (
+            self.memory_manager.get_flag(chat_id, "property_display_name")
+            or self.memory_manager.get_flag(chat_id, "property_name")
+            or "este hotel"
+        )
+        fixed = (
+            f"Perfecto. Para continuar con la reserva en {current}, "
+            "indícame fechas de entrada y salida, número de personas y tipo de habitación."
+        )
+        return self._localize(chat_id, fixed)
 
     def _get_property_hint_from_history(self, chat_id: str) -> tuple[Optional[int], Optional[str]]:
         if not self.memory_manager:
@@ -2102,6 +2132,7 @@ class MainAgent:
                 )
 
                 response = (result.get("output") or "").strip()
+                response = self._normalize_switch_question_for_single_property(chat_id, response)
 
                 if (
                     not response
