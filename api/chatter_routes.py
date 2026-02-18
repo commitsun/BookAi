@@ -275,6 +275,18 @@ def _sanitize_guest_outgoing_text(text: str) -> str:
     return "\n".join(clean_lines).strip()
 
 
+def _is_internal_hidden_message(text: str) -> bool:
+    content = (text or "").strip()
+    if not content:
+        return False
+    lowered = content.lower()
+    if lowered.startswith("[superintendente]"):
+        return True
+    if lowered.startswith("contexto de propiedad actualizado"):
+        return True
+    return False
+
+
 def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Agrupa pendientes por chat+property para evitar cruces entre hoteles."""
     pending = list_pending_escalations(limit=limit, property_id=property_id) or []
@@ -614,13 +626,8 @@ def register_chatter_routes(app, state) -> None:
                 if (
                     not cid
                     or key in summaries
-                    or content.startswith("[Superintendente]")
+                    or _is_internal_hidden_message(content)
                 ):
-                    if key in summaries:
-                        existing = summaries[key]
-                        existing_prop = existing.get("property_id")
-                        if existing_prop is None and prop_id is not None:
-                            summaries[key] = row
                     continue
                 ordered_keys.append(key)
                 summaries[key] = row
@@ -808,6 +815,11 @@ def register_chatter_routes(app, state) -> None:
                 ).execute()
 
         rows = resp.data or []
+        rows = [
+            row
+            for row in rows
+            if not _is_internal_hidden_message(str((row or {}).get("content") or ""))
+        ]
         rows.reverse()
 
         items = []

@@ -172,16 +172,7 @@ class PropertyContextTool:
         elif property_name:
             self.memory_manager.set_flag(self.chat_id, "property_name", str(property_name))
 
-        # Guardar constancia en historial con property_id ya fijado (sin exponer IDs al usuario)
-        try:
-            label = display_name or property_name
-            if label:
-                note = f"Contexto de propiedad actualizado: {label}."
-            else:
-                note = "Contexto de propiedad actualizado."
-            self.memory_manager.save(self.chat_id, "system", note)
-        except Exception:
-            log.debug("No se pudo guardar constancia de property en historial", exc_info=True)
+        # No persistimos mensajes internos de contexto en chat_history para evitar ruido en chatter.
 
     async def _run_async(
         self,

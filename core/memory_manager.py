@@ -98,6 +98,35 @@ class MemoryManager:
         table = self.get_flag(conversation_id, "history_table")
         return str(table).strip() if table else "chat_history"
 
+    def _is_recent_runtime_duplicate(
+        self,
+        conversation_id: str,
+        role: str,
+        content: str,
+        channel: Optional[str],
+        window_seconds: int = 6,
+    ) -> bool:
+        """Evita persistir duplicados consecutivos muy próximos del mismo mensaje."""
+        cid = self._clean_id(conversation_id)
+        msgs = self.runtime_memory.get(cid) or []
+        if not msgs:
+            return False
+        last = msgs[-1] or {}
+        if (last.get("role") or "").strip().lower() != (role or "").strip().lower():
+            return False
+        if str(last.get("content") or "").strip() != str(content or "").strip():
+            return False
+        last_channel = (last.get("channel") or "").strip().lower()
+        current_channel = (channel or "").strip().lower()
+        if last_channel and current_channel and last_channel != current_channel:
+            return False
+        try:
+            last_ts = datetime.fromisoformat(str(last.get("created_at") or ""))
+        except Exception:
+            return False
+        now = datetime.utcnow()
+        return (now - last_ts).total_seconds() <= max(1, int(window_seconds))
+
     def get_last_property_id_hint(self, conversation_id: str, limit: int = 30) -> Optional[int]:
         """
         Busca el último property_id en el historial, incluso si no está en memoria.
@@ -297,6 +326,16 @@ class MemoryManager:
         is_guest = normalized_role == "guest"
         if not client_name and is_guest:
             client_name = self.get_flag(cid, "client_name")
+
+        # Guardrail: evita doble guardado consecutivo del mismo mensaje del huésped.
+        if normalized_role in {"guest", "user"} and self._is_recent_runtime_duplicate(
+            conversation_id=conversation_id,
+            role=normalized_role,
+            content=content,
+            channel=channel_to_store,
+        ):
+            log.info("↩️ Duplicado reciente ignorado chat_id=%s role=%s", cid, normalized_role)
+            return
 
         # Si el mensaje trae datos de reserva, actualiza flags (sobrescribe con lo mas reciente).
         try:
