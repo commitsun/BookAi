@@ -1196,35 +1196,6 @@ class MainAgent:
         if not self.memory_manager or not chat_id:
             return False
         instance_code = self.memory_manager.get_flag(chat_id, "instance_id") or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
-        candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
-        candidates_instance = self.memory_manager.get_flag(chat_id, "property_disambiguation_instance_id")
-        # Solo confiar en candidatos si pertenecen a la misma instancia actual.
-        if (
-            instance_code
-            and isinstance(candidates, list)
-            and str(candidates_instance or "").strip()
-            and str(candidates_instance).strip() == str(instance_code).strip()
-        ):
-            unique_ids = {
-                str((cand or {}).get("property_id") or "").strip()
-                for cand in candidates
-                if isinstance(cand, dict) and str((cand or {}).get("property_id") or "").strip()
-            }
-            if len(unique_ids) > 1:
-                return True
-            if len(unique_ids) == 1:
-                # Si la instancia actual tiene una sola property en candidatos, fijar contexto y no preguntar "otro hotel".
-                only = next((cand for cand in candidates if isinstance(cand, dict)), None) or {}
-                try:
-                    tool = create_property_context_tool(
-                        memory_manager=self.memory_manager,
-                        chat_id=chat_id,
-                    )
-                    tool.invoke({"property_id": only.get("property_id"), "property_name": only.get("name")})
-                except Exception as exc:
-                    log.warning("No se pudo fijar property unica desde candidatos: %s", exc)
-                return False
-
         if not instance_code:
             # Sin instancia, evitar pregunta de "otro hotel" por defecto.
             return False
@@ -1235,10 +1206,13 @@ class MainAgent:
             rows = fetch_properties_by_code(table, str(instance_code))
         except Exception:
             rows = []
-        # Contar properties únicas para evitar falsos positivos por duplicados de consulta.
+        # Contar properties únicas de la instancia actual para evitar falsos positivos.
         unique_props = set()
         for row in rows or []:
             if not isinstance(row, dict):
+                continue
+            row_instance = str(row.get("instance_id") or row.get("instance_url") or "").strip()
+            if row_instance and str(row_instance) != str(instance_code).strip():
                 continue
             pid = str(row.get("property_id") or "").strip()
             pname = str(row.get("name") or row.get("property_name") or "").strip().lower()
@@ -1260,6 +1234,41 @@ class MainAgent:
                     tool.invoke({"property_id": prop_id, "property_name": prop_code})
                 except Exception as exc:
                     log.warning("No se pudo fijar property unica desde instancia: %s", exc)
+            return False
+
+        # Fallback: usar candidatos recientes solo si están anclados a la misma instancia.
+        candidates = self.memory_manager.get_flag(chat_id, "property_disambiguation_candidates") or []
+        candidates_instance = self.memory_manager.get_flag(chat_id, "property_disambiguation_instance_id")
+        if (
+            isinstance(candidates, list)
+            and str(candidates_instance or "").strip()
+            and str(candidates_instance).strip() == str(instance_code).strip()
+        ):
+            filtered_candidates = []
+            for cand in candidates:
+                if not isinstance(cand, dict):
+                    continue
+                cand_instance = str(cand.get("instance_id") or "").strip()
+                if cand_instance and cand_instance != str(instance_code).strip():
+                    continue
+                filtered_candidates.append(cand)
+            unique_ids = {
+                str((cand or {}).get("property_id") or "").strip()
+                for cand in filtered_candidates
+                if str((cand or {}).get("property_id") or "").strip()
+            }
+            if len(unique_ids) > 1:
+                return True
+            if len(unique_ids) == 1:
+                only = next((cand for cand in filtered_candidates if isinstance(cand, dict)), None) or {}
+                try:
+                    tool = create_property_context_tool(
+                        memory_manager=self.memory_manager,
+                        chat_id=chat_id,
+                    )
+                    tool.invoke({"property_id": only.get("property_id"), "property_name": only.get("name")})
+                except Exception as exc:
+                    log.warning("No se pudo fijar property unica desde candidatos: %s", exc)
         return False
 
     def _get_property_hint_from_history(self, chat_id: str) -> tuple[Optional[int], Optional[str]]:
