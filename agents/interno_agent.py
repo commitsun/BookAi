@@ -245,9 +245,12 @@ class InternoAgent:
             text_es = raw
             if lang != "es":
                 try:
-                    text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
+                    text_es = language_manager.ensure_language(raw, "es").strip() or raw
                 except Exception:
-                    text_es = raw
+                    try:
+                        text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
+                    except Exception:
+                        text_es = raw
             return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
         def _clean_chat_id(value: str) -> str:

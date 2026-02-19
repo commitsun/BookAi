@@ -150,14 +150,17 @@ def _format_needs_action_es(guest_chat_id: str, guest_message: str) -> str:
     if not raw:
         return ""
     lang = _resolve_guest_lang(guest_chat_id, raw)
-    text_out = raw
-    # Mostrar la consulta en el mismo idioma con el que se responde al huésped.
-    try:
-        if lang:
-            text_out = language_manager.ensure_language(raw, lang).strip() or raw
-    except Exception:
-        text_out = raw
-    return f"El huésped solicita: {text_out} (Idioma huésped: {lang})"
+    text_es = raw
+    # Este bloque de Chatter se muestra siempre en español para el equipo interno.
+    if lang != "es":
+        try:
+            text_es = language_manager.ensure_language(raw, "es").strip() or raw
+        except Exception:
+            try:
+                text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
+            except Exception:
+                text_es = raw
+    return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
 
 def _format_reason_with_lang(guest_chat_id: str, reason: str, guest_message: str = "") -> str:
@@ -666,14 +669,29 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
     # ✅ Caso 2: confirmado → envío final
     if confirmed:
-        final_text = _sanitize_guest_text(esc.draft_response or adjustments or "")
-        if not final_text:
+        final_text_internal = _sanitize_guest_text(esc.draft_response or adjustments or "")
+        if not final_text_internal:
             return "⚠️ No hay texto final disponible para enviar."
 
         try:
+            guest_lang = _resolve_guest_lang(esc.guest_chat_id, esc.guest_message or final_text_internal)
+            final_text_out = final_text_internal
+            if guest_lang and guest_lang != "es":
+                try:
+                    final_text_out = language_manager.ensure_language(final_text_internal, guest_lang).strip() or final_text_internal
+                except Exception:
+                    try:
+                        final_text_out = language_manager.translate_if_needed(
+                            final_text_internal,
+                            "es",
+                            guest_lang,
+                        ).strip() or final_text_internal
+                    except Exception:
+                        final_text_out = final_text_internal
+
             ChannelManager = importlib.import_module("channels_wrapper.manager").ChannelManager
             cm = ChannelManager(memory_manager=_MEMORY_MANAGER)
-            await cm.send_message(esc.guest_chat_id, final_text, channel="whatsapp")
+            await cm.send_message(esc.guest_chat_id, final_text_out, channel="whatsapp")
 
             # Guarda el mensaje real que vio el huésped en la memoria compartida.
             try:
@@ -681,16 +699,16 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                     _MEMORY_MANAGER.save(
                         esc.guest_chat_id,
                         "assistant",
-                        final_text,
+                        final_text_out,
                     )
             except Exception as mem_exc:
                 log.warning("⚠️ No se pudo guardar en memoria el envío final: %s", mem_exc)
 
-            esc.final_response = final_text
+            esc.final_response = final_text_out
             esc.manager_confirmed = True
             esc.sent_to_guest = True
             update_escalation(escalation_id, {
-                "final_response": final_text,
+                "final_response": final_text_out,
                 "manager_confirmed": True,
                 "sent_to_guest": True,
             })
@@ -702,7 +720,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 {
                     "chat_id": clean_chat_id,
                     "escalation_id": escalation_id,
-                    "final_response": final_text,
+                    "final_response": final_text_out,
                     "property_id": _resolve_property_id(esc.guest_chat_id),
                 },
                 rooms=rooms,
@@ -714,7 +732,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                     "property_id": _resolve_property_id(esc.guest_chat_id),
                     "channel": "whatsapp",
                     "sender": "bookai",
-                    "message": final_text,
+                    "message": final_text_out,
                     "created_at": datetime.utcnow().isoformat(),
                 },
                 rooms=rooms,
@@ -723,7 +741,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "chat.updated",
                 {
                     "chat_id": clean_chat_id,
-                    "last_message": final_text,
+                    "last_message": final_text_out,
                     "last_message_at": datetime.utcnow().isoformat(),
                     "needs_action": None,
                     "needs_action_type": None,
@@ -734,7 +752,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 rooms=rooms,
             )
 
-            return f"✅ *Respuesta enviada al huésped:*\n\n{final_text}"
+            return f"✅ *Respuesta enviada al huésped:*\n\n{final_text_out}"
 
         except Exception as e:
             log.exception("Error enviando respuesta final")
