@@ -9,6 +9,7 @@ El LLM decide qué herramienta usar y solo escala si ambas fallan.
 from __future__ import annotations
 
 import asyncio
+import json
 import logging
 import re
 from typing import ClassVar, List, Optional, Tuple
@@ -120,6 +121,88 @@ class KBSearchTool(BaseTool):
     args_schema: ClassVar[type[BaseModel]] = KBSearchInput
     memory_manager: Optional[object] = None
     chat_id: str = ""
+
+    @staticmethod
+    def _dedupe_chunks(chunks: List[str]) -> List[str]:
+        seen = set()
+        out: List[str] = []
+        for chunk in chunks:
+            value = " ".join((chunk or "").split()).strip()
+            if not value:
+                continue
+            key = value.lower()
+            if key in seen:
+                continue
+            seen.add(key)
+            out.append(chunk.strip())
+        return out
+
+    @staticmethod
+    def _pick_top_indices(raw_text: str, max_idx: int, top_k: int) -> List[int]:
+        text = (raw_text or "").strip()
+        if not text:
+            return list(range(min(top_k, max_idx)))
+
+        # Intento 1: JSON estricto
+        try:
+            parsed = json.loads(text)
+            if isinstance(parsed, list):
+                idxs = [int(x) for x in parsed if isinstance(x, int) or (isinstance(x, str) and x.isdigit())]
+                idxs = [i for i in idxs if 0 <= i < max_idx]
+                if idxs:
+                    return idxs[:top_k]
+        except Exception:
+            pass
+
+        # Intento 2: extraer números en texto libre
+        numbers = [int(x) for x in re.findall(r"\d+", text)]
+        numbers = [i for i in numbers if 0 <= i < max_idx]
+        if numbers:
+            # mantener orden y quitar duplicados
+            seen = set()
+            out = []
+            for i in numbers:
+                if i in seen:
+                    continue
+                seen.add(i)
+                out.append(i)
+            if out:
+                return out[:top_k]
+
+        return list(range(min(top_k, max_idx)))
+
+    async def _rerank_chunks(self, question: str, chunks: List[str], top_k: int = 3) -> List[str]:
+        clean_chunks = self._dedupe_chunks(chunks)
+        if not clean_chunks:
+            return []
+        if len(clean_chunks) <= top_k:
+            return clean_chunks
+        try:
+            llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
+            chunk_block = "\n\n".join(f"[{i}] {c}" for i, c in enumerate(clean_chunks))
+            raw = await llm.ainvoke(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Selecciona los fragmentos MÁS relevantes para responder la pregunta.\n"
+                            "Devuelve SOLO un JSON array con índices en orden de relevancia.\n"
+                            "Ejemplo: [2,0,1]\n"
+                            "No añadas texto adicional."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": f"Pregunta:\n{question}\n\nFragmentos:\n{chunk_block}",
+                    },
+                ]
+            )
+            reply = (getattr(raw, "content", None) or str(raw or "")).strip()
+            top_indices = self._pick_top_indices(reply, max_idx=len(clean_chunks), top_k=top_k)
+            return [clean_chunks[i] for i in top_indices]
+        except Exception as exc:
+            log.debug("KBSearchTool: rerank fallback por error: %s", exc)
+            return clean_chunks[:top_k]
 
     async def _arun(self, query: str) -> Optional[str]:
         question = (query or "").strip()
@@ -277,10 +360,21 @@ class KBSearchTool(BaseTool):
                 attempt_payload = base_payload.copy()
                 attempt_payload["input"] = variant
                 raw_reply = await kb_tool.ainvoke(attempt_payload)
+                ranked_chunks: List[str] = []
                 if isinstance(raw_reply, list):
                     log.info("KBSearchTool: chunks recuperados=%s", len(raw_reply))
+                    normalized_chunks = [
+                        normalize_reply(item, variant, "InfoAgent").strip()
+                        for item in raw_reply
+                    ]
+                    normalized_chunks = [c for c in normalized_chunks if c]
+                    ranked_chunks = await self._rerank_chunks(variant, normalized_chunks, top_k=3)
 
-                cleaned = normalize_reply(raw_reply, variant, "InfoAgent").strip()
+                cleaned = (
+                    "\n\n".join(ranked_chunks).strip()
+                    if ranked_chunks
+                    else normalize_reply(raw_reply, variant, "InfoAgent").strip()
+                )
                 is_invalid, invalid_reason = _is_invalid(cleaned)
                 log.info("KBSearchTool: respuesta KB (preview): %s", _preview(cleaned))
                 fallback_needed = is_invalid or _looks_like_no_answer(cleaned)
@@ -295,9 +389,20 @@ class KBSearchTool(BaseTool):
                     retry_payload = base_payload.copy()
                     retry_payload["input"] = focus
                     raw_retry = await kb_tool.ainvoke(retry_payload)
+                    ranked_retry_chunks: List[str] = []
                     if isinstance(raw_retry, list):
                         log.info("KBSearchTool: chunks recuperados (reintento)=%s", len(raw_retry))
-                    cleaned_retry = normalize_reply(raw_retry, focus, "InfoAgent").strip()
+                        normalized_retry_chunks = [
+                            normalize_reply(item, focus, "InfoAgent").strip()
+                            for item in raw_retry
+                        ]
+                        normalized_retry_chunks = [c for c in normalized_retry_chunks if c]
+                        ranked_retry_chunks = await self._rerank_chunks(focus, normalized_retry_chunks, top_k=3)
+                    cleaned_retry = (
+                        "\n\n".join(ranked_retry_chunks).strip()
+                        if ranked_retry_chunks
+                        else normalize_reply(raw_retry, focus, "InfoAgent").strip()
+                    )
                     retry_invalid, retry_reason = _is_invalid(cleaned_retry)
                     log.info("KBSearchTool: respuesta KB reintento (preview): %s", _preview(cleaned_retry))
                     if not retry_invalid:
@@ -358,8 +463,13 @@ class InfoAgent:
                     question=user_input,
                     source_text=kb_output,
                 )
+                # Si KB ya tiene información útil y el reducer generó respuesta,
+                # no activamos Google.
                 if reduced:
                     return reduced
+                # Si KB respondió pero no se pudo reducir bien, no buscamos fuera:
+                # escalamos para evitar ruido y latencia innecesaria.
+                return ESCALATION_TOKEN
 
             google_output = (await google_tool._arun(user_input) or "").strip()
             if self._google_needs_location_hint(google_output):
@@ -377,7 +487,11 @@ class InfoAgent:
                     question=user_input,
                     source_text=google_output,
                 )
-                if reduced:
+                if reduced and await self._verify_answer_supported(
+                    question=user_input,
+                    answer=reduced,
+                    source_text=google_output,
+                ):
                     return reduced
         except Exception as exc:
             log.error("Error ejecutando InfoAgent: %s", exc, exc_info=True)
@@ -454,6 +568,12 @@ class InfoAgent:
             "con puntos clave completos y concretos.\n"
             "6) Si la pregunta es específica (ej. ubicación, horario, precio), responde de forma breve.\n"
             "7) Mantén el idioma del mensaje del huésped.\n"
+            "8) No deduzcas, no completes huecos, no uses conocimiento externo.\n"
+            "9) Si falta un dato clave para responder correctamente, devuelve EXACTAMENTE: INSUFFICIENT_CONTEXT\n"
+            "10) Si la respuesta implica una limitación (no disponible / no regulable / no permitido), "
+            "mantén el dato principal y añade una frase breve de ayuda práctica.\n"
+            "11) Esa frase de ayuda debe salir de la fuente; si la fuente no aporta alternativa concreta, "
+            "ofrece consultar con recepción/equipo sin prometer cambios.\n"
         )
         user_prompt = (
             f"Pregunta del huésped:\n{q}\n\n"
@@ -479,6 +599,43 @@ class InfoAgent:
         except Exception as exc:
             log.warning("InfoAgent reducer: fallo al reducir respuesta: %s", exc)
             return None
+
+    async def _verify_answer_supported(self, question: str, answer: str, source_text: str) -> bool:
+        q = (question or "").strip()
+        a = (answer or "").strip()
+        src = (source_text or "").strip()
+        if not q or not a or not src:
+            return False
+        try:
+            raw = await self.llm.ainvoke(
+                [
+                    {
+                        "role": "system",
+                        "content": (
+                            "Evalúa soporte factual.\n"
+                            "Responde SOLO YES o NO.\n"
+                            "YES únicamente si TODAS las afirmaciones de la respuesta están soportadas por la fuente."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": (
+                            f"Pregunta:\n{q}\n\n"
+                            f"Respuesta:\n{a}\n\n"
+                            f"Fuente:\n{src}\n\n"
+                            "¿La respuesta está 100% soportada por la fuente?"
+                        ),
+                    },
+                ]
+            )
+            verdict = (getattr(raw, "content", None) or str(raw or "")).strip().upper()
+            ok = verdict.startswith("YES")
+            if not ok:
+                log.info("InfoAgent verifier: respuesta rechazada por soporte insuficiente.")
+            return ok
+        except Exception as exc:
+            log.warning("InfoAgent verifier: error validando soporte factual: %s", exc)
+            return False
 
 
 def _load_info_prompt() -> Optional[str]:

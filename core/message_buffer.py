@@ -108,6 +108,7 @@ class MessageBufferManager:
             return
 
         combined, version = state.pending_blocks.pop(0)
+
         state.processing_task = asyncio.create_task(
             self._run_block(conversation_id, combined, version, process_callback)
         )

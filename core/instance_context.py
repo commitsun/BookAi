@@ -7,6 +7,7 @@ import os
 import re
 import json
 import asyncio
+import time
 from typing import Any, Dict, Optional
 
 import requests
@@ -28,6 +29,8 @@ PROPERTY_BY_NAME_WEBHOOK = ""
 PROPERTY_BY_CODE_WEBHOOK = ""
 PROPERTY_BY_ID_WEBHOOK = ""
 DEFAULT_PROPERTY_TABLE = os.getenv("DEFAULT_PROPERTY_TABLE", "properties")
+_PROPERTIES_BY_CODE_CACHE_TTL_SECONDS = 30
+_properties_by_code_cache: dict[tuple[str, str], tuple[float, list[Dict[str, Any]]]] = {}
 
 
 def _normalize_phone_number(value: Optional[str]) -> str:
@@ -113,6 +116,15 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
     if not instance_id:
         return []
 
+    cache_key = (str(table or "").strip().lower(), str(instance_id or "").strip().lower())
+    cached = _properties_by_code_cache.get(cache_key)
+    now_ts = time.time()
+    if cached:
+        cached_at, cached_rows = cached
+        if now_ts - cached_at <= _PROPERTIES_BY_CODE_CACHE_TTL_SECONDS:
+            return list(cached_rows or [])
+        _properties_by_code_cache.pop(cache_key, None)
+
     async def _load_tools():
         for server in ("DispoPreciosAgent", "OnboardingAgent", "InfoAgent"):
             try:
@@ -176,16 +188,20 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
 
     data = _extract_payload(raw)
     if isinstance(raw, list):
-        return raw
-    if isinstance(raw, dict) and isinstance(raw.get("response"), list):
-        return raw.get("response") or []
-    if isinstance(data, list):
-        return data
-    if isinstance(data, dict) and data:
-        return [data]
-    if isinstance(raw, dict) and raw:
-        return [raw]
-    return []
+        rows = raw
+    elif isinstance(raw, dict) and isinstance(raw.get("response"), list):
+        rows = raw.get("response") or []
+    elif isinstance(data, list):
+        rows = data
+    elif isinstance(data, dict) and data:
+        rows = [data]
+    elif isinstance(raw, dict) and raw:
+        rows = [raw]
+    else:
+        rows = []
+
+    _properties_by_code_cache[cache_key] = (time.time(), rows)
+    return rows
 
 
 def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
@@ -528,15 +544,16 @@ def hydrate_dynamic_context(
     # No fijar property_id desde payload de instancia para evitar mezcla entre instancias.
     # Solo fijar si ya estaba en memoria o si la instancia tiene UNA sola property.
     property_id = memory_manager.get_flag(chat_id, "property_id")
+    prop_rows_from_instance: list[Dict[str, Any]] = []
     if not property_id:
         instance_code = instance_payload.get("instance_id") or instance_payload.get("instance_url")
         if instance_code and property_table:
             try:
-                rows = fetch_properties_by_code(property_table, str(instance_code))
+                prop_rows_from_instance = fetch_properties_by_code(property_table, str(instance_code))
             except Exception:
-                rows = []
-            if len(rows) == 1:
-                property_id = rows[0].get("property_id")
+                prop_rows_from_instance = []
+            if len(prop_rows_from_instance) == 1:
+                property_id = prop_rows_from_instance[0].get("property_id")
     if property_id:
         memory_manager.set_flag(chat_id, "property_id", property_id)
         log.info("🏷️ property_id=%s (chat_id=%s)", property_id, chat_id)
@@ -549,6 +566,8 @@ def hydrate_dynamic_context(
             memory_manager.set_flag(chat_id, "instance_hotel_code", instance_code)
         if property_name:
             prop_rows = fetch_properties_by_query(property_table, str(property_name))
+        elif prop_rows_from_instance:
+            prop_rows = prop_rows_from_instance
         elif instance_code:
             prop_rows = fetch_properties_by_code(property_table, str(instance_code))
         else:

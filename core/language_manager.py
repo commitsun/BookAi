@@ -245,10 +245,21 @@ class LanguageManager:
     @lru_cache(maxsize=4096)
     def detect_language(self, text: str, prev_lang: Optional[str] = None) -> str:
         raw_text = (text or "").strip()
-        # Si vienen varios mensajes combinados (con saltos de línea), usa la última línea real
+        # Si vienen varios mensajes combinados (con saltos de línea), usa la última línea real.
+        # Pero si esa última línea es demasiado "telegráfica" (ej. "y parking?"),
+        # toma una línea previa con más señal para evitar arrastrar idioma anterior.
         if "\n" in raw_text:
             parts = [p.strip() for p in raw_text.split("\n") if p.strip()]
-            text = parts[-1] if parts else raw_text
+            if parts:
+                candidate = parts[-1]
+                if _is_low_information_followup(candidate) or _is_short_ambiguous_snippet(candidate):
+                    for prior in reversed(parts[:-1]):
+                        if not _is_low_information_followup(prior) and not _is_short_ambiguous_snippet(prior):
+                            candidate = prior
+                            break
+                text = candidate
+            else:
+                text = raw_text
         else:
             text = raw_text
 

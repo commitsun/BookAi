@@ -212,6 +212,14 @@ class InternoAgent:
         context: str,
     ) -> str:
         def _guest_lang() -> str:
+            msg = (guest_message or "").strip()
+            fresh_lang = None
+            # Detecta idioma del mensaje actual sin arrastrar histórico.
+            if msg:
+                try:
+                    fresh_lang = (language_manager.detect_language(msg, prev_lang=None) or "").strip().lower()
+                except Exception:
+                    fresh_lang = None
             try:
                 if self.memory_manager:
                     for key in [str(guest_chat_id or "").strip(), re.sub(r"\D", "", str(guest_chat_id or ""))]:
@@ -219,13 +227,16 @@ class InternoAgent:
                             continue
                         value = self.memory_manager.get_flag(key, "guest_lang")
                         if value:
-                            return str(value).strip().lower() or "es"
+                            mem_lang = str(value).strip().lower() or "es"
+                            # Si el mensaje actual trae señal clara y difiere del histórico, priorízalo.
+                            if fresh_lang and fresh_lang != mem_lang and len(msg) >= 12:
+                                return fresh_lang
+                            return mem_lang
             except Exception:
                 pass
-            try:
-                return (language_manager.detect_language(guest_message, prev_lang="es") or "es").strip().lower()
-            except Exception:
-                return "es"
+            if fresh_lang:
+                return fresh_lang
+            return "es"
 
         def _needs_action_es(lang: str) -> str:
             raw = (guest_message or "").strip()

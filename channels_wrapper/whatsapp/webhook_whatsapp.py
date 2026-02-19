@@ -163,13 +163,13 @@ def register_whatsapp_routes(app, state):
                 state.memory_manager.set_flag(sender, "last_memory_id", memory_id)
 
             try:
-                property_id = None
+                property_id = state.memory_manager.get_flag(memory_id, "property_id")
                 # Resolución estricta: solo por contexto de instancia.
                 instance_id = (
                     state.memory_manager.get_flag(memory_id, "instance_id")
                     or state.memory_manager.get_flag(memory_id, "instance_hotel_code")
                 )
-                if instance_id:
+                if property_id is None and instance_id:
                     from core.instance_context import fetch_properties_by_code, DEFAULT_PROPERTY_TABLE
 
                     table = state.memory_manager.get_flag(memory_id, "property_table") or DEFAULT_PROPERTY_TABLE

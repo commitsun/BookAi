@@ -12,9 +12,89 @@ from core.config import ModelConfig, ModelTier
 from core.language_manager import language_manager
 from core.main_agent import create_main_agent
 from core.instance_context import hydrate_dynamic_context
+from core.escalation_db import get_latest_pending_escalation
 
 log = logging.getLogger("Pipeline")
 SUPER_OFFER_FLAG = "super_offer_pending"
+_HUMAN_ESCALATION_COOLDOWN_MIN = 15
+
+
+def _message_requests_human_intervention(text: str) -> bool:
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    patterns = [
+        r"\b(hablar|consultar|informar|pasar|derivar)\b.{0,30}\b(encargad[oa]|gerente|recepci[oó]n|humano|persona)\b",
+        r"\b(can you|could you|please)\b.{0,40}\b(ask|check|consult|inform)\b.{0,30}\b(manager|reception|staff|human)\b",
+        r"\b(i need|i want)\b.{0,40}\b(speak|talk)\b.{0,20}\b(manager|reception|human|person)\b",
+    ]
+    return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
+
+
+def _has_recent_pending_escalation(mem_id: str, state) -> bool:
+    if not mem_id:
+        return False
+    try:
+        property_id = None
+        mm = getattr(state, "memory_manager", None)
+        if mm:
+            property_id = mm.get_flag(mem_id, "property_id")
+        latest = get_latest_pending_escalation(mem_id, property_id=property_id)
+        if not latest:
+            return False
+        ts_raw = str(latest.get("timestamp") or "").strip()
+        if not ts_raw:
+            return True
+        ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+        if ts.tzinfo is None:
+            ts = ts.replace(tzinfo=timezone.utc)
+        age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+        return age_min <= _HUMAN_ESCALATION_COOLDOWN_MIN
+    except Exception:
+        return False
+
+
+def _sanitize_guest_facing_response(text: str) -> str:
+    raw = (text or "").strip()
+    if not raw:
+        return raw
+
+    # Si el modelo devolvió bloque tipo "Response to the user:", usa solo esa parte.
+    marker_match = re.search(
+        r"(response to the user|respuesta (?:al|para el) (?:hu[eé]sped|usuario)|respuesta final)\s*:\s*",
+        raw,
+        re.IGNORECASE,
+    )
+    if marker_match:
+        tail = raw[marker_match.end() :].strip()
+        if tail:
+            return tail
+
+    meta_line_patterns = [
+        r"^\s*this is a .*user message.*$",
+        r"^\s*the inquiry is about.*$",
+        r"^\s*therefore,? i must.*$",
+        r"^\s*reasoning\s*:.*$",
+        r"^\s*analysis\s*:.*$",
+        r"^\s*thought\s*:.*$",
+        r"^\s*mensaje del usuario\s*:.*$",
+        r"^\s*la consulta.*$",
+        r"^\s*por lo tanto.*$",
+        r"^\s*respuesta (?:al|para el) (?:hu[eé]sped|usuario)\s*:.*$",
+    ]
+
+    cleaned_lines = []
+    for line in raw.splitlines():
+        ln = line.strip()
+        if not ln:
+            continue
+        if any(re.search(p, ln, re.IGNORECASE) for p in meta_line_patterns):
+            continue
+        cleaned_lines.append(ln)
+
+    if cleaned_lines:
+        return "\n".join(cleaned_lines).strip()
+    return raw
 
 
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
@@ -398,6 +478,23 @@ async def process_user_message(
                 except Exception as exc:
                     log.warning("No se pudo guardar respuesta de escalación por oferta pendiente: %s", exc)
 
+        if not response_raw and _message_requests_human_intervention(user_message):
+            if not _has_recent_pending_escalation(mem_id, state):
+                await state.interno_agent.escalate(
+                    guest_chat_id=chat_id,
+                    guest_message=user_message,
+                    escalation_type="info_not_found",
+                    reason="El huésped solicita consulta/intervención de personal humano.",
+                    context="Escalación forzada por petición explícita de manager/recepción/humano.",
+                )
+            response_raw = _ensure_guest_language(
+                "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
+            )
+            try:
+                state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+            except Exception as exc:
+                log.warning("No se pudo guardar respuesta de escalación forzada: %s", exc)
+
         if not response_raw:
             main_agent = create_main_agent(
                 memory_manager=state.memory_manager,
@@ -422,10 +519,11 @@ async def process_user_message(
             )
             return None
 
-        response_raw = response_raw.strip()
+        response_raw = _sanitize_guest_facing_response(response_raw.strip())
         # Fuerza el idioma final de salida al idioma detectado del último mensaje del huésped.
         # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
         response_raw = _ensure_guest_language(response_raw)
+        response_raw = _sanitize_guest_facing_response(response_raw)
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,
