@@ -196,19 +196,21 @@ class MainAgent:
                 escalation_type=escalation_type,
                 context="Escalación confirmada por el huésped",
             )
-            return EscalationMessages.get_by_context("info")
+            return self._localize(chat_id, EscalationMessages.get_by_context("info"))
 
         if decision is False:
             self.memory_manager.clear_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING)
             self.memory_manager.clear_flag(chat_id, "consulta_base_realizada")
             reply = self._generate_reply(chat_id=chat_id, intent="escalation_declined")
-            return reply or (
+            text = reply or (
                 "Perfecto, seguimos buscando alternativas sin molestar al encargado. "
                 "Si quieres que lo contacte luego, solo dímelo."
             )
+            return self._localize(chat_id, text)
 
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
-        return reply or "Solo para confirmar: ¿quieres que contacte con el encargado? Responde con 'sí' o 'no'."
+        text = reply or "Solo para confirmar: ¿quieres que contacte con el encargado? Responde con 'sí' o 'no'."
+        return self._localize(chat_id, text)
 
     def _interpret_confirmation(self, text: str) -> Optional[bool]:
         t = (text or "").strip().lower()
@@ -235,10 +237,11 @@ class MainAgent:
             },
         )
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
-        return reply or (
+        text = reply or (
             "Ahora mismo no tengo ese dato confirmado. "
             "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
         )
+        return self._localize(chat_id, text)
 
     def _should_attach_to_pending_escalation(self, chat_id: str, user_input: str) -> bool:
         text = (user_input or "").strip()
