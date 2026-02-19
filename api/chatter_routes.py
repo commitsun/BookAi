@@ -594,6 +594,75 @@ def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
     return None
 
 
+def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] = None) -> str:
+    """Resuelve idioma huésped priorizando flags de memoria y aliases del chat."""
+    memory_manager = getattr(state, "memory_manager", None)
+    if not memory_manager:
+        return "es"
+
+    clean = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+    keys: list[str] = []
+    if context_id:
+        keys.append(str(context_id).strip())
+    if chat_id:
+        keys.append(str(chat_id).strip())
+    if clean:
+        keys.append(clean)
+    keys.extend(_related_memory_ids(state, clean))
+
+    seen = set()
+    dedup_keys = []
+    for key in keys:
+        if not key:
+            continue
+        if key in seen:
+            continue
+        seen.add(key)
+        dedup_keys.append(key)
+
+    for key in dedup_keys:
+        try:
+            lang = memory_manager.get_flag(key, "guest_lang")
+            if isinstance(lang, str) and lang.strip():
+                return lang.strip().lower()
+        except Exception:
+            continue
+
+    for key in dedup_keys:
+        try:
+            history = memory_manager.get_memory_as_messages(key) or []
+        except Exception:
+            history = []
+        for msg in reversed(history):
+            if not isinstance(msg, dict):
+                continue
+            if str(msg.get("role") or "").strip().lower() != "guest":
+                continue
+            sample = str(msg.get("content") or "").strip()
+            if not sample:
+                continue
+            try:
+                return (language_manager.detect_language(sample, prev_lang="es") or "es").strip().lower()
+            except Exception:
+                return "es"
+
+    return "es"
+
+
+def _ensure_guest_language_for_outgoing(state, chat_id: str, text: str, context_id: Optional[str] = None) -> str:
+    """Ajusta mensaje saliente al idioma del huésped para envíos manuales."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    guest_lang = _resolve_guest_lang_for_chat(state, chat_id, context_id=context_id)
+    if guest_lang == "es":
+        return raw
+    try:
+        return language_manager.ensure_language(raw, guest_lang).strip() or raw
+    except Exception:
+        return raw
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -934,6 +1003,13 @@ def register_chatter_routes(app, state) -> None:
             context_id = None
         elif state.memory_manager:
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+
+        outgoing_message = _ensure_guest_language_for_outgoing(
+            state,
+            chat_id,
+            outgoing_message,
+            context_id=context_id,
+        )
 
         await state.channel_manager.send_message(
             chat_id,
