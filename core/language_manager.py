@@ -215,6 +215,35 @@ def _is_low_information_followup(text: str) -> bool:
     return has_digit or len(words) <= 2
 
 
+def _has_strong_spanish_signal(text: str) -> bool:
+    """
+    Detecta señales fuertes de español para evitar quedarse anclado
+    en un idioma previo por baja confianza del detector.
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    if "¿" in raw or "¡" in raw:
+        return True
+
+    marker_patterns = [
+        r"\bteneis\b",
+        r"\btenéis\b",
+        r"\balgun\b",
+        r"\balgún\b",
+        r"\bnumero\b",
+        r"\bnúmero\b",
+        r"\btelefono\b",
+        r"\bteléfono\b",
+        r"\bhabitacion\b",
+        r"\bhabitación\b",
+        r"\bdonde\b",
+        r"\bdónde\b",
+    ]
+    hits = sum(1 for pattern in marker_patterns if re.search(pattern, raw))
+    return hits >= 2
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -271,6 +300,9 @@ class LanguageManager:
         explicit = _explicit_language_request(text)
         if explicit:
             return _normalize_iso_lang_code(explicit) or base_lang
+
+        if _has_strong_spanish_signal(text):
+            return "es"
 
         # Evita cambiar de idioma por acuses/saludos cortos
         normalized = _normalize_ack(text)
@@ -331,8 +363,8 @@ class LanguageManager:
                 if prev_lang and normalized and normalized != base_lang and _is_low_information_followup(text):
                     return base_lang
                 return normalized or base_lang
-            if prev_lang:
-                return base_lang
+            # Con baja confianza, permite pasar a la validación LLM
+            # para no quedar anclados al idioma previo en mensajes informativos.
 
         try:
             normalized = self._llm_detect_lang_code(text, fallback=base_lang)
