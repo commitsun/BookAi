@@ -1678,7 +1678,18 @@ def register_chatter_routes(app, state) -> None:
             language = template_def.language or language
         else:
             template_name = template_code
-            parameters = list((payload.parameters or {}).values())
+            raw_params = payload.parameters or {}
+            if isinstance(raw_params, dict):
+                parameters = [
+                    {
+                        "type": "text",
+                        "parameter_name": str(key),
+                        "text": "" if val is None else str(val),
+                    }
+                    for key, val in raw_params.items()
+                ]
+            else:
+                parameters = list(raw_params)
 
         context_id = _resolve_whatsapp_context_id(state, chat_id)
         folio_id = None

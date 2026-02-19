@@ -298,7 +298,20 @@ def register_template_routes(app, state) -> None:
                 parameters = template_def.build_meta_parameters(payload.template.parameters)
                 language = template_def.language or language
             else:
-                parameters = list((payload.template.parameters or {}).values())
+                raw_params = payload.template.parameters or {}
+                if isinstance(raw_params, dict):
+                    # Fallback robusto: si no resolvemos la plantilla en registry,
+                    # preservamos nombres para plantillas NAMED de Meta.
+                    parameters = [
+                        {
+                            "type": "text",
+                            "parameter_name": str(key),
+                            "text": "" if val is None else str(val),
+                        }
+                        for key, val in raw_params.items()
+                    ]
+                else:
+                    parameters = list(raw_params)
             chat_id = _normalize_phone(payload.recipient.phone)
             if not chat_id:
                 raise HTTPException(status_code=422, detail="Teléfono de destino inválido")
