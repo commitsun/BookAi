@@ -693,26 +693,32 @@ class MainAgent:
             FLAG_PROPERTY_CITY_FILTER_PENDING,
             {"original_message": original_message},
         )
-        reply = self._generate_reply(chat_id=chat_id, intent="ask_city")
-        return reply or self._localize(chat_id, "¿En qué ciudad te gustaría alojarte?")
+        cities = self._extract_unique_cities(candidates or [])
+        return self._build_ask_city_reply(chat_id, cities)
 
-    def _classify_property_intent(self, chat_id: str, text: str) -> str:
+    def _get_candidates_for_listing(self, chat_id: str) -> list[dict]:
         """
-        Clasifica intención relacionada con properties.
-        Retorna: list_properties | list_property_addresses | list_cities | choose_property | other
+        Devuelve candidatos para listar (ciudades/hoteles) con fallback de memoria:
+        1) carga por instancia, 2) candidatos pendientes, 3) última lista mostrada.
         """
+        candidates = self._ensure_property_candidates(chat_id)
+        if candidates:
+            return candidates
+        candidates = self._get_property_candidates(chat_id)
+        if candidates:
+            return candidates
+        candidates = self._get_last_presented_candidates(chat_id)
+        return candidates if isinstance(candidates, list) else []
+
+    def _classify_property_intent_single(self, chat_id: str, text: str) -> str:
         raw = (text or "").strip()
         if not raw or not self.memory_manager:
             return "other"
-        cache = self.memory_manager.get_flag(chat_id, "property_intent_cache")
-        if isinstance(cache, dict) and cache.get("src") == raw and cache.get("intent"):
-            return cache.get("intent")
         try:
             prompt = self._load_embedded_prompt("PROPERTY_INTENT") or ""
         except Exception:
             prompt = ""
         if not prompt:
-            self.memory_manager.set_flag(chat_id, "property_intent_cache", {"src": raw, "intent": "other"})
             return "other"
         try:
             out = self.llm.invoke(
@@ -726,6 +732,35 @@ class MainAgent:
         out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "other"
         if out not in {"list_properties", "list_property_addresses", "list_cities", "choose_property", "other"}:
             out = "other"
+        return out
+
+    def _classify_property_intent(self, chat_id: str, text: str) -> str:
+        """
+        Clasifica intención relacionada con properties.
+        Retorna: list_properties | list_property_addresses | list_cities | choose_property | other
+        """
+        raw = (text or "").strip()
+        if not raw or not self.memory_manager:
+            return "other"
+        cache = self.memory_manager.get_flag(chat_id, "property_intent_cache")
+        if isinstance(cache, dict) and cache.get("src") == raw and cache.get("intent"):
+            return cache.get("intent")
+
+        # Si el buffer trae varias líneas ("consulta" + "hola"), conservar intención útil
+        # del bloque completo y no degradar a "other" por ruido conversacional.
+        lines = [ln.strip() for ln in raw.splitlines() if ln.strip()]
+        if len(lines) > 1:
+            intents = [self._classify_property_intent_single(chat_id, ln) for ln in lines]
+            priority = {
+                "list_property_addresses": 5,
+                "choose_property": 4,
+                "list_cities": 3,
+                "list_properties": 2,
+                "other": 0,
+            }
+            out = max(intents, key=lambda it: priority.get(it, 0)) if intents else "other"
+        else:
+            out = self._classify_property_intent_single(chat_id, raw)
         self.memory_manager.set_flag(chat_id, "property_intent_cache", {"src": raw, "intent": out})
         return out
 
@@ -755,6 +790,18 @@ class MainAgent:
             return self._localize(chat_id, "¿En qué ciudad te gustaría alojarte? Así podré ayudarte mejor.")
         return self._localize(chat_id, f"Tenemos hoteles en estas ciudades: {body}. ¿Te interesa alguna en concreto?")
 
+    def _build_ask_city_reply(self, chat_id: str, cities: list[str]) -> str:
+        cities_sorted = sorted(cities, key=lambda c: self._normalize_text(c)) if cities else []
+        body = ", ".join(cities_sorted[:12]) if cities_sorted else ""
+        if len(cities_sorted) > 12:
+            body = body + f" y {len(cities_sorted) - 12} más"
+        reply = self._generate_reply(chat_id=chat_id, intent="ask_city", cities=body)
+        if reply:
+            return reply
+        if cities_sorted:
+            return self._localize(chat_id, f"¿En qué ciudad te gustaría alojarte? Tenemos hoteles en: {body}.")
+        return self._localize(chat_id, "¿En qué ciudad te gustaría alojarte?")
+
     def _is_address_intent(self, chat_id: str, text: str) -> bool:
         return self._classify_property_intent(chat_id, text) == "list_property_addresses"
 
@@ -774,6 +821,67 @@ class MainAgent:
         if reply:
             return reply
         return self._localize(chat_id, listing)
+
+    def _clear_property_selection_pending_flags(self, chat_id: str) -> None:
+        if not self.memory_manager or not chat_id:
+            return
+        for key in (
+            FLAG_PROPERTY_CONFIRMATION_PENDING,
+            FLAG_PROPERTY_DISAMBIGUATION_PENDING,
+            FLAG_PROPERTY_CITY_FILTER_PENDING,
+            FLAG_PROPERTY_ZONE_FILTER_PENDING,
+            FLAG_PROPERTY_SWITCH_PENDING,
+            FLAG_PROPERTY_SWITCH_ASKED,
+        ):
+            self.memory_manager.clear_flag(chat_id, key)
+
+    def _get_current_property_candidate(self, chat_id: str) -> Optional[dict]:
+        if not self.memory_manager or not chat_id:
+            return None
+        prop_id = self.memory_manager.get_flag(chat_id, "property_id")
+        if prop_id:
+            try:
+                table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                payload = fetch_property_by_id(table, prop_id) if table else {}
+            except Exception:
+                payload = {}
+            if payload:
+                address = (
+                    payload.get("address")
+                    or payload.get("direccion")
+                    or payload.get("full_address")
+                    or payload.get("address_line")
+                    or payload.get("address1")
+                )
+                street = payload.get("street") or payload.get("street_address") or address
+                city = payload.get("city") or payload.get("ciudad") or payload.get("town") or payload.get("locality")
+                return {
+                    "property_id": payload.get("property_id") or prop_id,
+                    "name": payload.get("name") or payload.get("property_name") or self.memory_manager.get_flag(chat_id, "property_name"),
+                    "city": city,
+                    "street": street,
+                    "address": address,
+                    "instance_id": payload.get("instance_id"),
+                }
+
+        prop_name = (self.memory_manager.get_flag(chat_id, "property_name") or "").strip()
+        if not prop_name:
+            return None
+        candidates = self._ensure_property_candidates(chat_id)
+        prop_name_norm = self._normalize_text(prop_name)
+        for cand in candidates or []:
+            cand_name = self._normalize_text(str((cand or {}).get("name") or ""))
+            if cand_name and (cand_name == prop_name_norm or prop_name_norm in cand_name or cand_name in prop_name_norm):
+                return cand
+        return None
+
+    def _build_current_property_address_reply(self, chat_id: str) -> str:
+        if not self._has_real_property_context(chat_id):
+            return ""
+        current = self._get_current_property_candidate(chat_id)
+        if not current:
+            return ""
+        return self._build_properties_with_addresses_reply(chat_id, [current])
 
     def _select_candidate_with_llm(self, chat_id: str, user_input: str, candidates: list[dict]) -> Optional[dict]:
         """
@@ -877,6 +985,22 @@ class MainAgent:
                     self.memory_manager.set_flag(chat_id, "property_name", display)
                     self.memory_manager.set_flag(chat_id, "property_display_name", display)
         return True
+
+    def _has_active_reservation(self, chat_id: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        try:
+            instance_id = (
+                self.memory_manager.get_flag(chat_id, "instance_id")
+                or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+            )
+            reservation = get_active_chat_reservation(
+                chat_id=chat_id,
+                instance_id=instance_id,
+            )
+            return bool(reservation)
+        except Exception:
+            return False
 
     def _resolve_property_from_candidates(self, chat_id: str, user_input: str) -> bool:
         if not self.memory_manager or not chat_id:
@@ -1061,6 +1185,14 @@ class MainAgent:
             FLAG_PROPERTY_CONFIRMATION_PENDING,
             {"original_message": original_message},
         )
+        # Si ya tenemos catálogo de properties para la instancia, mostrar ciudades
+        # desde el primer prompt para evitar un turno extra de aclaración.
+        candidates = self._get_candidates_for_listing(chat_id)
+        cities = self._extract_unique_cities(candidates)
+        if cities:
+            city_reply = self._build_ask_city_reply(chat_id, cities)
+            if city_reply:
+                return city_reply
         reply = self._generate_reply(chat_id=chat_id, intent="ask_property", original_message=original_message)
         if reply:
             return reply
@@ -1571,6 +1703,13 @@ class MainAgent:
                 if pending_switch:
                     # Si el usuario pide ciudades/hoteles mientras está pendiente el cambio de hotel, priorizar eso.
                     intent = self._classify_property_intent(chat_id, user_input)
+                    if intent == "list_property_addresses":
+                        current_address = self._build_current_property_address_reply(chat_id)
+                        if current_address:
+                            self._clear_property_selection_pending_flags(chat_id)
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", current_address)
+                            return current_address
                     if intent in {"list_cities", "list_properties", "list_property_addresses"}:
                         candidates = self._ensure_property_candidates(chat_id)
                         if intent in {"list_properties", "list_property_addresses"} and len(candidates or []) <= 10:
@@ -1691,6 +1830,13 @@ class MainAgent:
                     and not pending_switch
                     and intent in {"list_cities", "list_properties", "list_property_addresses"}
                 ):
+                    if intent == "list_property_addresses":
+                        current_address = self._build_current_property_address_reply(chat_id)
+                        if current_address:
+                            self._clear_property_selection_pending_flags(chat_id)
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", current_address)
+                            return current_address
                     candidates = self._ensure_property_candidates(chat_id)
                     if intent in {"list_properties", "list_property_addresses"} and len(candidates or []) <= 10:
                         if intent == "list_property_addresses":
@@ -1716,6 +1862,13 @@ class MainAgent:
 
                 pending_city = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
                 if pending_city:
+                    if self._is_address_intent(chat_id, user_input):
+                        current_address = self._build_current_property_address_reply(chat_id)
+                        if current_address:
+                            self._clear_property_selection_pending_flags(chat_id)
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", current_address)
+                            return current_address
                     original_message = (
                         pending_city.get("original_message")
                         if isinstance(pending_city, dict)
@@ -1763,16 +1916,31 @@ class MainAgent:
                             tool.invoke({"property_id": filtered[0].get("property_id")})
                         except Exception as exc:
                             log.warning("No se pudo fijar property desde ciudad: %s", exc)
-                        # Confirmación breve sin volver a pedir hotel
                         single_text = self._format_property_candidates(filtered)
-                        reply = self._generate_reply(
-                            chat_id=chat_id,
-                            intent="confirm_single_hotel",
-                            hotels=single_text,
-                        ) or self._localize(
-                            chat_id,
-                            f"Perfecto, en esa ciudad tenemos:\n{single_text}\n¿Quieres reservar en este hotel?",
+                        trigger_text = (original_message or user_input or "").strip()
+                        should_offer_booking = (
+                            self._is_new_reservation_intent(trigger_text, chat_id)
+                            or not self._has_active_reservation(chat_id)
                         )
+                        if should_offer_booking:
+                            reply = self._generate_reply(
+                                chat_id=chat_id,
+                                intent="confirm_single_hotel",
+                                hotels=single_text,
+                            ) or self._localize(
+                                chat_id,
+                                f"Perfecto, en esa ciudad tenemos:\n{single_text}\n¿Quieres reservar en este hotel?",
+                            )
+                        else:
+                            reply = self._generate_reply(
+                                chat_id=chat_id,
+                                intent="confirm_single_hotel_next_step",
+                                hotels=single_text,
+                            ) or self._localize(
+                                chat_id,
+                                f"Perfecto, en esa ciudad tenemos:\n{single_text}\n"
+                                "¿Quieres información de este hotel o prefieres hacer otra reserva?",
+                            )
                         self.memory_manager.save(chat_id, "user", user_input)
                         self.memory_manager.save(chat_id, "assistant", reply)
                         return reply
@@ -1967,6 +2135,16 @@ class MainAgent:
                 pending_disambiguation = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
                 if pending_disambiguation:
                     resolved = False
+                    if self._is_address_intent(chat_id, user_input):
+                        current_address = self._build_current_property_address_reply(chat_id)
+                        if current_address:
+                            self._clear_property_selection_pending_flags(chat_id)
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_candidates")
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_instance_id")
+                            self.memory_manager.clear_flag(chat_id, "property_disambiguation_attempts")
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", current_address)
+                            return current_address
                     # Si el huésped pide direcciones durante la desambiguación,
                     # devolver la lista con direcciones en vez de forzar match por nombre.
                     pending_intent = self._classify_property_intent(chat_id, user_input)
@@ -2080,6 +2258,13 @@ class MainAgent:
                     intent = self._classify_property_intent(chat_id, user_input)
                     if not self._should_keep_property_intent(chat_id, user_input, intent):
                         intent = "other"
+                    if intent == "list_property_addresses":
+                        current_address = self._build_current_property_address_reply(chat_id)
+                        if current_address:
+                            self._clear_property_selection_pending_flags(chat_id)
+                            self.memory_manager.save(chat_id, "user", user_input)
+                            self.memory_manager.save(chat_id, "assistant", current_address)
+                            return current_address
                     if intent in {"list_cities", "list_properties", "list_property_addresses"}:
                         candidates = self._ensure_property_candidates(chat_id)
                         if intent in {"list_properties", "list_property_addresses"} and len(candidates or []) <= 10:

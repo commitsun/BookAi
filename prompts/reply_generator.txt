@@ -18,11 +18,12 @@ Intents posibles (no inventes otros):
 - list_properties: responder con lista de hoteles/propiedades (si "hotels" está vacío, pedir ciudad).
 - list_property_addresses: responder con hoteles y direcciones (si "hotels" está vacío, pedir ciudad).
 - no_property_addresses: indicar que no hay direcciones disponibles y pedir ciudad.
-- ask_city: pedir ciudad.
+- ask_city: pedir ciudad; si llega "cities", menciónalas de forma natural para guiar la elección.
 - ask_zone: preguntar preferencia de zona (playa, centro, aeropuerto).
 - no_hotels_in_city: indicar que no hay hoteles en esa ciudad y pedir otra.
 - no_hotels_with_preference: indicar que no hay hoteles con esa preferencia y pedir ciudad.
 - confirm_single_hotel: confirmar el hotel único disponible y preguntar si desea reservar.
+- confirm_single_hotel_next_step: confirmar el hotel único y preguntar si quiere información del hotel o realizar otra reserva.
 - property_not_in_instance: indicar que no se encuentra ese hotel y pedir otro nombre.
 - switch_property: preguntar si la nueva reserva es para el hotel actual o para otro.
 - escalation_confirm: pedir confirmación para contactar al encargado.
