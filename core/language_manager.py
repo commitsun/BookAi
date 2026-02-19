@@ -195,6 +195,26 @@ def _is_short_ambiguous_snippet(text: str) -> bool:
     return True
 
 
+def _is_low_information_followup(text: str) -> bool:
+    """
+    Detecta mensajes cortos de seguimiento (fechas, cantidades, datos sueltos)
+    donde NO conviene cambiar de idioma si ya hay uno previo estable.
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return False
+    words = [w for w in re.split(r"\s+", raw) if w]
+    if len(words) > 4:
+        return False
+    if len(raw) > 32:
+        return False
+    if any(ch in raw for ch in ".!?;:"):
+        return False
+    # Muy típico en reservas: "2 adults", "24 to 26", "2 personas", etc.
+    has_digit = bool(re.search(r"\d", raw))
+    return has_digit or len(words) <= 2
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -246,6 +266,11 @@ class LanguageManager:
         if normalized in _ack_tokens():
             return base_lang
 
+        # Si ya hay idioma previo, no lo cambies por mensajes "de dato corto"
+        # (cantidades, fechas, respuestas telegráficas típicas de reservas).
+        if prev_lang and _is_low_information_followup(text):
+            return base_lang
+
         # Mensajes de una sola palabra y cortos (saludos/acuses)
         words = text.split()
         if len(words) == 1 and len(text) <= 10:
@@ -281,15 +306,19 @@ class LanguageManager:
                 threshold = 0.75
 
             if prob >= threshold:
-                if prev_lang and code != base_lang and _is_short_ambiguous_snippet(text):
+                if prev_lang and code != base_lang and (
+                    _is_short_ambiguous_snippet(text) or _is_low_information_followup(text)
+                ):
                     return base_lang
                 normalized = _normalize_iso_lang_code(code)
                 # Verificación con LLM cuando el detector difiere del idioma previo
                 # o cuando la confianza no es alta, para evitar falsos positivos.
-                if normalized and (normalized != base_lang or prob < 0.90) and len(text) >= 12:
+                if normalized and (normalized != base_lang or prob < 0.90):
                     llm_code = self._llm_detect_lang_code(text, fallback=normalized)
                     if llm_code and llm_code != normalized:
                         normalized = llm_code
+                if prev_lang and normalized and normalized != base_lang and _is_low_information_followup(text):
+                    return base_lang
                 return normalized or base_lang
             if prev_lang:
                 return base_lang
@@ -298,7 +327,9 @@ class LanguageManager:
             normalized = self._llm_detect_lang_code(text, fallback=base_lang)
             if not normalized:
                 return base_lang
-            if prev_lang and normalized != base_lang and _is_short_ambiguous_snippet(text):
+            if prev_lang and normalized != base_lang and (
+                _is_short_ambiguous_snippet(text) or _is_low_information_followup(text)
+            ):
                 return base_lang
             return normalized
         except Exception as e:
