@@ -1556,7 +1556,7 @@ class MainAgent:
                                 "last_escalation_followup_message",
                                 candidate,
                             )
-                        return "Un momento, sigo verificando tu solicitud con el encargado."
+                        return self._localize(chat_id, "Un momento, sigo verificando tu solicitud con el encargado.")
 
                 pending = await self._handle_pending_confirmation(chat_id, user_input)
                 if pending is not None:
@@ -2386,7 +2386,8 @@ class MainAgent:
                     escalation_type="error",
                     context="Escalación por excepción en MainAgent",
                 )
-                fallback_msg = (
+                fallback_msg = self._localize(
+                    chat_id,
                     "Ha ocurrido un problema interno y ya lo estoy revisando con el encargado. "
                     "Te aviso en breve."
                 )

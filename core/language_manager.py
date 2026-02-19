@@ -244,6 +244,33 @@ def _has_strong_spanish_signal(text: str) -> bool:
     return hits >= 2
 
 
+def _has_strong_english_signal(text: str) -> bool:
+    """
+    Detecta señales fuertes de inglés para evitar arrastre del idioma previo.
+    """
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    if re.search(r"\b(is|are|do|does|can|could|would|please)\b", raw) and "?" in raw:
+        return True
+
+    marker_patterns = [
+        r"\bis\b",
+        r"\bthere\b",
+        r"\brestaurant\b",
+        r"\bbeef\b",
+        r"\broom\b",
+        r"\bbreakfast\b",
+        r"\bparking\b",
+        r"\bcheck[- ]?in\b",
+        r"\bcheck[- ]?out\b",
+        r"\bphone\b",
+        r"\bnumber\b",
+    ]
+    hits = sum(1 for pattern in marker_patterns if re.search(pattern, raw))
+    return hits >= 2
+
+
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.
@@ -303,6 +330,8 @@ class LanguageManager:
 
         if _has_strong_spanish_signal(text):
             return "es"
+        if _has_strong_english_signal(text):
+            return "en"
 
         # Evita cambiar de idioma por acuses/saludos cortos
         normalized = _normalize_ack(text)

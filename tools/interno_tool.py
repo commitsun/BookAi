@@ -150,13 +150,14 @@ def _format_needs_action_es(guest_chat_id: str, guest_message: str) -> str:
     if not raw:
         return ""
     lang = _resolve_guest_lang(guest_chat_id, raw)
-    text_es = raw
-    if lang != "es":
-        try:
-            text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
-        except Exception:
-            text_es = raw
-    return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
+    text_out = raw
+    # Mostrar la consulta en el mismo idioma con el que se responde al huésped.
+    try:
+        if lang:
+            text_out = language_manager.ensure_language(raw, lang).strip() or raw
+    except Exception:
+        text_out = raw
+    return f"El huésped solicita: {text_out} (Idioma huésped: {lang})"
 
 
 def _format_reason_with_lang(guest_chat_id: str, reason: str, guest_message: str = "") -> str:
@@ -197,7 +198,7 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
             "Reglas:\n"
             "- Devuelve SOLO la frase final.\n"
             "- No uses listas ni numeración.\n"
-            "- Mantén el idioma original (español).\n"
+            "- Mantén el idioma original del huésped. No traduzcas.\n"
             "- Máximo 35 palabras."
         )
         user_prompt = (
