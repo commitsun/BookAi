@@ -1100,6 +1100,175 @@ class MainAgent:
         # "otra" + "reserva" en el mismo mensaje
         return "reserva" in t and ("otra" in t or "nuevo" in t or "nueva" in t)
 
+    def _should_force_kb_when_no_tools(
+        self,
+        chat_id: str,
+        user_input: str,
+        response: str,
+        intermediate_steps: list,
+    ) -> bool:
+        """
+        Si no hubo uso de tools, decide semánticamente si esta consulta
+        debía pasar por base_conocimientos y fuerza esa llamada.
+        """
+        if intermediate_steps:
+            return False
+        text = (user_input or "").strip()
+        if not text:
+            return False
+        try:
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            hist = ""
+            if self.memory_manager and chat_id:
+                try:
+                    recent = self.memory_manager.get_memory(chat_id, limit=6) or []
+                    lines = []
+                    for msg in recent:
+                        role = str((msg or {}).get("role") or "")
+                        content = str((msg or {}).get("content") or "")
+                        lines.append(f"{role}: {content}")
+                    hist = "\n".join(lines[-6:])
+                except Exception:
+                    hist = ""
+            system_prompt = (
+                "Clasifica si DEBE forzarse una llamada a 'base_conocimientos'.\n"
+                "Responde SOLO 'force' o 'skip'.\n"
+                "force: consulta factual de hotel (servicios, horarios, políticas, ubicación, parking, accesibilidad, "
+                "desayuno, normas) y no hubo tool call.\n"
+                "skip: intención de reservar/crear reserva, listar hoteles/properties explícitamente, conversación no factual, "
+                "o cuando en el historial reciente ya existe una respuesta directa y válida para la misma consulta."
+            )
+            user_prompt = (
+                f"Mensaje: {text}\n"
+                f"Respuesta propuesta: {response}\n"
+                f"Historial reciente:\n{hist}\n\n"
+                "Etiqueta:"
+            )
+            raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+            return label == "force"
+        except Exception:
+            return False
+
+    def _should_require_availability_before_onboarding(
+        self,
+        chat_id: str,
+        user_input: str,
+        intermediate_steps: list,
+    ) -> bool:
+        """
+        Regla de negocio:
+        para crear reserva, primero debe pasar por disponibilidad/precios.
+        Si en este turno se intentó onboarding sin haber usado disponibilidad,
+        decide semánticamente si hay que redirigir a disponibilidad.
+        """
+        if not intermediate_steps:
+            return False
+        # Solo aplica a intención de NUEVA reserva, no a consultas de reservas existentes.
+        if not self._is_new_reservation_intent(user_input, chat_id):
+            return False
+
+        used_onboarding = False
+        used_availability = False
+        for step in intermediate_steps:
+            try:
+                action = step[0] if isinstance(step, (list, tuple)) and step else None
+                tool_name = str(getattr(action, "tool", "") or "").strip().lower()
+            except Exception:
+                tool_name = ""
+            if tool_name == "onboarding_reservas":
+                used_onboarding = True
+            if tool_name in {"disponibilidad_precios", "availability_pricing"}:
+                used_availability = True
+
+        if not used_onboarding or used_availability:
+            return False
+
+        try:
+            history_text = ""
+            if self.memory_manager and chat_id:
+                recent = self.memory_manager.get_memory(chat_id, limit=10) or []
+                lines = []
+                for msg in recent:
+                    role = str((msg or {}).get("role") or "")
+                    content = str((msg or {}).get("content") or "")
+                    lines.append(f"{role}: {content}")
+                history_text = "\n".join(lines[-10:])
+
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            system_prompt = (
+                "Decide si hay que exigir disponibilidad antes de onboarding.\n"
+                "Responde SOLO: require o allow.\n"
+                "require: el huésped aún no tiene opciones/tarifas claras de habitaciones "
+                "o no ha elegido una habitación concreta para unas fechas.\n"
+                "allow: ya hay disponibilidad/tarifas confirmadas recientemente y el huésped "
+                "ya eligió opción concreta, por lo que onboarding puede continuar.\n"
+                "Si el caso es consulta de reservas existentes (mis reservas, localizador, estado de reserva), "
+                "siempre responde allow."
+            )
+            user_prompt = (
+                f"Mensaje actual: {user_input}\n"
+                f"Historial reciente:\n{history_text}\n\n"
+                "Etiqueta:"
+            )
+            raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+            return label == "require"
+        except Exception:
+            return True
+
+    def _should_keep_property_intent(self, chat_id: str, user_input: str, intent: str) -> bool:
+        """
+        Decide semánticamente si una intención de properties realmente aplica
+        o si el mensaje es continuidad de otro tema del chat.
+        Sin reglas por palabras clave.
+        """
+        if intent not in {"list_cities", "list_properties", "list_property_addresses"}:
+            return True
+        if not self.memory_manager:
+            return True
+        try:
+            recent = self.memory_manager.get_memory(chat_id, limit=6) or []
+            lines = []
+            for msg in recent:
+                role = str((msg or {}).get("role") or "")
+                content = str((msg or {}).get("content") or "")
+                lines.append(f"{role}: {content}")
+            hist = "\n".join(lines[-6:])
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            system_prompt = (
+                "Clasifica si el mensaje del huésped debe mantener intención de properties.\n"
+                "Responde SOLO una palabra exacta: keep o drop.\n"
+                "keep: el huésped realmente pide lista/selección/direcciones de hoteles/properties.\n"
+                "drop: el mensaje es seguimiento de otro tema (servicios, parking, desayuno, etc.) "
+                "aunque el clasificador previo haya dado intención de properties."
+            )
+            user_prompt = (
+                f"Intent inicial: {intent}\n"
+                f"Mensaje nuevo: {user_input}\n"
+                f"Historial reciente:\n{hist}\n\nEtiqueta:"
+            )
+            raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+            return label == "keep"
+        except Exception:
+            return True
+
     def _request_property_switch_confirmation(self, chat_id: str, original_message: str) -> str:
         self.memory_manager.set_flag(
             chat_id,
@@ -1504,6 +1673,8 @@ class MainAgent:
                 # Intent dinámico (LLM) para listar ciudades/propiedades.
                 # Si estamos esperando ciudad/zona, no interceptar aquí para evitar bucles.
                 intent = self._classify_property_intent(chat_id, user_input)
+                if not self._should_keep_property_intent(chat_id, user_input, intent):
+                    intent = "other"
                 pending_city = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_CITY_FILTER_PENDING)
                 pending_zone = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_ZONE_FILTER_PENDING)
                 pending_disambiguation = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_DISAMBIGUATION_PENDING)
@@ -1904,6 +2075,8 @@ class MainAgent:
                 if pending_property:
                     # Si el usuario pide ciudades mientras esperamos hotel, priorizar lista de ciudades.
                     intent = self._classify_property_intent(chat_id, user_input)
+                    if not self._should_keep_property_intent(chat_id, user_input, intent):
+                        intent = "other"
                     if intent in {"list_cities", "list_properties", "list_property_addresses"}:
                         candidates = self._ensure_property_candidates(chat_id)
                         if intent in {"list_properties", "list_property_addresses"} and len(candidates or []) <= 10:
@@ -2132,6 +2305,47 @@ class MainAgent:
                 )
 
                 response = (result.get("output") or "").strip()
+                intermediate_steps = result.get("intermediate_steps") or []
+
+                if self._should_require_availability_before_onboarding(
+                    chat_id=chat_id,
+                    user_input=user_input,
+                    intermediate_steps=intermediate_steps,
+                ):
+                    dispo_tool = next(
+                        (t for t in tools if getattr(t, "name", "") == "disponibilidad_precios"),
+                        None,
+                    )
+                    if dispo_tool is not None:
+                        try:
+                            forced_dispo = await dispo_tool.ainvoke(
+                                {"query": user_input, "pregunta": user_input}
+                            )
+                            forced_text = (forced_dispo or "").strip()
+                            if forced_text:
+                                response = forced_text
+                        except Exception as exc:
+                            log.warning(
+                                "No se pudo redirigir de onboarding a disponibilidad: %s",
+                                exc,
+                            )
+
+                if self._should_force_kb_when_no_tools(
+                    chat_id=chat_id,
+                    user_input=user_input,
+                    response=response,
+                    intermediate_steps=intermediate_steps,
+                ):
+                    kb_tool = next((t for t in tools if getattr(t, "name", "") == "base_conocimientos"), None)
+                    if kb_tool is not None:
+                        try:
+                            forced = await kb_tool.ainvoke({"query": user_input, "pregunta": user_input})
+                            forced_text = (forced or "").strip()
+                            if forced_text and forced_text.upper() != "ESCALATION_REQUIRED":
+                                response = forced_text
+                        except Exception as exc:
+                            log.warning("No se pudo forzar llamada a base_conocimientos: %s", exc)
+
                 response = self._normalize_switch_question_for_single_property(chat_id, response)
 
                 if (

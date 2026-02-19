@@ -19,6 +19,7 @@ from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 
 from core.config import ModelConfig, ModelTier
+from core.language_manager import language_manager
 from core.mcp_client import get_tools
 from core.utils.normalize_reply import normalize_reply
 from core.utils.time_context import get_time_context
@@ -125,6 +126,14 @@ class KBSearchTool(BaseTool):
         if not question:
             return "Por favor, formula una pregunta concreta."
 
+        question_norm = (
+            question.lower()
+            .replace("check-out", "checkout")
+            .replace("check out", "checkout")
+            .replace("check-in", "checkin")
+            .replace("check in", "checkin")
+        )
+
         def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
             if not value:
                 return None
@@ -133,17 +142,41 @@ class KBSearchTool(BaseTool):
             return cleaned or None
 
         def _extract_focus_term(text: str) -> Optional[str]:
-            words = re.findall(r"[a-záéíóúüñ]+", text.lower())
+            normalized = (
+                text.lower()
+                .replace("check-out", "checkout")
+                .replace("check out", "checkout")
+                .replace("check-in", "checkin")
+                .replace("check in", "checkin")
+            )
+            words = re.findall(r"[a-záéíóúüñ]+", normalized)
             if not words:
                 return None
             # Evitar palabras muy genéricas
-            stop = {"el", "la", "los", "las", "un", "una", "de", "del", "que", "es", "hay", "tiene"}
+            stop = {
+                "el", "la", "los", "las", "un", "una", "de", "del", "que", "es", "hay", "tiene",
+                "hotel", "como", "funciona", "precio", "opcion", "opciones", "posibilidad", "horario",
+            }
             focus = [w for w in words if w not in stop]
             return focus[-1] if focus else words[-1]
 
         def _preview(text: str, max_len: int = 240) -> str:
             one_line = " ".join((text or "").split())
             return (one_line[:max_len] + "…") if len(one_line) > max_len else one_line
+
+        def _dedupe_keep_order(items: List[str]) -> List[str]:
+            seen = set()
+            out: List[str] = []
+            for item in items:
+                value = (item or "").strip()
+                if not value:
+                    continue
+                key = value.lower()
+                if key in seen:
+                    continue
+                seen.add(key)
+                out.append(value)
+            return out
 
         try:
             tools = await get_tools(server_name="InfoAgent")
@@ -155,6 +188,23 @@ class KBSearchTool(BaseTool):
             if not kb_tool:
                 log.warning("KBSearchTool: no se encontró la herramienta de conocimientos.")
                 return None
+
+            detected_lang = "es"
+            translated_to_es = ""
+            try:
+                detected_lang = language_manager.detect_language(question, prev_lang="es")
+                if detected_lang != "es":
+                    translated_to_es = language_manager.translate_if_needed(question, detected_lang, "es").strip()
+            except Exception as lang_exc:
+                log.debug("KBSearchTool: no se pudo detectar/traducir idioma: %s", lang_exc)
+
+            query_variants = _dedupe_keep_order([question, translated_to_es])
+            if detected_lang != "es":
+                log.info(
+                    "KBSearchTool: consulta multilenguaje detectada lang=%s variantes=%s",
+                    detected_lang,
+                    len(query_variants),
+                )
 
             payload = {"input": question}
             if self.memory_manager and self.chat_id:
@@ -184,10 +234,7 @@ class KBSearchTool(BaseTool):
                     log.warning("KBSearchTool: falta contexto dinamico (instance_url/property_id).")
                     return None
 
-            raw_reply = await kb_tool.ainvoke(payload)
             base_payload = payload.copy()
-            if isinstance(raw_reply, list):
-                log.info("KBSearchTool: chunks recuperados=%s", len(raw_reply))
 
             def _is_invalid(text: str) -> Tuple[bool, str]:
                 if not text or len(text) < 10:
@@ -215,14 +262,35 @@ class KBSearchTool(BaseTool):
                     return True, "no_info_pattern"
                 return False, "ok"
 
-            cleaned = normalize_reply(raw_reply, question, "InfoAgent").strip()
-            is_invalid, invalid_reason = _is_invalid(cleaned)
-            log.info("KBSearchTool: respuesta KB (preview): %s", _preview(cleaned))
-            fallback_needed = is_invalid or "no dispone" in cleaned.lower() or "no cuenta con" in cleaned.lower()
+            def _looks_like_no_answer(text: str) -> bool:
+                lowered = (text or "").lower()
+                markers = [
+                    "no dispongo",
+                    "no tengo información",
+                    "no hay resultados",
+                    "no se encontró",
+                    "necesito escalar",
+                ]
+                return any(m in lowered for m in markers)
 
-            if fallback_needed:
-                focus = _extract_focus_term(question)
-                if focus and focus != question.strip().lower():
+            for variant in query_variants:
+                attempt_payload = base_payload.copy()
+                attempt_payload["input"] = variant
+                raw_reply = await kb_tool.ainvoke(attempt_payload)
+                if isinstance(raw_reply, list):
+                    log.info("KBSearchTool: chunks recuperados=%s", len(raw_reply))
+
+                cleaned = normalize_reply(raw_reply, variant, "InfoAgent").strip()
+                is_invalid, invalid_reason = _is_invalid(cleaned)
+                log.info("KBSearchTool: respuesta KB (preview): %s", _preview(cleaned))
+                fallback_needed = is_invalid or _looks_like_no_answer(cleaned)
+
+                if not fallback_needed:
+                    log.info("KBSearchTool: información obtenida correctamente.")
+                    return cleaned
+
+                focus = _extract_focus_term(variant)
+                if focus and focus != variant.strip().lower():
                     log.info("KBSearchTool: reintentando KB con término focal '%s'", focus)
                     retry_payload = base_payload.copy()
                     retry_payload["input"] = focus
@@ -236,12 +304,11 @@ class KBSearchTool(BaseTool):
                         log.info("KBSearchTool: información obtenida correctamente (reintento).")
                         return cleaned_retry
                     log.info("KBSearchTool: reintento inválido (motivo=%s).", retry_reason)
-                if is_invalid:
-                    log.info("KBSearchTool: KB no tiene información útil tras reintento (motivo=%s).", invalid_reason)
-                    return None
 
-            log.info("KBSearchTool: información obtenida correctamente.")
-            return cleaned
+                log.info("KBSearchTool: intento inválido (motivo=%s).", invalid_reason)
+
+            log.info("KBSearchTool: KB no tiene información útil tras variantes/reintentos.")
+            return None
         except Exception as exc:
             log.error("KBSearchTool error: %s", exc, exc_info=True)
             return None
@@ -281,77 +348,42 @@ class InfoAgent:
         if not user_input:
             return ESCALATION_TOKEN
 
-        chat_history = chat_history or []
-        if not chat_history and self.memory_manager and chat_id:
-            try:
-                chat_history = self.memory_manager.get_memory_as_messages(
-                    conversation_id=chat_id,
-                    limit=context_window,
-                )
-            except Exception as exc:
-                log.warning("No se pudo recuperar historial para InfoAgent: %s", exc)
-                chat_history = []
-
-        dynamic_context = build_dynamic_context_from_memory(self.memory_manager, chat_id)
-        system_prompt = (
-            f"{get_time_context()}\n\n{self.base_prompt}\n\n"
-            "ORDEN ESTRICTO DE HERRAMIENTAS:\n"
-            "1) Usa 'base_conocimientos' para consultar la KB del hotel.\n"
-            "2) Si no hay respuesta, usa 'google_search' para buscar en la web.\n"
-            "3) Solo si ambas fallan, indica claramente que necesitas escalar.\n\n"
-            "Instrucciones adicionales:\n"
-            "- No inventes datos.\n"
-            "- Aclara la fuente (KB vs Google).\n"
-            "- Si sigues sin datos tras ambos intentos, di que necesitas escalar."
-        )
-        if dynamic_context:
-            system_prompt = f"{system_prompt}\n\n{dynamic_context}"
-
-        tools = [
-            KBSearchTool(memory_manager=self.memory_manager, chat_id=chat_id),
-            GoogleSearchTool(),
-        ]
-        prompt_template = ChatPromptTemplate.from_messages(
-            [
-                ("system", system_prompt),
-                MessagesPlaceholder(variable_name="chat_history", optional=True),
-                ("human", "{input}"),
-                MessagesPlaceholder(variable_name="agent_scratchpad", optional=True),
-            ]
-        )
-
-        agent = create_openai_tools_agent(
-            llm=self.llm,
-            tools=tools,
-            prompt=prompt_template,
-        )
-
-        executor = AgentExecutor(
-            agent=agent,
-            tools=tools,
-            verbose=True,
-            max_iterations=15,
-            handle_parsing_errors=True,
-            max_execution_time=60,
-        )
-
+        kb_tool = KBSearchTool(memory_manager=self.memory_manager, chat_id=chat_id)
+        google_tool = GoogleSearchTool()
         try:
-            result = await executor.ainvoke(
-                {
-                    "input": user_input,
-                    "chat_history": chat_history,
-                }
-            )
-            output = (result.get("output") or "").strip()
+            # Flujo determinista: siempre MCP-KB primero, luego fallback a Google.
+            kb_output = (await kb_tool._arun(user_input) or "").strip()
+            if kb_output and not self._needs_escalation(kb_output):
+                reduced = await self._reduce_to_question_scope(
+                    question=user_input,
+                    source_text=kb_output,
+                )
+                if reduced:
+                    return reduced
 
+            google_output = (await google_tool._arun(user_input) or "").strip()
+            if self._google_needs_location_hint(google_output):
+                contextual_query = self._build_contextual_google_query(chat_id, user_input)
+                if contextual_query and contextual_query.strip() != (user_input or "").strip():
+                    log.info("InfoAgent: reintentando Google con contexto de propiedad.")
+                    google_output = (await google_tool._arun(contextual_query) or "").strip()
+            if (
+                google_output
+                and "no devolvió resultados útiles" not in google_output.lower()
+                and "necesito una consulta para buscar en google" not in google_output.lower()
+                and not self._needs_escalation(google_output)
+            ):
+                reduced = await self._reduce_to_question_scope(
+                    question=user_input,
+                    source_text=google_output,
+                )
+                if reduced:
+                    return reduced
         except Exception as exc:
             log.error("Error ejecutando InfoAgent: %s", exc, exc_info=True)
             return f"Error consultando la información del hotel: {exc}"
 
-        if not output or self._needs_escalation(output):
-            return ESCALATION_TOKEN
-
-        return output
+        return ESCALATION_TOKEN
 
     async def handle(self, pregunta: str, chat_id: str, chat_history=None, **_) -> str:
         return await self.ainvoke(
@@ -372,6 +404,81 @@ class InfoAgent:
             "escalar al encargado",
         ]
         return any(token in lowered for token in triggers)
+
+    @staticmethod
+    def _google_needs_location_hint(text: str) -> bool:
+        lowered = (text or "").lower()
+        hints = [
+            "necesito que me proporciones la ubicación",
+            "necesito la ubicación",
+            "indícame el nombre del hotel",
+            "indícame la dirección",
+            "para poder ayudarte a encontrar",
+        ]
+        return any(token in lowered for token in hints)
+
+    def _build_contextual_google_query(self, chat_id: str, user_input: str) -> str:
+        base = (user_input or "").strip()
+        if not base or not self.memory_manager or not chat_id:
+            return base
+        try:
+            property_name = (
+                self.memory_manager.get_flag(chat_id, "property_name")
+                or self.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                or ""
+            )
+            property_city = self.memory_manager.get_flag(chat_id, "property_city") or ""
+            property_address = self.memory_manager.get_flag(chat_id, "property_address") or ""
+            location_parts = [str(x).strip() for x in [property_name, property_address, property_city] if str(x or "").strip()]
+            if not location_parts:
+                return base
+            return f"{base} cerca de {' - '.join(location_parts)}"
+        except Exception:
+            return base
+
+    async def _reduce_to_question_scope(self, question: str, source_text: str) -> Optional[str]:
+        q = (question or "").strip()
+        src = (source_text or "").strip()
+        if not q or not src:
+            return None
+
+        system_prompt = (
+            "Eres un reductor de alcance para atención hotelera.\n"
+            "Tu tarea es responder SOLO lo que el huésped pregunta usando únicamente la fuente dada.\n"
+            "Reglas obligatorias:\n"
+            "1) No añadas información no pedida.\n"
+            "2) No mezcles secciones no relacionadas (bodas, grupos, eventos) salvo que se pidan explícitamente.\n"
+            "3) Si la fuente no contiene el dato solicitado, devuelve EXACTAMENTE: INSUFFICIENT_CONTEXT\n"
+            "4) Respuesta clara y directa.\n"
+            "5) Si la pregunta es amplia (ej. políticas, normas, condiciones), devuelve un resumen estructurado "
+            "con puntos clave completos y concretos.\n"
+            "6) Si la pregunta es específica (ej. ubicación, horario, precio), responde de forma breve.\n"
+            "7) Mantén el idioma del mensaje del huésped.\n"
+        )
+        user_prompt = (
+            f"Pregunta del huésped:\n{q}\n\n"
+            f"Fuente disponible:\n{src}\n\n"
+            "Devuelve solo la respuesta final para el huésped."
+        )
+
+        try:
+            raw = await self.llm.ainvoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            reduced = (getattr(raw, "content", None) or str(raw or "")).strip()
+            if not reduced:
+                return None
+            if reduced.upper() == "INSUFFICIENT_CONTEXT":
+                return None
+            if len(reduced) > 1600:
+                return reduced[:1600].rstrip()
+            return reduced
+        except Exception as exc:
+            log.warning("InfoAgent reducer: fallo al reducir respuesta: %s", exc)
+            return None
 
 
 def _load_info_prompt() -> Optional[str]:

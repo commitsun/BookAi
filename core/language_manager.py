@@ -24,17 +24,17 @@ LANG_ALIASES = {
     "ca": {"catalan", "catalán"},
 }
 
-DEFAULT_SUPPORTED_LANGS = {"es", "en", "pt", "fr", "it", "de", "gl", "ca"}
-
-
-@lru_cache(maxsize=1)
-def _supported_langs() -> set[str]:
+def _normalize_iso_lang_code(code: str) -> Optional[str]:
     """
-    Lista de idiomas soportados. Configurable via SUPPORTED_LANGS (coma separada).
+    Normaliza códigos ISO de idioma.
+    Acepta formato: xx o xx-yy.
     """
-    raw = os.getenv("SUPPORTED_LANGS", "")
-    langs = {x.strip().lower() for x in raw.split(",") if x.strip()}
-    return langs or set(DEFAULT_SUPPORTED_LANGS)
+    value = (code or "").strip().lower().replace("_", "-")
+    if re.fullmatch(r"[a-z]{2}", value):
+        return value
+    if re.fullmatch(r"[a-z]{2}-[a-z]{2}", value):
+        return value
+    return None
 
 @lru_cache(maxsize=1)
 def _ack_tokens() -> set[str]:
@@ -49,12 +49,30 @@ def _ack_tokens() -> set[str]:
     return {
         "si",
         "sí",
+        "yes",
+        "yeah",
+        "yep",
+        "no",
+        "nope",
+        "nop",
         "ok",
         "okay",
         "okey",
         "oki",
         "ciao",
         "chao",
+        "vale",
+        "perfect",
+        "perfecto",
+        "done",
+        "gracias",
+        "thanks",
+        "thankyou",
+        "thankyou!",
+        "merci",
+        "danke",
+        "obrigado",
+        "obrigada",
     }
 
 
@@ -88,7 +106,6 @@ def _short_greeting_lang(text: str) -> Optional[str]:
         "bonjour": "fr",
         "salut": "fr",
         "ciao": "it",
-        "hallo": "de",
         "ola": "pt",  # sin tilde, típico portugués
         "olá": "pt",
         "oi": "pt",
@@ -186,6 +203,25 @@ class LanguageManager:
     def __init__(self, model: Optional[str] = None, temperature: float = 0.0):
         self.llm = ChatOpenAI(model=model or OPENAI_MODEL, temperature=temperature)
 
+    def _llm_detect_lang_code(self, text: str, fallback: str = "es") -> str:
+        prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a language detector. "
+                    "Return ONLY the ISO 639-1 language code (lowercase) of the user's message. "
+                    "If unsure, return the provided fallback code. No explanations."
+                ),
+            },
+            {"role": "user", "content": f"Fallback: {fallback}\nText:\n{text}"},
+        ]
+        try:
+            out = self.llm.invoke(prompt).content.strip().lower()
+            out = out.split()[0].strip(" .,:;|[](){}\"'") if out else fallback
+            return _normalize_iso_lang_code(out) or (fallback or "es")
+        except Exception:
+            return fallback or "es"
+
     @lru_cache(maxsize=4096)
     def detect_language(self, text: str, prev_lang: Optional[str] = None) -> str:
         raw_text = (text or "").strip()
@@ -196,15 +232,14 @@ class LanguageManager:
         else:
             text = raw_text
 
-        base_lang = (prev_lang or "es").strip().lower() or "es"
-        supported = _supported_langs()
+        base_lang = _normalize_iso_lang_code(prev_lang or "") or "es"
 
         if not text:
             return base_lang
 
         explicit = _explicit_language_request(text)
         if explicit:
-            return explicit if explicit in supported else base_lang
+            return _normalize_iso_lang_code(explicit) or base_lang
 
         # Evita cambiar de idioma por acuses/saludos cortos
         normalized = _normalize_ack(text)
@@ -224,23 +259,15 @@ class LanguageManager:
                 if prev_lang and code != base_lang and prob < 0.92:
                     return base_lang
                 if prob >= threshold:
-                    return code if code in supported else base_lang
+                    normalized = _normalize_iso_lang_code(code)
+                    return normalized or base_lang
+            # Con una sola palabra, si ya hay idioma previo, no forzar cambios por LLM.
+            if prev_lang:
+                return base_lang
             # como último recurso, intenta con LLM breve
-            llm_quick = self.llm.invoke(
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "Return ONLY the 2-letter ISO code of the language of the word. "
-                            "If unsure, return 'es'. No punctuation."
-                        ),
-                    },
-                    {"role": "user", "content": text},
-                ]
-            ).content.strip().lower()
-            llm_quick = llm_quick.split()[0].strip(" .,:;|[](){}\"'") if llm_quick else ""
-            if len(llm_quick) == 2 and llm_quick in supported:
-                return llm_quick
+            normalized = self._llm_detect_lang_code(text, fallback=base_lang)
+            if normalized:
+                return normalized
             return base_lang
 
         # Paso 1: heurística rápida con langdetect
@@ -256,33 +283,24 @@ class LanguageManager:
             if prob >= threshold:
                 if prev_lang and code != base_lang and _is_short_ambiguous_snippet(text):
                     return base_lang
-                return code if code in supported else base_lang
+                normalized = _normalize_iso_lang_code(code)
+                # Verificación con LLM cuando el detector difiere del idioma previo
+                # o cuando la confianza no es alta, para evitar falsos positivos.
+                if normalized and (normalized != base_lang or prob < 0.90) and len(text) >= 12:
+                    llm_code = self._llm_detect_lang_code(text, fallback=normalized)
+                    if llm_code and llm_code != normalized:
+                        normalized = llm_code
+                return normalized or base_lang
             if prev_lang:
                 return base_lang
 
-        prompt = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a language detector. "
-                    "Return ONLY the ISO 639-1 language code (lowercase) of the user's message. "
-                    "If unsure, return 'es'. No explanations."
-                ),
-            },
-            {"role": "user", "content": text},
-        ]
-
         try:
-            out = self.llm.invoke(prompt).content.strip().lower()
-            out = out.split()[0].strip(" .,:;|[](){}\"'") if out else "es"
-            if len(out) != 2:
+            normalized = self._llm_detect_lang_code(text, fallback=base_lang)
+            if not normalized:
                 return base_lang
-
-            if out not in supported:
+            if prev_lang and normalized != base_lang and _is_short_ambiguous_snippet(text):
                 return base_lang
-            if prev_lang and out != base_lang and _is_short_ambiguous_snippet(text):
-                return base_lang
-            return out
+            return normalized
         except Exception as e:
             print(f"⚠️ Error detectando idioma: {e}")
             return base_lang
@@ -291,9 +309,7 @@ class LanguageManager:
         if not text:
             return text
 
-        lang_code = (lang_code or "es").lower().strip()
-        if len(lang_code) != 2:
-            lang_code = "es"
+        lang_code = _normalize_iso_lang_code(lang_code or "") or "es"
         prompt = [
             {
                 "role": "system",

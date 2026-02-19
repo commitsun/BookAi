@@ -21,6 +21,7 @@ from core.escalation_db import (
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
+from core.language_manager import language_manager
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
@@ -317,23 +318,57 @@ def _latest_pending(escs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     return escs[-1]
 
 
-def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
+def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: Any = None) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
         latest = _latest_pending(escs) or {}
         question = (latest.get("guest_message") or "").strip()
-        if question:
-            result[guest_id] = question
+        if not question:
+            continue
+        guest_lang = _resolve_guest_lang(latest, memory_manager=memory_manager)
+        question_es = question
+        if guest_lang != "es":
+            try:
+                question_es = language_manager.translate_if_needed(question, guest_lang, "es").strip() or question
+            except Exception:
+                question_es = question
+        result[guest_id] = f"El huésped solicita: {question_es} (Idioma huésped: {guest_lang})"
     return result
 
 
-def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
+def _resolve_guest_lang(latest: Dict[str, Any], memory_manager: Any = None) -> str:
+    guest_chat_id = str(
+        latest.get("guest_chat_id")
+        or latest.get("chat_id")
+        or latest.get("conversation_id")
+        or ""
+    ).strip()
+    candidate_keys = [guest_chat_id, _clean_chat_id(guest_chat_id)]
+    for key in [k for k in candidate_keys if k]:
+        try:
+            if memory_manager:
+                value = memory_manager.get_flag(key, "guest_lang")
+                if value:
+                    return str(value).strip().lower()
+        except Exception:
+            pass
+    sample = (latest.get("guest_message") or "").strip()
+    if sample:
+        try:
+            return (language_manager.detect_language(sample, prev_lang="es") or "es").strip().lower()
+        except Exception:
+            pass
+    return "es"
+
+
+def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: Any = None) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
         latest = _latest_pending(escs) or {}
         reason = (latest.get("escalation_reason") or latest.get("reason") or "").strip()
         if reason:
-            result[guest_id] = reason
+            guest_lang = _resolve_guest_lang(latest, memory_manager=memory_manager)
+            result[guest_id] = f"{reason} (Idioma huésped: {guest_lang})"
     return result
 
 
@@ -639,8 +674,14 @@ def register_chatter_routes(app, state) -> None:
 
         page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
         pending_grouped = _pending_by_chat(property_id=property_id)
-        pending_map = _pending_actions(pending_grouped)
-        pending_reason_map = _pending_reasons(pending_grouped)
+        pending_map = _pending_actions(
+            pending_grouped,
+            memory_manager=getattr(state, "memory_manager", None),
+        )
+        pending_reason_map = _pending_reasons(
+            pending_grouped,
+            memory_manager=getattr(state, "memory_manager", None),
+        )
         pending_type_map = _pending_types(pending_grouped)
         proposed_map = _pending_responses(pending_grouped)
         pending_messages_map = _pending_messages(pending_grouped)

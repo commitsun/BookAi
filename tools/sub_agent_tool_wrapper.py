@@ -10,6 +10,7 @@ from typing import Any, Type
 
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
+from core.config import ModelConfig, ModelTier
 
 log = logging.getLogger("SubAgentTool")
 
@@ -50,6 +51,40 @@ class SubAgentTool(BaseTool):
     class Config:
         arbitrary_types_allowed = True
 
+    @staticmethod
+    def _normalize_text(text: str) -> str:
+        return " ".join(str(text or "").strip().lower().split())
+
+    async def _is_query_aligned(self, canonical_question: str, tool_query: str) -> bool:
+        canonical = self._normalize_text(canonical_question)
+        query = self._normalize_text(tool_query)
+        if not canonical or not query:
+            return True
+        if canonical == query:
+            return True
+        try:
+            llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
+            system_prompt = (
+                "Compara dos textos y decide si expresan la MISMA intención del huésped.\n"
+                "Responde SOLO con: MATCH o MISMATCH."
+            )
+            user_prompt = (
+                f"Pregunta canónica del huésped:\n{canonical_question}\n\n"
+                f"Query que intenta usar la tool:\n{tool_query}\n\n"
+                "¿Misma intención?"
+            )
+            raw = await llm.ainvoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            verdict = (getattr(raw, "content", None) or str(raw or "")).strip().upper()
+            return verdict == "MATCH"
+        except Exception:
+            # En caso de fallo, no bloquear el flujo.
+            return True
+
     async def _arun(
         self,
         query: str | None = None,
@@ -59,7 +94,8 @@ class SubAgentTool(BaseTool):
         tipo: str | None = None,
     ) -> str:
         try:
-            effective_query = query or pregunta or mensaje_cliente or ""
+            # Prioriza siempre la pregunta completa del huésped para no perder contexto.
+            effective_query = (pregunta or "").strip() or (query or "").strip() or (mensaje_cliente or "").strip()
             if not effective_query:
                 raise ValueError("Falta 'query' o 'pregunta' para el sub-agente.")
 
@@ -78,6 +114,24 @@ class SubAgentTool(BaseTool):
                         self.chat_id,
                         mm_err,
                     )
+
+            if self.name == "base_conocimientos":
+                canonical_question = (pregunta or mensaje_cliente or "").strip()
+                rewritten_query = (query or "").strip()
+                if canonical_question and rewritten_query:
+                    aligned = await self._is_query_aligned(
+                        canonical_question=canonical_question,
+                        tool_query=rewritten_query,
+                    )
+                    if not aligned:
+                        log.info(
+                            "SubAgentTool(%s): query desalineada detectada en el turno actual. "
+                            "Se corrige query='%s' -> pregunta='%s'",
+                            self.name,
+                            rewritten_query[:120],
+                            canonical_question[:120],
+                        )
+                        effective_query = canonical_question
 
             # Caso 1: sub-agente es InternoAgent
             if hasattr(self.sub_agent, "handle_guest_escalation"):

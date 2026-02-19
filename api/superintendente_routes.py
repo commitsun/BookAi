@@ -703,12 +703,67 @@ def _extract_reservations_from_text(text: str) -> Optional[dict]:
 
 
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
+    return _ensure_guest_language_with_target(msg, guest_id, target_lang=None)
+
+
+def _normalize_target_lang(target_lang: Optional[str]) -> Optional[str]:
+    raw = (target_lang or "").strip().lower()
+    if not raw:
+        return None
+    if raw == "guest":
+        return "guest"
+    if re.fullmatch(r"[a-z]{2}", raw):
+        return raw
+    return None
+
+
+async def _detect_language_adjustment_with_llm(text: str) -> dict[str, Any]:
+    """
+    Interpreta semánticamente si el encargado está pidiendo un cambio de idioma
+    del borrador WA. Devuelve:
+      { "target_lang": "guest|en|es|..|None", "language_only": bool }
+    """
+    raw = (text or "").strip()
+    if not raw:
+        return {"target_lang": None, "language_only": False}
+    llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+    prompt = (
+        "Analiza si el mensaje del encargado contiene una instrucción de idioma para el borrador WA.\n"
+        "Responde SOLO JSON con este esquema exacto:\n"
+        "{"
+        "\"target_lang\":\"guest|es|en|fr|de|it|pt|nl|none\","
+        "\"language_only\":true|false"
+        "}\n\n"
+        "Reglas:\n"
+        "- target_lang=guest cuando pida 'en su idioma' o equivalente.\n"
+        "- target_lang=none si NO hay instrucción de idioma.\n"
+        "- language_only=true si el mensaje solo pide cambio de idioma sin cambios de contenido.\n"
+        "- Usa interpretación semántica multilingüe, no keywords literales.\n\n"
+        f"Mensaje:\n{raw}"
+    )
+    try:
+        response = await llm.ainvoke(
+            [
+                {"role": "system", "content": "Eres un clasificador semántico de instrucciones de edición."},
+                {"role": "user", "content": prompt},
+            ]
+        )
+        data = _extract_json_object((getattr(response, "content", None) or "").strip()) or {}
+    except Exception:
+        data = {}
+
+    target = _normalize_target_lang(data.get("target_lang")) if data else None
+    if target == "none":
+        target = None
+    language_only = bool(data.get("language_only", False)) if isinstance(data, dict) else False
+    return {"target_lang": target, "language_only": language_only}
+
+
+def _ensure_guest_language_with_target(msg: str, guest_id: str, target_lang: Optional[str] = None) -> str:
     if not msg:
         return msg
     state = _SUPER_STATE
     memory = getattr(state, "memory_manager", None) if state else None
-    if not memory:
-        return msg
 
     clean_guest = _normalize_guest_id(guest_id)
     keys = [k for k in (clean_guest, f"+{clean_guest}" if clean_guest else "", str(guest_id or "").strip()) if k]
@@ -725,7 +780,7 @@ def _ensure_guest_language(msg: str, guest_id: str) -> str:
             source_key = key
             break
 
-    if not lang:
+    if memory and not lang:
         sample = None
         for key in keys:
             try:
@@ -750,13 +805,19 @@ def _ensure_guest_language(msg: str, guest_id: str) -> str:
                 lang = None
 
     lang = (lang or "es").strip().lower() or "es"
-    if source_key:
+    if memory and source_key:
         try:
             memory.set_flag(source_key, "guest_lang", lang)
             if clean_guest and clean_guest != source_key:
                 memory.set_flag(clean_guest, "guest_lang", lang)
         except Exception:
             pass
+
+    normalized_target = _normalize_target_lang(target_lang)
+    if target_lang == "guest":
+        normalized_target = lang
+    if normalized_target:
+        lang = normalized_target
 
     if lang == "es":
         return msg
@@ -1213,7 +1274,7 @@ async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
 
     system = (
         "Eres el asistente del encargado de un hotel. "
-        "Genera un único mensaje corto de WhatsApp en español neutro, tono cordial y directo. "
+        "Genera un único mensaje corto de WhatsApp, tono cordial y directo. "
         "Incluye las ideas del mensaje base y los ajustes. "
         "No añadas instrucciones, confirmaciones ni comillas; entrega solo el texto listo para enviar."
     )
@@ -1433,7 +1494,11 @@ def register_superintendente_routes(app, state) -> None:
                     if not guest_id:
                         continue
                     msg_to_send = _clean_wa_payload(msg_raw)
-                    msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                    msg_to_send = _ensure_guest_language_with_target(
+                        msg_to_send,
+                        guest_id,
+                        target_lang=draft.get("target_lang") if isinstance(draft, dict) else None,
+                    )
                     await state.channel_manager.send_message(
                         guest_id,
                         msg_to_send,
@@ -1670,7 +1735,11 @@ def register_superintendente_routes(app, state) -> None:
                                 if not guest_id:
                                     continue
                                 msg_to_send = _clean_wa_payload(msg_raw)
-                                msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                                msg_to_send = _ensure_guest_language_with_target(
+                                    msg_to_send,
+                                    guest_id,
+                                    target_lang=draft.get("target_lang") if isinstance(draft, dict) else None,
+                                )
                                 await state.channel_manager.send_message(
                                     guest_id,
                                     msg_to_send,
@@ -1719,16 +1788,28 @@ def register_superintendente_routes(app, state) -> None:
                         drafts = pending_wa.get("drafts") if isinstance(pending_wa, dict) else [pending_wa]
                         drafts = drafts or []
                         llm = getattr(state.superintendente_agent, "llm", None)
+                        lang_adjust = await _detect_language_adjustment_with_llm(message)
+                        target_lang_override = lang_adjust.get("target_lang")
+                        language_only_adjustment = bool(lang_adjust.get("language_only"))
                         updated: list[dict] = []
                         for draft in drafts:
                             guest_id = draft.get("guest_id")
                             base_msg = draft.get("message", "")
-                            rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                            if language_only_adjustment:
+                                rewritten = base_msg
+                            else:
+                                rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                            effective_target = target_lang_override or draft.get("target_lang")
                             updated.append(
                                 {
                                     **draft,
                                     "guest_id": guest_id,
-                                    "message": _ensure_guest_language(rewritten, guest_id),
+                                    "message": _ensure_guest_language_with_target(
+                                        rewritten,
+                                        guest_id,
+                                        target_lang=effective_target,
+                                    ),
+                                    "target_lang": effective_target,
                                 }
                             )
                         if not updated:
@@ -1739,12 +1820,21 @@ def register_superintendente_routes(app, state) -> None:
                                 for draft in drafts:
                                     guest_id = draft.get("guest_id")
                                     base_msg = draft.get("message", "")
-                                    rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                                    if language_only_adjustment:
+                                        rewritten = base_msg
+                                    else:
+                                        rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                                    effective_target = target_lang_override or draft.get("target_lang")
                                     updated.append(
                                         {
                                             **draft,
                                             "guest_id": guest_id,
-                                            "message": _ensure_guest_language(rewritten, guest_id),
+                                            "message": _ensure_guest_language_with_target(
+                                                rewritten,
+                                                guest_id,
+                                                target_lang=effective_target,
+                                            ),
+                                            "target_lang": effective_target,
                                         }
                                     )
                             if not updated:
@@ -1815,16 +1905,28 @@ def register_superintendente_routes(app, state) -> None:
                 drafts = pending_payload.get("drafts") if isinstance(pending_payload, dict) else [pending_payload]
                 drafts = drafts or []
                 llm = getattr(state.superintendente_agent, "llm", None)
+                lang_adjust = await _detect_language_adjustment_with_llm(message)
+                target_lang_override = lang_adjust.get("target_lang")
+                language_only_adjustment = bool(lang_adjust.get("language_only"))
                 updated: list[dict] = []
                 for draft in drafts:
                     guest_id = draft.get("guest_id")
                     base_msg = draft.get("message", "")
-                    rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                    if language_only_adjustment:
+                        rewritten = base_msg
+                    else:
+                        rewritten = await _rewrite_wa_draft(llm, base_msg, message)
+                    effective_target = target_lang_override or draft.get("target_lang")
                     updated.append(
                         {
                             **draft,
                             "guest_id": guest_id,
-                            "message": _ensure_guest_language(rewritten, guest_id),
+                            "message": _ensure_guest_language_with_target(
+                                rewritten,
+                                guest_id,
+                                target_lang=effective_target,
+                            ),
+                            "target_lang": effective_target,
                         }
                     )
                 if updated:
@@ -1885,7 +1987,11 @@ def register_superintendente_routes(app, state) -> None:
                     if not guest_id:
                         continue
                     msg_to_send = _clean_wa_payload(msg_raw)
-                    msg_to_send = _ensure_guest_language(msg_to_send, guest_id)
+                    msg_to_send = _ensure_guest_language_with_target(
+                        msg_to_send,
+                        guest_id,
+                        target_lang=draft.get("target_lang") if isinstance(draft, dict) else None,
+                    )
                     await state.channel_manager.send_message(
                         guest_id,
                         msg_to_send,

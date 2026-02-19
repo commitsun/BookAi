@@ -24,7 +24,7 @@ TRACK_FILE = "/tmp/escalation_tracking.pkl"
 class AppState:
     """Contenedor liviano del estado global y dependencias compartidas."""
 
-    def __init__(self, idle_seconds: float = 15.0):
+    def __init__(self, idle_seconds: float = 6.0):
         self.log = logging.getLogger("AppState")
 
         # Dependencias de agentes y canales
@@ -40,7 +40,13 @@ class AppState:
         self.supervisor_input = SupervisorInputAgent(memory_manager=self.memory_manager)
         self.supervisor_output = SupervisorOutputAgent(memory_manager=self.memory_manager)
         self.channel_manager = ChannelManager(memory_manager=self.memory_manager)
-        self.buffer_manager = MessageBufferManager(idle_seconds=idle_seconds)
+        env_idle = os.getenv("MESSAGE_BUFFER_IDLE_SECONDS", "").strip()
+        try:
+            effective_idle = float(env_idle) if env_idle else float(idle_seconds)
+        except Exception:
+            effective_idle = float(idle_seconds)
+        self.buffer_manager = MessageBufferManager(idle_seconds=effective_idle)
+        self.log.info("🕒 Message buffer idle_seconds=%.2f", effective_idle)
         self.interno_agent = InternoAgent(memory_manager=self.memory_manager)
         self.supabase_client = supabase
         self.superintendente_agent = SuperintendenteAgent(

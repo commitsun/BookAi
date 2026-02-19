@@ -423,6 +423,9 @@ async def process_user_message(
             return None
 
         response_raw = response_raw.strip()
+        # Fuerza el idioma final de salida al idioma detectado del último mensaje del huésped.
+        # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
+        response_raw = _ensure_guest_language(response_raw)
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,
