@@ -9,7 +9,7 @@ on:
         default: "false"
   push:
     branches:
-      - vectorizer-pipeline      # O cuando haya cambios en esta rama
+      - vectorizer-pipeline      # O  cuando haya cambios en esta rama
   schedule:
     - cron: "0 3 * * *"          # Ejecutar cada día a las 03:00 UTC
 
