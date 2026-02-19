@@ -15,6 +15,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
+from core.language_manager import language_manager
 from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
@@ -210,12 +211,40 @@ class InternoAgent:
         reason: str,
         context: str,
     ) -> str:
+        def _guest_lang() -> str:
+            try:
+                if self.memory_manager:
+                    for key in [str(guest_chat_id or "").strip(), re.sub(r"\D", "", str(guest_chat_id or ""))]:
+                        if not key:
+                            continue
+                        value = self.memory_manager.get_flag(key, "guest_lang")
+                        if value:
+                            return str(value).strip().lower() or "es"
+            except Exception:
+                pass
+            try:
+                return (language_manager.detect_language(guest_message, prev_lang="es") or "es").strip().lower()
+            except Exception:
+                return "es"
+
+        def _needs_action_es(lang: str) -> str:
+            raw = (guest_message or "").strip()
+            if not raw:
+                return ""
+            text_es = raw
+            if lang != "es":
+                try:
+                    text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
+                except Exception:
+                    text_es = raw
+            return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
         def _clean_chat_id(value: str) -> str:
             return re.sub(r"\\D", "", str(value or "")).strip()
 
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
+        guest_lang = _guest_lang()
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
             prop_id = None
@@ -250,9 +279,11 @@ class InternoAgent:
                 "chat.updated",
                 {
                     "chat_id": clean_chat_id,
-                    "needs_action": None,
+                    "needs_action": _needs_action_es(guest_lang),
                     "needs_action_type": escalation_type,
-                    "needs_action_reason": None,
+                    "needs_action_reason": (
+                        f"{reason} (Idioma huésped: {guest_lang})" if (reason or "").strip() else None
+                    ),
                     "proposed_response": None,
                     "escalation_id": escalation_id,
                     "escalation_messages": [],

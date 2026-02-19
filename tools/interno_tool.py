@@ -25,6 +25,7 @@ from core.escalation_db import save_escalation, update_escalation, get_latest_pe
 from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
 from core.socket_manager import emit_event
+from core.language_manager import language_manager
 
 log = logging.getLogger("InternoTool")
 
@@ -117,6 +118,53 @@ def _sanitize_guest_text(text: str) -> str:
         if current:
             lines.append(current)
     return "\n".join(lines).strip()
+
+
+def _resolve_guest_lang(guest_chat_id: str, guest_message: str = "") -> str:
+    base = "es"
+    try:
+        if _MEMORY_MANAGER:
+            keys = []
+            raw = str(guest_chat_id or "").strip()
+            clean = _normalize_guest_chat_id(guest_chat_id)
+            if raw:
+                keys.append(raw)
+            if clean:
+                keys.extend([clean, f"+{clean}"])
+            seen = set()
+            keys = [k for k in keys if k and not (k in seen or seen.add(k))]
+            for key in keys:
+                value = _MEMORY_MANAGER.get_flag(key, "guest_lang")
+                if value:
+                    return str(value).strip().lower() or base
+        sample = (guest_message or "").strip()
+        if sample:
+            return (language_manager.detect_language(sample, prev_lang=base) or base).strip().lower()
+    except Exception:
+        pass
+    return base
+
+
+def _format_needs_action_es(guest_chat_id: str, guest_message: str) -> str:
+    raw = (guest_message or "").strip()
+    if not raw:
+        return ""
+    lang = _resolve_guest_lang(guest_chat_id, raw)
+    text_es = raw
+    if lang != "es":
+        try:
+            text_es = language_manager.translate_if_needed(raw, lang, "es").strip() or raw
+        except Exception:
+            text_es = raw
+    return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
+
+
+def _format_reason_with_lang(guest_chat_id: str, reason: str, guest_message: str = "") -> str:
+    base = (reason or "").strip()
+    if not base:
+        return base
+    lang = _resolve_guest_lang(guest_chat_id, guest_message or "")
+    return f"{base} (Idioma huésped: {lang})"
 
 
 def _merge_escalation_text(previous: str, addition: str) -> str:
@@ -409,9 +457,13 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     "chat.updated",
                     {
                         "chat_id": clean_chat_id,
-                        "needs_action": merged_guest_message,
+                        "needs_action": _format_needs_action_es(guest_chat_id, merged_guest_message),
                         "needs_action_type": merged_type,
-                        "needs_action_reason": merged_reason,
+                        "needs_action_reason": _format_reason_with_lang(
+                            guest_chat_id,
+                            merged_reason,
+                            merged_guest_message,
+                        ),
                         "proposed_response": (existing_pending.get("draft_response") or "").strip() or None,
                         "is_final_response": bool((existing_pending.get("draft_response") or "").strip()),
                         "escalation_id": existing_id,
