@@ -292,6 +292,8 @@ def register_template_routes(app, state) -> None:
             ) if registry else None
 
             wa_template = template_def.whatsapp_name if template_def else template_code
+            if not template_def and wa_template.endswith(f"__{language}"):
+                wa_template = wa_template[: -(len(language) + 2)]
             if template_def:
                 parameters = template_def.build_meta_parameters(payload.template.parameters)
                 language = template_def.language or language

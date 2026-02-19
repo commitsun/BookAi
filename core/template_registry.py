@@ -28,6 +28,27 @@ def _norm_code(code: Optional[str]) -> str:
     return (code or "").strip().lower()
 
 
+def _canonical_template_code(
+    raw_code: Optional[str],
+    language: Optional[str],
+    whatsapp_name: Optional[str],
+) -> str:
+    """
+    Código lógico para resolver plantillas aunque en BD el `code` venga como
+    `nombre__idioma` (ej. reserva_confirmation_...__es).
+    """
+    wa_name = _norm_code(whatsapp_name)
+    if wa_name:
+        return wa_name
+
+    code = _norm_code(raw_code)
+    lang = _norm_lang(language)
+    suffix = f"__{lang}"
+    if code.endswith(suffix):
+        return code[: -len(suffix)]
+    return code
+
+
 def _norm_instance(instance_id: Optional[str]) -> Optional[str]:
     if instance_id is None:
         return None
@@ -217,15 +238,19 @@ class TemplateDefinition:
         order = list(data.get("parameter_order") or [])
         if not order and hints:
             order = list(hints.keys())
+        raw_code = data.get("code")
+        raw_language = data.get("language")
+        raw_whatsapp_name = data.get("whatsapp_name")
+        canonical_code = _canonical_template_code(raw_code, raw_language, raw_whatsapp_name)
         param_format_raw = str(data.get("parameter_format", "") or "").strip().upper()
         if not param_format_raw:
             # Si no viene especificado pero hay hints/orden, asumimos NAMED (nuevo formato de Meta).
             param_format_raw = "NAMED" if order or hints else "ORDINAL"
         return cls(
-            code=_norm_code(data.get("code")),
-            language=_norm_lang(data.get("language")),
+            code=canonical_code,
+            language=_norm_lang(raw_language),
             instance_id=_norm_instance(data.get("instance_id")),
-            whatsapp_name=(data.get("whatsapp_name") or data.get("code") or "").strip(),
+            whatsapp_name=(raw_whatsapp_name or canonical_code or raw_code or "").strip(),
             parameter_order=order,
             description=data.get("description"),
             active=bool(data.get("active", True)),
@@ -399,13 +424,21 @@ class TemplateRegistry:
         lang = _norm_lang(language)
         hotel = _norm_instance(instance_id)
         code = _norm_code(template_code)
+        canonical_code = _canonical_template_code(code, lang, None)
+        candidate_codes: List[str] = [code]
+        if canonical_code and canonical_code not in candidate_codes:
+            candidate_codes.append(canonical_code)
 
-        candidates = [
-            self.build_key(hotel, code, lang),
-            self.build_key(hotel, code, None),
-            self.build_key(None, code, lang),
-            self.build_key(None, code, None),
-        ]
+        candidates: List[str] = []
+        for candidate_code in candidate_codes:
+            candidates.extend(
+                [
+                    self.build_key(hotel, candidate_code, lang),
+                    self.build_key(hotel, candidate_code, None),
+                    self.build_key(None, candidate_code, lang),
+                    self.build_key(None, candidate_code, None),
+                ]
+            )
 
         for key in candidates:
             tpl = self._templates.get(key)
