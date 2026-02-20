@@ -698,6 +698,8 @@ class SuperintendenteAgent:
             "- Antes de usar revisar_conversaciones pregunta si prefiere 'resumen' (síntesis IA) o ver los mensajes 'originales'; usa el modo solicitado.\n"
             "- Usa SIEMPRE la tool revisar_conversaciones para mostrar el historial de un huésped; si no tienes guest_id, pídelo y respeta el límite indicado (default 10).\n"
             "- Para dudas sobre reservas/folios/clientes (estado, pagos, contacto, fechas), prioriza las tools de reservas. Si ya tienes folio_id, usa consulta_reserva_persona; si solo hay nombre/fechas, usa consulta_reserva_general para obtener folio_id antes de detallar.\n"
+            "- Regla estricta: si existe folio_id/reservation_id en contexto interno o memoria, NO uses consulta_reserva_general para esa petición; usa primero consulta_reserva_persona.\n"
+            "- Usa consulta_reserva_general solo cuando no exista folio_id resoluble tras revisar contexto/memoria.\n"
             "- No uses revisar_conversaciones salvo que pidan explícitamente historial/mensajes/chat del huésped.\n"
             "- Si consulta_reserva_persona devuelve portalUrl, inclúyelo en la respuesta como enlace para factura/portal.\n"
             "- En paneles de reservas, muestra siempre el folio_id numérico (además del folio_code si quieres) para que el encargado pueda pedir detalle con ese ID.\n"
