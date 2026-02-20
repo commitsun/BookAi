@@ -195,7 +195,6 @@ class MainAgent:
                 motivo=motivo,
                 escalation_type=escalation_type,
                 context="Escalación confirmada por el huésped",
-                confirmation_flag=FLAG_ESCALATION_CONFIRMATION_PENDING,
             )
             return self._localize(chat_id, EscalationMessages.get_by_context("info"))
 
@@ -1672,26 +1671,12 @@ class MainAgent:
             motivo: str,
             escalation_type: str,
             context: str,
-            confirmation_flag: Optional[str] = None,
         ):
             if not self.interno_agent:
                 log.error("⚠️ Se intentó escalar pero no hay InternoAgent configurado")
                 return
 
             try:
-                # Ruta directa y determinista: evita depender de que el LLM invoque la tool correcta.
-                if hasattr(self.interno_agent, "handle_guest_escalation"):
-                    await self.interno_agent.handle_guest_escalation(
-                        chat_id=chat_id,
-                        guest_message=user_input,
-                        reason=motivo,
-                        escalation_type=escalation_type,
-                        context=context,
-                        confirmation_flag=confirmation_flag,
-                    )
-                    return
-
-                # Fallback legado.
                 query = (
                     f"[ESCALATION REQUEST]\n"
                     f"Motivo: {motivo}\n"
@@ -1700,6 +1685,7 @@ class MainAgent:
                     f"Contexto: {context}\n"
                     f"Chat ID: {chat_id}"
                 )
+
                 await self.interno_agent.ainvoke(user_input=query, chat_id=chat_id)
 
             except Exception as exc:
