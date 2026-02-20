@@ -1432,12 +1432,52 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
 
             try:
                 if memory_manager:
-                    for key in ("folio_id", "reservation_locator", "checkin", "checkout", "room_number", "reservation_status"):
-                        if key in reservation_ctx and reservation_ctx.get(key) not in (None, ""):
-                            continue
-                        value = memory_manager.get_flag(clean_id, key)
-                        if value not in (None, ""):
-                            reservation_ctx[key] = value
+                    def _is_context_value(val: Any) -> bool:
+                        if val in (None, "", [], {}):
+                            return False
+                        if isinstance(val, (bool, int, float)):
+                            return True
+                        if isinstance(val, str):
+                            text = val.strip()
+                            if not text:
+                                return False
+                            # Evita inyectar blobs/secretos largos en el prompt operativo.
+                            return len(text) <= 80
+                        return False
+
+                    candidate_ids = {clean_id}
+                    raw_guest = str(guest_id or "").strip()
+                    if raw_guest:
+                        candidate_ids.add(raw_guest)
+                        if ":" in raw_guest:
+                            tail = raw_guest.split(":")[-1].strip()
+                            if tail:
+                                candidate_ids.add(tail)
+                    try:
+                        last_mem = memory_manager.get_flag(clean_id, "last_memory_id")
+                        if isinstance(last_mem, str) and last_mem.strip():
+                            candidate_ids.add(last_mem.strip())
+                    except Exception:
+                        pass
+
+                    state_flags = getattr(memory_manager, "state_flags", {})
+                    if isinstance(state_flags, dict):
+                        suffix = f":{clean_id}" if clean_id else ""
+                        for key in list(state_flags.keys()):
+                            if not isinstance(key, str):
+                                continue
+                            if key in candidate_ids or (suffix and key.endswith(suffix)):
+                                candidate_ids.add(key)
+
+                        for mem_id in candidate_ids:
+                            flags = state_flags.get(mem_id) if isinstance(mem_id, str) else None
+                            if not isinstance(flags, dict):
+                                continue
+                            for key, value in flags.items():
+                                if key in reservation_ctx and reservation_ctx.get(key) not in (None, ""):
+                                    continue
+                                if _is_context_value(value):
+                                    reservation_ctx[key] = value
             except Exception:
                 pass
 
@@ -1453,13 +1493,16 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             ctx_lines = [
                 f"- property_id: {resolved_property_id if resolved_property_id is not None else 'N/D'}",
                 f"- property_name: {property_name_ctx or hotel_name or 'N/D'}",
-                f"- folio_id: {reservation_ctx.get('folio_id') or 'N/D'}",
-                f"- reservation_locator: {reservation_ctx.get('reservation_locator') or 'N/D'}",
-                f"- checkin: {reservation_ctx.get('checkin') or 'N/D'}",
-                f"- checkout: {reservation_ctx.get('checkout') or 'N/D'}",
-                f"- room_number: {reservation_ctx.get('room_number') or 'N/D'}",
-                f"- reservation_status: {reservation_ctx.get('reservation_status') or 'N/D'}",
             ]
+            dynamic_ctx = [
+                (k, v)
+                for k, v in sorted(reservation_ctx.items(), key=lambda item: str(item[0]))
+                if v not in (None, "", [], {})
+            ]
+            if dynamic_ctx:
+                ctx_lines.extend([f"- {k}: {v}" for k, v in dynamic_ctx])
+            else:
+                ctx_lines.append("- reservation_context: N/D")
             reservation_block = "\n".join(ctx_lines)
 
             system_prompt = (

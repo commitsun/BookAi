@@ -104,6 +104,43 @@ def _normalize_guest_chat_id(guest_chat_id: str) -> str:
     return _clean_chat_id(raw) or raw
 
 
+def _resolve_storage_guest_chat_id(guest_chat_id: str) -> str:
+    """
+    Resuelve el guest_chat_id que se persiste en DB.
+    Regla: preferir id compuesto `instancia:telefono` cuando exista.
+    """
+    raw = str(guest_chat_id or "").strip()
+    if not raw:
+        return ""
+    if ":" in raw:
+        return raw
+
+    phone = _clean_chat_id(raw) or raw
+    if not _MEMORY_MANAGER:
+        return raw
+
+    try:
+        keys = [raw]
+        if phone and phone not in keys:
+            keys.append(phone)
+        if phone and f"+{phone}" not in keys:
+            keys.append(f"+{phone}")
+
+        for key in keys:
+            last_mem = _MEMORY_MANAGER.get_flag(key, "last_memory_id")
+            if isinstance(last_mem, str) and ":" in last_mem:
+                return last_mem.strip()
+
+        for key in keys:
+            instance_number = _MEMORY_MANAGER.get_flag(key, "instance_number")
+            if instance_number:
+                return f"{str(instance_number).strip()}:{phone}"
+    except Exception:
+        pass
+
+    return raw
+
+
 def _sanitize_guest_text(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
@@ -361,7 +398,7 @@ class ConfirmarYEnviarInput(BaseModel):
 def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_type, reason, context) -> str:
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
-        normalized_guest_chat_id = _normalize_guest_chat_id(guest_chat_id) or str(guest_chat_id or "").strip()
+        storage_guest_chat_id = _resolve_storage_guest_chat_id(guest_chat_id) or str(guest_chat_id or "").strip()
         # Evita notificaciones duplicadas cuando la misma escalación se dispara más de una vez.
         if escalation_id in NOTIFIED_ESCALATIONS:
             log.info("🔁 Escalación %s ya notificada; se omite reenvío.", escalation_id)
@@ -488,7 +525,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
         esc = Escalation(
             escalation_id=escalation_id,
-            guest_chat_id=normalized_guest_chat_id,
+            guest_chat_id=storage_guest_chat_id,
             guest_message=guest_message,
             escalation_type=escalation_type,
             escalation_reason=clean_reason,
