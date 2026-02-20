@@ -94,13 +94,15 @@ def _clean_chat_id(chat_id: str) -> str:
 
 
 def _normalize_guest_chat_id(guest_chat_id: str) -> str:
-    """Normaliza ids compuestos (instancia:telefono) al chat_id que usa Chatter."""
+    """Normaliza guest_chat_id preservando formato instancia:cliente cuando exista."""
     raw = str(guest_chat_id or "").strip()
     if not raw:
         return ""
     if ":" in raw:
-        tail = raw.split(":")[-1].strip()
-        return _clean_chat_id(tail) or tail
+        left, right = raw.split(":", 1)
+        left_clean = _clean_chat_id(left) or left.strip()
+        right_clean = _clean_chat_id(right) or right.strip()
+        return f"{left_clean}:{right_clean}".strip(":")
     return _clean_chat_id(raw) or raw
 
 
@@ -250,6 +252,14 @@ def _pick_escalation_type(existing_type: str, incoming_type: str) -> str:
     return a if _escalation_priority(a) >= _escalation_priority(b) else b
 
 
+def _chat_room_id(guest_chat_id: str) -> str:
+    """ID usado por Chatter/rooms: siempre el teléfono del huésped."""
+    raw = str(guest_chat_id or "").strip()
+    if ":" in raw:
+        raw = raw.split(":")[-1].strip()
+    return _clean_chat_id(raw) or raw
+
+
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     if not _MEMORY_MANAGER or not guest_chat_id:
         return None
@@ -323,12 +333,42 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
 
 
 def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
-    clean_id = _normalize_guest_chat_id(guest_chat_id) or guest_chat_id
+    clean_id = _chat_room_id(guest_chat_id) or guest_chat_id
     rooms = [f"chat:{clean_id}", "channel:whatsapp"]
     prop_id = _resolve_property_id(guest_chat_id)
     if prop_id is not None:
         rooms.append(f"property:{prop_id}")
     return rooms
+
+
+def _get_or_restore_escalation(escalation_id: str) -> Optional[Escalation]:
+    esc = ESCALATIONS_STORE.get(escalation_id)
+    if esc:
+        return esc
+    try:
+        from core.escalation_db import get_escalation
+
+        record = get_escalation(escalation_id)
+        if not isinstance(record, dict):
+            return None
+        restored = Escalation(
+            escalation_id=str(record.get("escalation_id") or escalation_id),
+            guest_chat_id=str(record.get("guest_chat_id") or "").strip(),
+            guest_message=str(record.get("guest_message") or "").strip(),
+            escalation_type=str(record.get("escalation_type") or "manual").strip() or "manual",
+            escalation_reason=str(record.get("escalation_reason") or record.get("reason") or "").strip(),
+            context=str(record.get("context") or "").strip(),
+            timestamp=str(record.get("timestamp") or datetime.utcnow().isoformat()),
+            property_id=record.get("property_id"),
+            draft_response=(record.get("draft_response") or None),
+            manager_confirmed=bool(record.get("manager_confirmed")),
+            final_response=(record.get("final_response") or None),
+            sent_to_guest=bool(record.get("sent_to_guest")),
+        )
+        ESCALATIONS_STORE[escalation_id] = restored
+        return restored
+    except Exception:
+        return None
 
 # =============================================================
 # 📥 INPUT SCHEMAS
@@ -388,7 +428,11 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             if existing_pending
             else ""
         )
-        if existing_id and existing_id != escalation_id:
+        context_l = f"{clean_reason}\n{clean_context}".lower()
+        is_followup = any(token in context_l for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso"))
+        same_type = (existing_type or "").strip().lower() == (escalation_type or "").strip().lower()
+        can_reuse_existing = bool(existing_id and existing_id != escalation_id and (is_followup or same_type))
+        if can_reuse_existing:
             merged_type = _pick_escalation_type(existing_type, escalation_type)
             merged_guest_message = _synthesize_escalation_query(
                 str(existing_pending.get("guest_message") or ""),
@@ -429,7 +473,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     update_msg = (
                         "🔁 <b>ACTUALIZACIÓN DE CONSULTA ESCALADA</b>\n"
                         f"🆔 <b>ID:</b> <code>{html.escape(existing_id)}</code>\n"
-                        f"📱 <b>Chat ID:</b> <code>{html.escape(guest_chat_id)}</code>\n\n"
+                        f"📱 <b>Chat ID:</b> <code>{html.escape(normalized_guest_chat_id)}</code>\n\n"
                         "➕ <b>Nueva ampliación del huésped:</b>\n"
                         f"{html.escape(guest_message)}\n\n"
                         "📌 <b>Consulta acumulada:</b>\n"
@@ -443,7 +487,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 except Exception:
                     log.debug("No se pudo enviar actualización de escalación %s por Telegram", existing_id)
             try:
-                clean_chat_id = _normalize_guest_chat_id(guest_chat_id) or guest_chat_id
+                clean_chat_id = _chat_room_id(guest_chat_id) or guest_chat_id
                 rooms = _rooms_for_escalation(guest_chat_id)
                 _fire_event(
                     "escalation.updated",
@@ -481,7 +525,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             log.info(
                 "♻️ Reutilizada escalación pendiente %s para chat=%s property_id=%s",
                 existing_id,
-                guest_chat_id,
+                normalized_guest_chat_id,
                 property_id,
             )
             return f"Escalación {existing_id} ya pendiente; actualizada con el último contexto."
@@ -508,7 +552,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
         msg = (
             "🔔 <b>NUEVA CONSULTA ESCALADA</b>\n"
             f"🆔 <b>ID:</b> <code>{html.escape(escalation_id)}</code>\n"
-            f"📱 <b>Chat ID:</b> <code>{html.escape(guest_chat_id)}</code>\n"
+            f"📱 <b>Chat ID:</b> <code>{html.escape(normalized_guest_chat_id)}</code>\n"
             f"🏷️ <b>Tipo:</b> {html.escape(tipo_map.get(escalation_type, escalation_type))}\n\n"
             "❓ <b>Mensaje del huésped:</b>\n"
             f"{html.escape(guest_message)}\n\n"
@@ -564,10 +608,9 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
 def generar_borrador(escalation_id: str, manager_response: str, adjustment: Optional[str] = None) -> str:
     """Genera o reformula un borrador empático y profesional para el huésped."""
-    if escalation_id not in ESCALATIONS_STORE:
+    esc = _get_or_restore_escalation(escalation_id)
+    if not esc:
         return f"Error: Escalación {escalation_id} no encontrada."
-
-    esc = ESCALATIONS_STORE[escalation_id]
 
     # ✅ Usa configuración centralizada para el modelo del agente interno
     llm = ModelConfig.get_llm(ModelTier.INTERNAL)
@@ -603,7 +646,7 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         update_escalation(escalation_id, {"draft_response": draft})
 
         rooms = _rooms_for_escalation(esc.guest_chat_id)
-        clean_chat_id = _normalize_guest_chat_id(esc.guest_chat_id) or esc.guest_chat_id
+        clean_chat_id = _chat_room_id(esc.guest_chat_id) or esc.guest_chat_id
         _fire_event(
             "escalation.updated",
             {
@@ -643,10 +686,9 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
 
 async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: str = "") -> str:
     """Confirma o reformula según el input del encargado y envía si corresponde."""
-    if escalation_id not in ESCALATIONS_STORE:
+    esc = _get_or_restore_escalation(escalation_id)
+    if not esc:
         return f"Error: Escalación {escalation_id} no encontrada."
-
-    esc = ESCALATIONS_STORE[escalation_id]
 
     # 🔁 Caso 1: ajustes → reformular nuevo borrador
     if not confirmed and adjustments:
@@ -715,7 +757,7 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "sent_to_guest": True,
             })
 
-            clean_chat_id = _normalize_guest_chat_id(esc.guest_chat_id) or esc.guest_chat_id
+            clean_chat_id = _chat_room_id(esc.guest_chat_id) or esc.guest_chat_id
             rooms = _rooms_for_escalation(esc.guest_chat_id)
             _fire_event(
                 "escalation.resolved",

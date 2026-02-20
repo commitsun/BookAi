@@ -171,6 +171,40 @@ def _load_active_super_offer(memory_manager: Any, *keys: str) -> tuple[Optional[
     return None, None
 
 
+def _is_message_related_to_pending_offer(user_message: str, pending_offer: dict[str, Any]) -> bool:
+    text = (user_message or "").strip().lower()
+    if not text:
+        return False
+    # Permite deícticos cortos para no romper seguimientos naturales ("y eso?", "ok con eso").
+    if len(text) <= 20 and re.search(r"\b(eso|esto|aquello|lo|la)\b", text):
+        return True
+
+    offer_context = " ".join(
+        [
+            str(pending_offer.get("type") or ""),
+            str(pending_offer.get("original_text") or ""),
+        ]
+    ).lower()
+    if not offer_context.strip():
+        return False
+
+    stopwords = {
+        "de", "la", "el", "y", "en", "que", "si", "es", "un", "una", "por", "para",
+        "con", "del", "al", "los", "las", "me", "mi", "tu", "su", "hay", "quiero",
+        "saber", "sobre", "tambien", "tb",
+    }
+
+    def _tokens(value: str) -> set[str]:
+        parts = re.findall(r"[a-záéíóúñü]{3,}", value, flags=re.IGNORECASE)
+        return {p.lower() for p in parts if p.lower() not in stopwords}
+
+    msg_tokens = _tokens(text)
+    offer_tokens = _tokens(offer_context)
+    if not msg_tokens or not offer_tokens:
+        return False
+    return bool(msg_tokens.intersection(offer_tokens))
+
+
 async def _classify_guest_offer_intent(
     llm: Any,
     *,
@@ -273,6 +307,7 @@ async def process_user_message(
     """
     try:
         mem_id = memory_id or chat_id
+        escalation_chat_id = mem_id or chat_id
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
         if state.memory_manager:
@@ -312,7 +347,7 @@ async def process_user_message(
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
             log.warning("🚨 Mensaje rechazado por Supervisor Input: %s", motivo_in)
             await state.interno_agent.escalate(
-                guest_chat_id=chat_id,
+                guest_chat_id=escalation_chat_id,
                 guest_message=user_message,
                 escalation_type="inappropriate",
                 reason=motivo_in,
@@ -327,6 +362,11 @@ async def process_user_message(
             history = []
         pending_offer, pending_offer_key = _load_active_super_offer(state.memory_manager, mem_id, chat_id)
         semantic_llm = None
+        if pending_offer:
+            if not _is_message_related_to_pending_offer(user_message, pending_offer):
+                log.info("OfferGuard: mensaje no relacionado con oferta pendiente, se ignora pending_offer en este turno.")
+                pending_offer = None
+                pending_offer_key = None
         if pending_offer:
             try:
                 semantic_llm = ModelConfig.get_llm(ModelTier.INTERNAL)
@@ -451,7 +491,7 @@ async def process_user_message(
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 original_text = str(pending_offer.get("original_text") or "").strip()
                 await state.interno_agent.escalate(
-                    guest_chat_id=chat_id,
+                    guest_chat_id=escalation_chat_id,
                     guest_message=user_message,
                     escalation_type="offer_details_missing",
                     reason=(
@@ -481,7 +521,7 @@ async def process_user_message(
         if not response_raw and _message_requests_human_intervention(user_message):
             if not _has_recent_pending_escalation(mem_id, state):
                 await state.interno_agent.escalate(
-                    guest_chat_id=chat_id,
+                    guest_chat_id=escalation_chat_id,
                     guest_message=user_message,
                     escalation_type="info_not_found",
                     reason="El huésped solicita consulta/intervención de personal humano.",
@@ -511,7 +551,7 @@ async def process_user_message(
 
         if not response_raw:
             await state.interno_agent.escalate(
-                guest_chat_id=chat_id,
+                guest_chat_id=escalation_chat_id,
                 guest_message=user_message,
                 escalation_type="info_not_found",
                 reason="Main Agent no devolvió respuesta",
@@ -538,7 +578,7 @@ async def process_user_message(
                 offer_type = _humanize_offer_type(pending_offer.get("type"))
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 await state.interno_agent.escalate(
-                    guest_chat_id=chat_id,
+                    guest_chat_id=escalation_chat_id,
                     guest_message=user_message,
                     escalation_type="offer_consistency_guard",
                     reason=(
@@ -600,7 +640,7 @@ async def process_user_message(
             )
 
             await state.interno_agent.escalate(
-                guest_chat_id=chat_id,
+                guest_chat_id=escalation_chat_id,
                 guest_message=user_message,
                 escalation_type="bad_response",
                 reason=motivo_out,
@@ -662,7 +702,7 @@ async def process_user_message(
     except Exception as exc:
         log.error("💥 Error crítico en pipeline: %s", exc, exc_info=True)
         await state.interno_agent.escalate(
-            guest_chat_id=chat_id,
+            guest_chat_id=escalation_chat_id,
             guest_message=user_message,
             escalation_type="info_not_found",
             reason=f"Error crítico: {str(exc)}",

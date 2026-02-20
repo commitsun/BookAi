@@ -11,7 +11,10 @@ def _normalize_guest_chat_id(value: str) -> str:
     if not raw:
         return ""
     if ":" in raw:
-        raw = raw.split(":")[-1].strip()
+        left, right = raw.split(":", 1)
+        left_clean = re.sub(r"\D", "", left).strip() or left.strip()
+        right_clean = re.sub(r"\D", "", right).strip() or right.strip()
+        return f"{left_clean}:{right_clean}".strip(":")
     return re.sub(r"\D", "", raw).strip() or raw
 
 # ======================================================
@@ -141,7 +144,7 @@ def list_pending_escalations(limit: int = 20, property_id=None):
         if property_id is not None:
             query = query.eq("property_id", property_id)
         res = query.order("timestamp", desc=True).limit(limit).execute()
-        data = res.data or []
+        data = [row for row in (res.data or []) if not bool((row or {}).get("sent_to_guest"))]
         log.info(f"📋 {len(data)} escalaciones pendientes encontradas.")
         return data
     except Exception as e:
@@ -151,9 +154,13 @@ def list_pending_escalations(limit: int = 20, property_id=None):
 
 def _pending_chat_candidates(guest_chat_id: str) -> tuple[set[str], str]:
     raw = str(guest_chat_id or "").strip()
-    clean = "".join(ch for ch in raw if ch.isdigit())
-    tail = raw.split(":")[-1].strip() if ":" in raw else ""
-    candidates = {raw, clean, tail}
+    normalized = _normalize_guest_chat_id(raw)
+    tail = raw.split(":")[-1].strip() if ":" in raw else raw
+    tail_clean = re.sub(r"\D", "", tail).strip() or tail
+    clean = tail_clean
+    candidates = {raw, normalized, tail, tail_clean}
+    if ":" in normalized:
+        candidates.add(normalized)
     candidates.discard("")
     return candidates, clean
 
@@ -178,8 +185,9 @@ def list_pending_escalations_for_chat(guest_chat_id: str, limit: int = 20, prope
         )
         if property_id is not None:
             query = query.eq("property_id", property_id)
-        res = query.order("timestamp", desc=False).limit(limit).execute()
-        return res.data or []
+        res = query.order("timestamp", desc=False).limit(max(limit, 50)).execute()
+        data = [row for row in (res.data or []) if not bool((row or {}).get("sent_to_guest"))]
+        return data[:limit]
     except Exception as e:
         log.error(
             "⚠️ Error listando escalaciones pendientes para %s: %s",
@@ -212,9 +220,12 @@ def get_latest_pending_escalation(guest_chat_id: str, property_id=None) -> dict 
         )
         if property_id is not None:
             query = query.eq("property_id", property_id)
-        res = query.order("timestamp", desc=True).limit(1).execute()
+        res = query.order("timestamp", desc=True).limit(20).execute()
         data = res.data or []
-        return data[0] if data else None
+        for row in data:
+            if not bool((row or {}).get("sent_to_guest")):
+                return row
+        return None
     except Exception as e:
         log.error(
             "⚠️ Error obteniendo escalación pendiente para %s: %s",
