@@ -389,6 +389,65 @@ def _resolve_guest_id_by_name(
     except Exception:
         pass
 
+    def _run_reservation_query(filter_property: bool) -> list[dict]:
+        query = (
+            supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+            .select("chat_id, client_name, updated_at, property_id")
+            .ilike("client_name", f"%{name}%")
+        )
+        if filter_property and property_id is not None:
+            query = query.eq("property_id", property_id)
+        resp = query.order("updated_at", desc=True).limit(limit).execute()
+        return resp.data or []
+
+    # 2) Intentar resolver por tabla chat_reservations (fuente más estable de client_name).
+    try:
+        reservation_rows = _run_reservation_query(filter_property=True)
+        if not reservation_rows and property_id is not None:
+            reservation_rows = _run_reservation_query(filter_property=False)
+    except Exception:
+        reservation_rows = []
+
+    reservation_candidates = []
+    for row in reservation_rows:
+        client_name = (row.get("client_name") or "").strip()
+        candidate_norm = _normalize_name(client_name)
+        if client_name and candidate_norm and not _token_match(query_name, candidate_norm):
+            continue
+        phone = _clean_phone(row.get("chat_id") or "")
+        if not phone:
+            continue
+        reservation_candidates.append(
+            {
+                "phone": phone,
+                "client_name": client_name,
+                "created_at": row.get("updated_at"),
+                "property_id": row.get("property_id"),
+                "source": "chat_reservations",
+            }
+        )
+
+    if reservation_candidates:
+        reservation_candidates.sort(key=lambda c: (_score(c), -_parse_ts(c.get("created_at"))))
+        unique: list[dict] = []
+        seen = set()
+        for cand in reservation_candidates:
+            phone = cand.get("phone")
+            if not phone or phone in seen:
+                continue
+            seen.add(phone)
+            cand["score"] = _score(cand)
+            unique.append(cand)
+        if unique:
+            best_score = unique[0].get("score", 3)
+            best = [c for c in unique if c.get("score", 3) == best_score]
+            if len(best) == 1:
+                return best[0].get("phone"), unique
+            phones = {c.get("phone") for c in best if c.get("phone")}
+            if len(phones) == 1:
+                return next(iter(phones)), unique
+            return None, unique
+
     def _run_query(filter_property: bool) -> list[dict]:
         query = (
             supabase.table("chat_history")

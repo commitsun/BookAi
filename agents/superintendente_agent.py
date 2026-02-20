@@ -16,6 +16,7 @@ import json
 from datetime import datetime
 from typing import Any, Dict, List, Optional
 import os
+import unicodedata
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
@@ -28,6 +29,7 @@ import boto3
 from botocore.config import Config as BotoConfig
 
 from core.config import ModelConfig, ModelTier, Settings
+from core.db import get_active_chat_reservation
 from core.utils.time_context import get_time_context
 from core.utils.utils_prompt import load_prompt
 from core.message_utils import sanitize_wa_message
@@ -126,6 +128,7 @@ class SuperintendenteAgent:
                 user_input,
                 encargado_id,
                 session_id=active_session_id,
+                clients_context=clients_context,
             )
             if fast_draft:
                 await self._safe_call(
@@ -172,6 +175,10 @@ class SuperintendenteAgent:
                 )
             chat_history = chat_history or []
             user_input_for_agent = await self._rewrite_followup_with_context(user_input, chat_history)
+            user_input_for_agent = self._enrich_reservation_query_with_context(
+                user_input_for_agent,
+                convo_id=convo_id,
+            )
             if user_input_for_agent != user_input:
                 log.info("Superintendente follow-up reinterpretado: '%s' -> '%s'", user_input, user_input_for_agent)
 
@@ -362,13 +369,14 @@ class SuperintendenteAgent:
         user_input: str,
         encargado_id: str,
         session_id: Optional[str] = None,
+        clients_context: Optional[str] = None,
     ) -> Optional[str]:
         clean_input = user_input.strip()
         if clean_input.lower().startswith("/super"):
             clean_input = clean_input.split(" ", 1)[1].strip() if " " in clean_input else ""
 
         parsed = self._parse_direct_send_request(clean_input)
-        if not parsed:
+        if not parsed and self._has_explicit_send_intent(clean_input):
             parsed = await self._extract_send_intent_llm(clean_input)
         if not parsed:
             log.info("Superintendente fast draft: no match for direct-send pattern")
@@ -397,6 +405,11 @@ class SuperintendenteAgent:
         else:
             guest_id = None
             candidates: list[dict] = []
+            guest_id_ctx, candidates_ctx = self._resolve_guest_from_clients_context(guest_label, clients_context)
+            if guest_id_ctx:
+                guest_id = guest_id_ctx
+            elif candidates_ctx:
+                candidates.extend(candidates_ctx)
             chat_candidates = []
             if session_id:
                 chat_candidates.append(session_id)
@@ -465,6 +478,124 @@ class SuperintendenteAgent:
 
         return f"[WA_DRAFT]|{guest_id}|{message}"
 
+    def _normalize_person_name(self, value: str) -> str:
+        raw = str(value or "").strip().lower()
+        if not raw:
+            return ""
+        deaccented = "".join(
+            ch for ch in unicodedata.normalize("NFKD", raw) if not unicodedata.combining(ch)
+        )
+        cleaned = re.sub(r"[^a-z0-9]+", " ", deaccented)
+        return re.sub(r"\s+", " ", cleaned).strip()
+
+    def _resolve_guest_from_clients_context(
+        self,
+        guest_label: str,
+        clients_context: Optional[str],
+    ) -> tuple[Optional[str], list[dict]]:
+        """
+        Resuelve guest_id usando el bloque CLIENTES_ACTIVOS inyectado por API.
+        Devuelve (guest_id, candidates) para mantener el flujo actual de ambigüedad.
+        """
+        label = str(guest_label or "").strip()
+        block = str(clients_context or "").strip()
+        if not label or not block:
+            return None, []
+
+        query = self._normalize_person_name(label)
+        if not query:
+            return None, []
+
+        rows = [ln.strip() for ln in block.splitlines() if ln and "|" in ln]
+        if not rows:
+            return None, []
+
+        header_idx = None
+        header_cols: list[str] = []
+        for idx, line in enumerate(rows):
+            cols = [c.strip().lower() for c in line.split("|")]
+            if "chat_id" in cols and "client_name" in cols:
+                header_idx = idx
+                header_cols = cols
+                break
+        if header_idx is None:
+            return None, []
+
+        def _col(name: str) -> Optional[int]:
+            try:
+                return header_cols.index(name)
+            except ValueError:
+                return None
+
+        idx_name = _col("client_name")
+        idx_phone = _col("client_phone")
+        idx_chat = _col("chat_id")
+        idx_last = _col("last_message_at")
+        if idx_name is None:
+            return None, []
+
+        candidates: list[dict] = []
+        for line in rows[header_idx + 1 :]:
+            cols = [c.strip() for c in line.split("|")]
+            if len(cols) < len(header_cols):
+                continue
+            raw_name = cols[idx_name] if idx_name < len(cols) else ""
+            if not raw_name or raw_name.lower() == "null":
+                continue
+            norm_name = self._normalize_person_name(raw_name)
+            if not norm_name:
+                continue
+            if query != norm_name and not norm_name.startswith(query) and query not in norm_name:
+                continue
+            raw_phone = cols[idx_phone] if idx_phone is not None and idx_phone < len(cols) else ""
+            raw_chat = cols[idx_chat] if idx_chat is not None and idx_chat < len(cols) else ""
+            phone = _clean_phone(raw_phone) or _clean_phone(raw_chat)
+            if not phone:
+                continue
+            created_at = cols[idx_last] if idx_last is not None and idx_last < len(cols) else ""
+            score = 0 if norm_name == query else (1 if norm_name.startswith(query) else 2)
+            candidates.append(
+                {
+                    "phone": phone,
+                    "client_name": raw_name,
+                    "created_at": created_at,
+                    "score": score,
+                    "source": "clients_context",
+                }
+            )
+
+        if not candidates:
+            return None, []
+
+        # Dedup por teléfono manteniendo mejor score y más reciente.
+        def _ts(value: Any) -> float:
+            try:
+                return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+            except Exception:
+                return 0.0
+
+        candidates.sort(key=lambda c: (c.get("score", 9), -_ts(c.get("created_at"))))
+        unique: list[dict] = []
+        seen = set()
+        for cand in candidates:
+            phone = cand.get("phone")
+            if not phone or phone in seen:
+                continue
+            seen.add(phone)
+            unique.append(cand)
+
+        if not unique:
+            return None, []
+
+        best_score = unique[0].get("score", 9)
+        best = [c for c in unique if c.get("score", 9) == best_score]
+        if len(best) == 1:
+            return best[0].get("phone"), unique
+        phones = {c.get("phone") for c in best if c.get("phone")}
+        if len(phones) == 1:
+            return next(iter(phones)), unique
+        return None, unique
+
     def _needs_wa_polish(self, message: str) -> bool:
         text = (message or "").lower()
         if not text:
@@ -480,6 +611,91 @@ class SuperintendenteAgent:
             "por favor",
         )
         return any(t in text for t in triggers)
+
+    def _has_explicit_send_intent(self, text: str) -> bool:
+        clean = (text or "").strip().lower()
+        if not clean:
+            return False
+        # El fast-path solo debe activarse cuando hay verbo de envío explícito.
+        return bool(
+            re.search(
+                r"\b(envia|envíale|enviale|manda|mándale|mandale|dile|escribe(?:le)?)\b",
+                clean,
+                flags=re.IGNORECASE,
+            )
+        )
+
+    def _extract_reservation_subject_name(self, text: str) -> Optional[str]:
+        raw = (text or "").strip()
+        if not raw:
+            return None
+        patterns = [
+            r"(?i)\breserva\s+de\s+([a-záéíóúñ0-9\s\.\-]{2,60})",
+            r"(?i)\binfo(?:rmaci[oó]n)?\s+sobre\s+la\s+reserva\s+de\s+([a-záéíóúñ0-9\s\.\-]{2,60})",
+            r"(?i)\bdatos\s+de\s+la\s+reserva\s+de\s+([a-záéíóúñ0-9\s\.\-]{2,60})",
+        ]
+        for pattern in patterns:
+            m = re.search(pattern, raw)
+            if not m:
+                continue
+            value = re.split(r"[,.;:!?]", m.group(1), maxsplit=1)[0].strip()
+            if value:
+                return value
+        return None
+
+    def _enrich_reservation_query_with_context(self, user_input: str, *, convo_id: str) -> str:
+        raw = (user_input or "").strip()
+        if not raw or not self.memory_manager:
+            return raw
+        lower = raw.lower()
+        if "reserva" not in lower:
+            return raw
+        # Si ya viene con folio, no tocar.
+        if re.search(r"\bfolio(?:_id)?\s*[:#]?\s*[a-z0-9]{4,}\b", raw, flags=re.IGNORECASE):
+            return raw
+
+        subject = self._extract_reservation_subject_name(raw)
+        if not subject:
+            return raw
+
+        try:
+            property_id = self.memory_manager.get_flag(convo_id, "property_id")
+        except Exception:
+            property_id = None
+
+        try:
+            guest_id, _ = _resolve_guest_id_by_name(
+                subject,
+                property_id=property_id,
+                memory_manager=self.memory_manager,
+                chat_id=convo_id,
+            )
+        except Exception:
+            guest_id = None
+
+        if not guest_id:
+            return raw
+
+        try:
+            active = get_active_chat_reservation(chat_id=guest_id, property_id=property_id)
+        except Exception:
+            active = None
+        if not isinstance(active, dict):
+            return raw
+
+        folio_id = active.get("folio_id")
+        if not folio_id:
+            return raw
+        locator = active.get("reservation_locator")
+        checkin = active.get("checkin")
+        checkout = active.get("checkout")
+        prop = active.get("property_id", property_id)
+        extra = (
+            f"\n[CTX_RESERVA] guest_id={guest_id} folio_id={folio_id}"
+            f" reservation_locator={locator or 'N/A'} checkin={checkin or 'N/A'}"
+            f" checkout={checkout or 'N/A'} property_id={prop if prop is not None else 'N/A'}"
+        )
+        return f"{raw}{extra}"
 
     async def _compose_guest_message(self, message: str) -> str:
         clean = sanitize_wa_message(message or "")

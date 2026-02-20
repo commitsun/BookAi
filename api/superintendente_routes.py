@@ -1318,6 +1318,38 @@ def _looks_like_adjustment(text: str) -> bool:
     return any(term in low for term in adjustment_terms)
 
 
+def _looks_like_reservation_query(text: str) -> bool:
+    """
+    Detecta consultas operativas de reserva para no tratarlas como ajuste de un WA_DRAFT pendiente.
+    """
+    if not text:
+        return False
+    low = str(text).lower()
+    reservation_terms = {
+        "reserva",
+        "folio",
+        "checkin",
+        "check-in",
+        "checkout",
+        "check-out",
+        "habitacion",
+        "habitación",
+        "estancia",
+        "entrada",
+        "salida",
+        "pago",
+        "pendiente",
+        "factura",
+        "portal",
+    }
+    info_terms = {"info", "informacion", "información", "detalle", "detalles", "estado", "datos"}
+    if any(term in low for term in reservation_terms):
+        return True
+    if any(term in low for term in info_terms) and ("rafalillo" in low or "huesped" in low or "huésped" in low):
+        return True
+    return False
+
+
 def _looks_like_send_confirmation(text: str) -> bool:
     if not text:
         return False
@@ -1725,6 +1757,16 @@ def register_superintendente_routes(app, state) -> None:
                         _persist_pending_kb(state, alt_key, None)
                 _pop_last_pending_action(state, owner_key)
                 pending_last = None
+            if pending_last and pending_type == "wa" and _looks_like_reservation_query(message):
+                state.superintendente_pending_wa.pop(session_key, None)
+                if alt_key:
+                    state.superintendente_pending_wa.pop(alt_key, None)
+                _persist_pending_wa(state, session_key, None)
+                if alt_key:
+                    _persist_pending_wa(state, alt_key, None)
+                _persist_last_pending_wa(state, owner_key, None)
+                _pop_trailing_pending_type(state, owner_key, "wa")
+                pending_last = None
             if pending_last and looks_like_new_instruction(message) and not _looks_like_adjustment(message):
                 if pending_type == "wa":
                     state.superintendente_pending_wa.pop(session_key, None)
@@ -1750,6 +1792,7 @@ def register_superintendente_routes(app, state) -> None:
                 and not _is_short_wa_confirmation(message)
                 and not _is_short_wa_cancel(message)
                 and not looks_like_new_instruction(message)
+                and not _looks_like_reservation_query(message)
             ):
                 action = "adjust"
             if pending_type == "wa" and action == "new" and _looks_like_send_confirmation(message):
