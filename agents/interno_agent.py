@@ -211,33 +211,6 @@ class InternoAgent:
         reason: str,
         context: str,
     ) -> str:
-        def _resolve_compound_chat_id(value: str) -> str:
-            raw = str(value or "").strip()
-            if not raw:
-                return ""
-            if ":" in raw:
-                return raw
-            clean = re.sub(r"\D", "", raw).strip() or raw
-            if self.memory_manager:
-                try:
-                    for key in [raw, clean, f"+{clean}" if clean else ""]:
-                        if not key:
-                            continue
-                        last_mem = self.memory_manager.get_flag(key, "last_memory_id")
-                        if isinstance(last_mem, str) and ":" in last_mem:
-                            return last_mem.strip()
-                    for key in [raw, clean]:
-                        if not key:
-                            continue
-                        instance_number = self.memory_manager.get_flag(key, "instance_number")
-                        if instance_number:
-                            return f"{str(instance_number).strip()}:{clean}"
-                except Exception:
-                    pass
-            return raw
-
-        guest_chat_id = _resolve_compound_chat_id(guest_chat_id)
-
         def _guest_lang() -> str:
             msg = (guest_message or "").strip()
             fresh_lang = None

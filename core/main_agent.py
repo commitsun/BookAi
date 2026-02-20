@@ -226,44 +226,6 @@ class MainAgent:
             return True
         return None
 
-    def _should_forward_to_pending_escalation(self, chat_id: str, user_input: str) -> bool:
-        text = (user_input or "").strip()
-        if not text:
-            return False
-        try:
-            pending_context = ""
-            if self.memory_manager and chat_id:
-                pending = self.memory_manager.get_flag(chat_id, "last_escalation_followup_message") or ""
-                pending_context = str(pending or "")
-            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
-            system_prompt = (
-                "Hay una escalación en curso con el encargado.\n"
-                "Clasifica el mensaje del huésped en UNA etiqueta exacta: attach o ignore.\n"
-                "attach: agrega nueva petición, matiz, pregunta o dato útil para el encargado.\n"
-                "ignore: acuse social/confirmación sin contenido accionable para el encargado.\n"
-                "Responde SOLO con: attach o ignore."
-            )
-            user_prompt = (
-                "Última ampliación enviada al encargado:\n"
-                f"{pending_context or 'No disponible'}\n\n"
-                "Nuevo mensaje del huésped:\n"
-                f"{text}\n\nEtiqueta:"
-            )
-            raw = llm.invoke(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
-            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
-            if label == "attach":
-                return True
-            if label == "ignore":
-                return False
-        except Exception:
-            pass
-        return self._should_attach_to_pending_escalation(chat_id, user_input)
-
     def _request_escalation_confirmation(self, chat_id: str, user_input: str, motivo: str) -> str:
         self.memory_manager.set_flag(
             chat_id,
@@ -1712,31 +1674,27 @@ class MainAgent:
                 has_active_res_context = False
                 self._get_guest_lang(chat_id, user_input)
                 if self.memory_manager.get_flag(chat_id, "escalation_in_progress"):
-                    candidate = (user_input or "").strip()
-                    last_forwarded = (
-                        self.memory_manager.get_flag(chat_id, "last_escalation_followup_message")
-                        if self.memory_manager
-                        else None
-                    )
-                    if (
-                        candidate
-                        and self._should_forward_to_pending_escalation(chat_id, candidate)
-                        and candidate != str(last_forwarded or "").strip()
-                    ):
-                        await self._delegate_escalation_to_interno(
-                            user_input=candidate,
-                            chat_id=chat_id,
-                            motivo="Ampliación del huésped mientras la escalación está en curso",
-                            escalation_type="info_not_found",
-                            context="Escalación en progreso: incorporar esta nueva petición al hilo pendiente",
+                    if self._should_attach_to_pending_escalation(chat_id, user_input):
+                        candidate = (user_input or "").strip()
+                        last_forwarded = (
+                            self.memory_manager.get_flag(chat_id, "last_escalation_followup_message")
+                            if self.memory_manager
+                            else None
                         )
-                        self.memory_manager.set_flag(
-                            chat_id,
-                            "last_escalation_followup_message",
-                            candidate,
-                        )
-                        return self._localize(chat_id, "Perfecto, lo añado a la consulta que tengo abierta con el encargado.")
-                    return self._localize(chat_id, "Un momento, sigo verificando tu solicitud con el encargado.")
+                        if candidate and candidate != str(last_forwarded or "").strip():
+                            await self._delegate_escalation_to_interno(
+                                user_input=candidate,
+                                chat_id=chat_id,
+                                motivo="Ampliación del huésped mientras la escalación está en curso",
+                                escalation_type="info_not_found",
+                                context="Escalación en progreso: incorporar esta nueva petición al hilo pendiente",
+                            )
+                            self.memory_manager.set_flag(
+                                chat_id,
+                                "last_escalation_followup_message",
+                                candidate,
+                            )
+                        return self._localize(chat_id, "Un momento, sigo verificando tu solicitud con el encargado.")
 
                 pending = await self._handle_pending_confirmation(chat_id, user_input)
                 if pending is not None:
@@ -2523,11 +2481,14 @@ class MainAgent:
                 consulta_flag = self.memory_manager.get_flag(chat_id, "consulta_base_realizada")
 
                 if consulta_flag and not self.memory_manager.get_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING):
-                    return self._request_escalation_confirmation(
-                        chat_id,
-                        user_input,
+                    await self._delegate_escalation_to_interno(
+                        user_input=user_input,
+                        chat_id=chat_id,
                         motivo="Consulta repetida sin información",
+                        escalation_type="info_not_found",
+                        context="Escalación automática",
                     )
+                    return EscalationMessages.get_by_context("info")
 
                 result = await executor.ainvoke(
                     input={"input": user_input, "chat_history": chat_history},

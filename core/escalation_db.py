@@ -1,8 +1,18 @@
 import logging
 from datetime import datetime
+import re
 from core.db import supabase  # ✅ reutiliza la conexión ya existente
 
 log = logging.getLogger("EscalationsDB")
+
+
+def _normalize_guest_chat_id(value: str) -> str:
+    raw = str(value or "").strip()
+    if not raw:
+        return ""
+    if ":" in raw:
+        raw = raw.split(":")[-1].strip()
+    return re.sub(r"\D", "", raw).strip() or raw
 
 # ======================================================
 # 💾 Crear o actualizar una escalación
@@ -13,6 +23,8 @@ def save_escalation(escalation: dict):
     Si ya existe (por el mismo escalation_id), se actualiza.
     """
     try:
+        if isinstance(escalation, dict) and escalation.get("guest_chat_id"):
+            escalation["guest_chat_id"] = _normalize_guest_chat_id(escalation.get("guest_chat_id"))
         # Garantiza que siempre haya un timestamp
         escalation["updated_at"] = datetime.utcnow().isoformat()
         supabase.table("escalations").upsert(escalation).execute()
@@ -53,6 +65,8 @@ def update_escalation(escalation_id: str, updates: dict):
         update_escalation("esc_34683527049_1762168364", {"draft_response": "Texto actualizado"})
     """
     try:
+        if isinstance(updates, dict) and updates.get("guest_chat_id"):
+            updates["guest_chat_id"] = _normalize_guest_chat_id(updates.get("guest_chat_id"))
         updates["updated_at"] = datetime.utcnow().isoformat()
         supabase.table("escalations").update(updates).eq("escalation_id", escalation_id).execute()
         log.info(f"🧩 Escalación {escalation_id} actualizada correctamente con {list(updates.keys())}")

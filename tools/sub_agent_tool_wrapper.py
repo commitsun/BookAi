@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from inspect import iscoroutinefunction, signature
 from typing import Any, Type
@@ -11,11 +12,8 @@ from typing import Any, Type
 from langchain.tools import BaseTool
 from pydantic import BaseModel, Field
 from core.config import ModelConfig, ModelTier
-from core.language_manager import language_manager
 
 log = logging.getLogger("SubAgentTool")
-
-FLAG_ESCALATION_CONFIRMATION_PENDING = "escalation_confirmation_pending"
 
 
 class SubAgentToolInput(BaseModel):
@@ -58,6 +56,13 @@ class SubAgentTool(BaseTool):
     def _normalize_text(text: str) -> str:
         return " ".join(str(text or "").strip().lower().split())
 
+    @staticmethod
+    def _normalize_chat_id(chat_id: str) -> str:
+        raw = str(chat_id or "").strip()
+        if ":" in raw:
+            raw = raw.split(":")[-1].strip()
+        return re.sub(r"\D", "", raw).strip() or raw
+
     async def _is_query_aligned(self, canonical_question: str, tool_query: str) -> bool:
         canonical = self._normalize_text(canonical_question)
         query = self._normalize_text(tool_query)
@@ -87,52 +92,6 @@ class SubAgentTool(BaseTool):
         except Exception:
             # En caso de fallo, no bloquear el flujo.
             return True
-
-    async def _build_escalation_confirmation_message(self, guest_message: str) -> str:
-        try:
-            llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
-            system_prompt = (
-                "Redacta una única pregunta breve para pedir permiso al huésped antes de escalar al encargado.\n"
-                "Debe sonar natural y mantener el idioma del mensaje del huésped.\n"
-                "No afirmes que ya consultaste.\n"
-                "No añadas explicaciones extra."
-            )
-            user_prompt = f"Mensaje del huésped:\n{guest_message}\n\nPregunta:"
-            raw = await llm.ainvoke(
-                [
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ]
-            )
-            text = (getattr(raw, "content", None) or str(raw or "")).strip()
-            if text:
-                return text
-        except Exception:
-            pass
-        return self._fallback_escalation_confirmation_message(guest_message)
-
-    def _fallback_escalation_confirmation_message(self, guest_message: str) -> str:
-        lang = ""
-        try:
-            if self.memory_manager and self.chat_id:
-                lang = str(self.memory_manager.get_flag(self.chat_id, "guest_lang") or "").strip().lower()
-        except Exception:
-            lang = ""
-        if not lang:
-            try:
-                lang = str(language_manager.detect_language(guest_message or "", prev_lang=None) or "").strip().lower()
-            except Exception:
-                lang = ""
-
-        templates = {
-            "es": "¿Quieres que lo consulte con el encargado? Responde con 'sí' o 'no'.",
-            "en": "Do you want me to check this with the manager? Reply with 'yes' or 'no'.",
-            "pt": "Quer que eu confirme isso com o responsável? Responda com 'sim' ou 'não'.",
-            "fr": "Voulez-vous que je le vérifie avec le responsable ? Répondez par 'oui' ou 'non'.",
-            "de": "Möchtest du, dass ich das mit der zuständigen Person abkläre? Antworte mit 'ja' oder 'nein'.",
-            "it": "Vuoi che lo verifichi con il responsabile? Rispondi con 'sì' o 'no'.",
-        }
-        return templates.get(lang, templates["en"])
 
     async def _arun(
         self,
@@ -182,26 +141,6 @@ class SubAgentTool(BaseTool):
                         )
                         effective_query = canonical_question
 
-            if self.name == "escalar_interno" and self.memory_manager and self.chat_id:
-                escalation_in_progress = bool(
-                    self.memory_manager.get_flag(self.chat_id, "escalation_in_progress")
-                )
-                pending_confirmation = self.memory_manager.get_flag(
-                    self.chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING
-                )
-                if not escalation_in_progress:
-                    if not pending_confirmation:
-                        self.memory_manager.set_flag(
-                            self.chat_id,
-                            FLAG_ESCALATION_CONFIRMATION_PENDING,
-                            {
-                                "guest_message": effective_query,
-                                "reason": motivo or "Solicitud del huésped",
-                                "escalation_type": tipo or "info_not_found",
-                            },
-                        )
-                    return await self._build_escalation_confirmation_message(effective_query)
-
             # Caso 1: sub-agente es InternoAgent
             if hasattr(self.sub_agent, "handle_guest_escalation"):
                 reason = motivo or "Consulta del huésped gestionada por MainAgent"
@@ -243,10 +182,10 @@ class SubAgentTool(BaseTool):
                     invoke_kwargs["chat_history"] = chat_history
 
                 if "escalation_payload" in params or "auto_notify" in params:
-                    raw_chat_id = str(self.chat_id or "").strip()
+                    normalized_chat_id = self._normalize_chat_id(self.chat_id)
                     payload = {
-                        "escalation_id": f"esc_{raw_chat_id}_{int(datetime.utcnow().timestamp())}",
-                        "guest_chat_id": raw_chat_id,
+                        "escalation_id": f"esc_{normalized_chat_id}_{int(datetime.utcnow().timestamp())}",
+                        "guest_chat_id": normalized_chat_id,
                         "guest_message": effective_query,
                         "escalation_type": tipo or "manual",
                         "reason": motivo or "Solicitud del huésped desde MainAgent",

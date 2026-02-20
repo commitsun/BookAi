@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
-from core.db import attach_structured_payload_to_latest_message, get_active_chat_reservation
+from core.db import attach_structured_payload_to_latest_message
 from core.instance_context import ensure_instance_credentials
 from core.language_manager import language_manager
 from core.message_utils import sanitize_wa_message, looks_like_new_instruction, build_kb_preview
@@ -29,7 +29,6 @@ _INTERNAL_MARKERS = (
     "[KB_REMOVE_DRAFT]|",
     "[BROADCAST_DRAFT]|",
     "[TPL_DRAFT]|",
-    "[CHATTER_CTX]",
     "[SUPER_SESSION]|",
 )
 
@@ -150,7 +149,6 @@ def _is_internal_super_message(content: str) -> bool:
     internal_prefixes = (
         "[SUPER_SESSION]|",
         "[CTX]",
-        "[CHATTER_CTX]",
         "[WA_DRAFT]|",
         "[WA_SENT]|",
         "[KB_DRAFT]|",
@@ -277,170 +275,6 @@ def _resolve_owner_key(payload: SuperintendenteContext) -> tuple[str, str, Optio
 
 def _normalize_guest_id(guest_id: str | None) -> str:
     return str(guest_id or "").replace("+", "").strip()
-
-
-def _extract_candidate_chat_id_from_payload(chat_history: Optional[list[Any]]) -> Optional[str]:
-    if not isinstance(chat_history, list):
-        return None
-    for item in chat_history:
-        if not isinstance(item, dict):
-            continue
-        for key in ("chat_id", "conversation_id", "guest_chat_id", "client_phone", "phone"):
-            val = item.get(key)
-            if val in (None, ""):
-                continue
-            raw = str(val).strip()
-            if not raw:
-                continue
-            if ":" in raw:
-                raw = raw.split(":")[-1].strip()
-            clean = _normalize_guest_id(raw)
-            if clean:
-                return clean
-    return None
-
-
-def _collect_dynamic_memory_flags(state: Any, *keys: str) -> dict[str, Any]:
-    memory = getattr(state, "memory_manager", None)
-    if not memory:
-        return {}
-
-    out: dict[str, Any] = {}
-
-    def _is_context_value(value: Any) -> bool:
-        if value in (None, "", [], {}):
-            return False
-        if isinstance(value, (bool, int, float)):
-            return True
-        if isinstance(value, str):
-            text = value.strip()
-            if not text:
-                return False
-            return len(text) <= 120
-        return False
-
-    candidate_ids = {str(k).strip() for k in keys if k}
-    state_flags = getattr(memory, "state_flags", {})
-    if isinstance(state_flags, dict):
-        for cid in list(candidate_ids):
-            if not isinstance(cid, str):
-                continue
-            suffix = f":{cid}"
-            for key in list(state_flags.keys()):
-                if isinstance(key, str) and (key == cid or key.endswith(suffix)):
-                    candidate_ids.add(key)
-
-        for cid in candidate_ids:
-            flags = state_flags.get(cid) if isinstance(cid, str) else None
-            if not isinstance(flags, dict):
-                continue
-            for key, value in flags.items():
-                if key in out:
-                    continue
-                if _is_context_value(value):
-                    out[key] = value
-    return out
-
-
-def _build_chatter_context_block(
-    state: Any,
-    *,
-    message: str,
-    session_key: str,
-    alt_key: Optional[str],
-    owner_key: str,
-    owner_id: str,
-    property_id: Optional[str],
-    hotel_name: str,
-    chat_history: Optional[list[Any]],
-) -> str:
-    context: dict[str, Any] = {}
-    context["owner_id"] = owner_id
-    context["session_id"] = session_key
-    context["channel"] = "whatsapp"
-    context["hotel_name"] = hotel_name
-    if property_id:
-        context["property_id"] = property_id
-
-    candidate_chat_id = None
-    for source in (
-        _extract_candidate_chat_id_from_payload(chat_history),
-        _normalize_guest_id(message.split()[-1]) if re.search(r"\d{7,}", message or "") else None,
-    ):
-        if source:
-            candidate_chat_id = source
-            break
-
-    memory = getattr(state, "memory_manager", None)
-    if memory and not candidate_chat_id:
-        try:
-            candidate_chat_id = (
-                memory.get_flag(session_key, "guest_chat_id")
-                or memory.get_flag(session_key, "last_guest_chat_id")
-                or memory.get_flag(session_key, "client_phone")
-                or memory.get_flag(owner_key, "guest_chat_id")
-                or memory.get_flag(owner_id, "guest_chat_id")
-            )
-            candidate_chat_id = _normalize_guest_id(str(candidate_chat_id or ""))
-        except Exception:
-            candidate_chat_id = None
-
-    if candidate_chat_id:
-        context["chat_id"] = candidate_chat_id
-        context["client_phone"] = candidate_chat_id
-
-        try:
-            active = get_active_chat_reservation(
-                chat_id=candidate_chat_id,
-                property_id=property_id,
-            )
-        except Exception:
-            active = None
-        if isinstance(active, dict):
-            for key, value in active.items():
-                if value not in (None, "", [], {}):
-                    context[key] = value
-            if active.get("folio_id") and "reservation_id" not in context:
-                context["reservation_id"] = active.get("folio_id")
-
-        try:
-            bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {}) or {}
-            enabled = bookai_flags.get(
-                f"{candidate_chat_id}:{property_id}" if property_id else "",
-                bookai_flags.get(candidate_chat_id, True),
-            )
-            context["bookai_enabled"] = bool(enabled)
-        except Exception:
-            context["bookai_enabled"] = True
-        context.setdefault("unread_count", 0)
-
-    dynamic_flags = _collect_dynamic_memory_flags(
-        state,
-        session_key,
-        alt_key or "",
-        owner_key,
-        owner_id,
-        str(candidate_chat_id or ""),
-    )
-    for key, value in dynamic_flags.items():
-        if key in context:
-            continue
-        context[key] = value
-
-    if isinstance(chat_history, list) and chat_history:
-        for item in reversed(chat_history):
-            if not isinstance(item, dict):
-                continue
-            ts = item.get("last_message_at") or item.get("created_at") or item.get("timestamp")
-            if ts:
-                context.setdefault("last_message_at", ts)
-                break
-
-    if not context:
-        return ""
-
-    lines = [f"- {k}: {v}" for k, v in sorted(context.items(), key=lambda it: str(it[0])) if v not in (None, "", [], {})]
-    return "\n".join(lines)
 
 
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
@@ -1556,22 +1390,6 @@ def register_superintendente_routes(app, state) -> None:
         alt_key = owner_key if payload.session_id else None
         message = (payload.message or "").strip()
         original_message = message
-        chatter_context_block = _build_chatter_context_block(
-            state,
-            message=message,
-            session_key=session_key,
-            alt_key=alt_key,
-            owner_key=owner_key,
-            owner_id=owner_id,
-            property_id=property_id,
-            hotel_name=payload.hotel_name,
-            chat_history=payload.chat_history,
-        )
-        message_for_agent = (
-            f"{message}\n\n[CHATTER_CTX]\n{chatter_context_block}\n[/CHATTER_CTX]"
-            if chatter_context_block
-            else message
-        )
 
         def _persist_visible_super_response(reply_text: str, *, persist_user: bool = False) -> None:
             if not getattr(state, "memory_manager", None):
@@ -1644,20 +1462,6 @@ def register_superintendente_routes(app, state) -> None:
                             conversation_id=alt_key,
                             role="system",
                             content=f"[CTX] property_id={property_id}",
-                            channel="superintendente",
-                        )
-                if chatter_context_block:
-                    state.memory_manager.save(
-                        conversation_id=session_key,
-                        role="system",
-                        content=f"[CHATTER_CTX]\n{chatter_context_block}",
-                        channel="superintendente",
-                    )
-                    if alt_key:
-                        state.memory_manager.save(
-                            conversation_id=alt_key,
-                            role="system",
-                            content=f"[CHATTER_CTX]\n{chatter_context_block}",
                             channel="superintendente",
                         )
             except Exception:
@@ -2159,7 +1963,7 @@ def register_superintendente_routes(app, state) -> None:
                     return {"result": response_text}
 
         result = await agent.ainvoke(
-            user_input=message_for_agent,
+            user_input=message,
             encargado_id=owner_id,
             hotel_name=payload.hotel_name,
             context_window=payload.context_window,

@@ -312,7 +312,7 @@ async def process_user_message(
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
             log.warning("🚨 Mensaje rechazado por Supervisor Input: %s", motivo_in)
             await state.interno_agent.escalate(
-                guest_chat_id=mem_id,
+                guest_chat_id=chat_id,
                 guest_message=user_message,
                 escalation_type="inappropriate",
                 reason=motivo_in,
@@ -451,7 +451,7 @@ async def process_user_message(
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 original_text = str(pending_offer.get("original_text") or "").strip()
                 await state.interno_agent.escalate(
-                    guest_chat_id=mem_id,
+                    guest_chat_id=chat_id,
                     guest_message=user_message,
                     escalation_type="offer_details_missing",
                     reason=(
@@ -481,7 +481,7 @@ async def process_user_message(
         if not response_raw and _message_requests_human_intervention(user_message):
             if not _has_recent_pending_escalation(mem_id, state):
                 await state.interno_agent.escalate(
-                    guest_chat_id=mem_id,
+                    guest_chat_id=chat_id,
                     guest_message=user_message,
                     escalation_type="info_not_found",
                     reason="El huésped solicita consulta/intervención de personal humano.",
@@ -511,7 +511,7 @@ async def process_user_message(
 
         if not response_raw:
             await state.interno_agent.escalate(
-                guest_chat_id=mem_id,
+                guest_chat_id=chat_id,
                 guest_message=user_message,
                 escalation_type="info_not_found",
                 reason="Main Agent no devolvió respuesta",
@@ -538,7 +538,7 @@ async def process_user_message(
                 offer_type = _humanize_offer_type(pending_offer.get("type"))
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 await state.interno_agent.escalate(
-                    guest_chat_id=mem_id,
+                    guest_chat_id=chat_id,
                     guest_message=user_message,
                     escalation_type="offer_consistency_guard",
                     reason=(
@@ -599,7 +599,7 @@ async def process_user_message(
             )
 
             await state.interno_agent.escalate(
-                guest_chat_id=mem_id,
+                guest_chat_id=chat_id,
                 guest_message=user_message,
                 escalation_type="bad_response",
                 reason=motivo_out,
@@ -661,7 +661,7 @@ async def process_user_message(
     except Exception as exc:
         log.error("💥 Error crítico en pipeline: %s", exc, exc_info=True)
         await state.interno_agent.escalate(
-            guest_chat_id=mem_id,
+            guest_chat_id=chat_id,
             guest_message=user_message,
             escalation_type="info_not_found",
             reason=f"Error crítico: {str(exc)}",
