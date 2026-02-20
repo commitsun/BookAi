@@ -102,6 +102,7 @@ class SuperintendenteAgent:
         context_window: int = 50,
         chat_history: Optional[List[Any]] = None,
         session_id: Optional[str] = None,
+        clients_context: Optional[str] = None,
     ) -> str:
         """
         Invocar agente superintendente (sesión con encargado)
@@ -176,7 +177,10 @@ class SuperintendenteAgent:
 
             tools = await self._create_tools(resolved_hotel_name, convo_id)
 
-            system_prompt = self._build_system_prompt(resolved_hotel_name)
+            system_prompt = self._build_system_prompt(
+                resolved_hotel_name,
+                clients_context=clients_context,
+            )
             log.info("Superintendente hotel_name activo: %s (encargado_id=%s)", resolved_hotel_name, convo_id)
 
             prompt_template = ChatPromptTemplate.from_messages(
@@ -671,7 +675,7 @@ class SuperintendenteAgent:
         # Ajustar append_func para herramienta de KB al método interno S3
         return [tool for tool in tools if tool is not None]
 
-    def _build_system_prompt(self, hotel_name: str) -> str:
+    def _build_system_prompt(self, hotel_name: str, clients_context: Optional[str] = None) -> str:
         """Construir system prompt para superintendente"""
 
         base = load_prompt("superintendente_prompt.txt") or (
@@ -714,7 +718,15 @@ class SuperintendenteAgent:
         )
 
         context = get_time_context()
-        return f"{context}\n{base}\n\nHotel: {hotel_name}"
+        parts = [f"{context}\n{base}\n\nHotel: {hotel_name}"]
+        if clients_context:
+            parts.append(
+                "Contexto global de clientes (snapshot operativo actual):\n"
+                f"{clients_context[:12000]}\n"
+                "Usa este bloque como fuente principal para chat_id, canal, nombre, teléfono, estado, folio, habitación, "
+                "bookai_enabled, checkin, checkout, unread_count y last_message_at. Si falta algún dato puntual, complétalo con tools."
+            )
+        return "\n\n".join(parts)
 
     def _sanitize_hotel_name(self, hotel_name: str) -> str:
         raw = " ".join((hotel_name or "").split())

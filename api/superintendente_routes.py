@@ -15,7 +15,7 @@ from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
 from core.constants import WA_CONFIRM_WORDS, WA_CANCEL_WORDS
-from core.db import attach_structured_payload_to_latest_message
+from core.db import attach_structured_payload_to_latest_message, get_active_chat_reservation
 from core.instance_context import ensure_instance_credentials
 from core.language_manager import language_manager
 from core.message_utils import sanitize_wa_message, looks_like_new_instruction, build_kb_preview
@@ -256,6 +256,176 @@ def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     if legacy:
         return legacy
     raise HTTPException(status_code=422, detail="owner_id requerido")
+
+
+def _clean_chat_id(chat_id: str) -> str:
+    return re.sub(r"\D", "", str(chat_id or "")).strip()
+
+
+def _bookai_settings(state: Any) -> dict[str, bool]:
+    settings = state.tracking.setdefault("bookai_enabled", {})
+    if not isinstance(settings, dict):
+        state.tracking["bookai_enabled"] = {}
+        settings = state.tracking["bookai_enabled"]
+    return settings
+
+
+def _fetch_global_client_context(
+    state: Any,
+    *,
+    property_id: Optional[str],
+    channel: str = "whatsapp",
+    limit: int = 120,
+) -> list[dict[str, Any]]:
+    if not getattr(state, "supabase_client", None):
+        return []
+
+    try:
+        page_size = max(200, min(1000, limit * 4))
+        offset = 0
+        ordered_ids: list[str] = []
+        summaries: dict[str, dict[str, Any]] = {}
+
+        while len(ordered_ids) < limit and offset <= 4000:
+            query = (
+                state.supabase_client.table("chat_history")
+                .select("conversation_id, property_id, content, created_at, client_name, channel")
+                .eq("channel", channel)
+            )
+            if property_id is not None:
+                query = query.eq("property_id", property_id)
+            rows = (
+                query.order("created_at", desc=True)
+                .range(offset, offset + page_size - 1)
+                .execute()
+                .data
+                or []
+            )
+            if not rows:
+                break
+            for row in rows:
+                cid = str(row.get("conversation_id") or "").strip()
+                if not cid or cid in summaries:
+                    continue
+                content = str(row.get("content") or "").strip()
+                if _is_internal_super_message(content):
+                    continue
+                summaries[cid] = row
+                ordered_ids.append(cid)
+                if len(ordered_ids) >= limit:
+                    break
+            if len(rows) < page_size:
+                break
+            offset += page_size
+
+        if not ordered_ids:
+            return []
+
+        client_names: dict[str, str] = {}
+        try:
+            q = (
+                state.supabase_client.table("chat_history")
+                .select("conversation_id, client_name, created_at")
+                .in_("conversation_id", ordered_ids)
+                .eq("channel", channel)
+                .eq("role", "guest")
+            )
+            if property_id is not None:
+                q = q.eq("property_id", property_id)
+            name_rows = q.order("created_at", desc=True).limit(max(500, limit * 5)).execute().data or []
+            for row in name_rows:
+                cid = str(row.get("conversation_id") or "").strip()
+                name = str(row.get("client_name") or "").strip()
+                if cid and name and cid not in client_names:
+                    client_names[cid] = name
+        except Exception:
+            pass
+
+        items: list[dict[str, Any]] = []
+        memory_manager = getattr(state, "memory_manager", None)
+        bookai_flags = _bookai_settings(state)
+        for cid in ordered_ids[:limit]:
+            row = summaries.get(cid) or {}
+            prop_id = row.get("property_id")
+            phone = _clean_chat_id(cid) or cid
+            folio_id = None
+            checkin = None
+            checkout = None
+            reservation_status = None
+            room_number = None
+            reservation_client_name = None
+            if memory_manager:
+                try:
+                    folio_id = memory_manager.get_flag(cid, "folio_id") or memory_manager.get_flag(cid, "origin_folio_id")
+                    checkin = memory_manager.get_flag(cid, "checkin") or memory_manager.get_flag(cid, "origin_folio_min_checkin")
+                    checkout = memory_manager.get_flag(cid, "checkout") or memory_manager.get_flag(cid, "origin_folio_max_checkout")
+                    reservation_status = memory_manager.get_flag(cid, "reservation_status")
+                    room_number = memory_manager.get_flag(cid, "room_number")
+                except Exception:
+                    pass
+            try:
+                active = get_active_chat_reservation(
+                    chat_id=cid,
+                    property_id=property_id if property_id is not None else None,
+                )
+                if isinstance(active, dict):
+                    folio_id = active.get("folio_id") or folio_id
+                    checkin = active.get("checkin") or checkin
+                    checkout = active.get("checkout") or checkout
+                    reservation_client_name = active.get("client_name") or reservation_client_name
+            except Exception:
+                pass
+
+            items.append(
+                {
+                    "chat_id": cid,
+                    "channel": row.get("channel") or channel,
+                    "client_name": reservation_client_name or client_names.get(cid) or row.get("client_name"),
+                    "client_phone": phone,
+                    "reservation_status": reservation_status,
+                    "folio_id": folio_id,
+                    "room_number": room_number,
+                    "bookai_enabled": bool(bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))),
+                    "checkin": checkin,
+                    "checkout": checkout,
+                    "unread_count": 0,
+                    "last_message_at": row.get("created_at"),
+                }
+            )
+        return items
+    except Exception as exc:
+        log.debug("No se pudo construir contexto global de clientes: %s", exc)
+        return []
+
+
+def _render_global_client_context(items: list[dict[str, Any]], max_rows: int = 80) -> str:
+    if not items:
+        return ""
+    header = (
+        "chat_id|channel|client_name|client_phone|reservation_status|folio_id|room_number|"
+        "bookai_enabled|checkin|checkout|unread_count|last_message_at"
+    )
+    lines = [header]
+    for row in items[:max_rows]:
+        values = [
+            row.get("chat_id"),
+            row.get("channel"),
+            row.get("client_name"),
+            row.get("client_phone"),
+            row.get("reservation_status"),
+            row.get("folio_id"),
+            row.get("room_number"),
+            row.get("bookai_enabled"),
+            row.get("checkin"),
+            row.get("checkout"),
+            row.get("unread_count"),
+            row.get("last_message_at"),
+        ]
+        safe = [str(v if v is not None else "null").replace("\n", " ").replace("|", "/").strip() for v in values]
+        lines.append("|".join(safe))
+    total = len(items)
+    shown = min(max_rows, total)
+    return f"CLIENTES_ACTIVOS total={total} mostrados={shown}\n" + "\n".join(lines)
 
 
 def _normalize_property_id(value: Optional[str]) -> Optional[str]:
@@ -1962,6 +2132,14 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_visible_super_response(response_text, persist_user=True)
                     return {"result": response_text}
 
+        global_clients = _fetch_global_client_context(
+            state,
+            property_id=property_id,
+            channel="whatsapp",
+            limit=140,
+        )
+        clients_context_block = _render_global_client_context(global_clients, max_rows=100)
+
         result = await agent.ainvoke(
             user_input=message,
             encargado_id=owner_id,
@@ -1969,6 +2147,7 @@ def register_superintendente_routes(app, state) -> None:
             context_window=payload.context_window,
             chat_history=payload.chat_history,
             session_id=payload.session_id or session_key,
+            clients_context=clients_context_block,
         )
         result = _ensure_owner_language(str(result or ""), owner_lang)
 
