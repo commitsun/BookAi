@@ -185,38 +185,6 @@ def _extract_reservation_locator(payload: Any) -> Optional[str]:
     return None
 
 
-def _extract_reservation_client_name(payload: Any) -> Optional[str]:
-    if payload is None:
-        return None
-    if isinstance(payload, str):
-        try:
-            payload = json.loads(payload)
-        except Exception:
-            match = re.search(
-                r"(partner[_\s-]*name|client[_\s-]*name|guest[_\s-]*name|name)\"?\s*[:=]\s*\"?([^\",\\n]{2,})",
-                payload,
-                re.IGNORECASE,
-            )
-            return match.group(2).strip() if match else None
-    if isinstance(payload, list):
-        for item in payload:
-            found = _extract_reservation_client_name(item)
-            if found:
-                return found
-        return None
-    if isinstance(payload, dict):
-        for key in ("partner_name", "partnerName", "client_name", "clientName", "guest_name", "guestName"):
-            val = payload.get(key)
-            if isinstance(val, str) and val.strip():
-                return val.strip()
-        for val in payload.values():
-            if isinstance(val, (dict, list)):
-                nested = _extract_reservation_client_name(val)
-                if nested:
-                    return nested
-    return None
-
-
 async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any], Optional[str]]:
     try:
         tools = await get_tools(server_name=server_name)
@@ -571,11 +539,6 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                         if m:
                             folio_id = m.group(1)
                     reservation_locator = _extract_reservation_locator(parsed)
-                    reservation_client_name = (
-                        _extract_reservation_client_name(parsed)
-                        or (reservation_payload.get("partnerName") or "").strip()
-                        or None
-                    )
                     if folio_id and not re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", str(folio_id)):
                         log.warning("Folio_id inválido en onboarding, se ignora: %s", folio_id)
                         folio_id = None
@@ -618,7 +581,6 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                             instance_id=memory_manager.get_flag(chat_id, "instance_id") if memory_manager else None,
                             original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
                             reservation_locator=reservation_locator,
-                            client_name=reservation_client_name,
                             source="onboarding",
                         )
                     # Enriquecer reservation_locator desde PMS si no vino o parece folio interno
@@ -660,7 +622,6 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
                                         instance_id=memory_manager.get_flag(chat_id, "instance_id") if memory_manager else None,
                                         original_chat_id=chat_id if isinstance(chat_id, str) and ":" in chat_id else None,
                                         reservation_locator=reservation_locator,
-                                        client_name=reservation_client_name,
                                         source="pms",
                                     )
                                     if isinstance(response_text, str):

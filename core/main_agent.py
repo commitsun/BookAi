@@ -956,7 +956,6 @@ class MainAgent:
         folio_id = reservation.get("folio_id")
         checkin = reservation.get("checkin")
         checkout = reservation.get("checkout")
-        reservation_client_name = reservation.get("client_name")
 
         if prop_id and not self.memory_manager.get_flag(chat_id, "property_id"):
             self.memory_manager.set_flag(chat_id, "property_id", prop_id)
@@ -973,8 +972,6 @@ class MainAgent:
             self.memory_manager.set_flag(chat_id, "checkin", checkin)
         if checkout and not self.memory_manager.get_flag(chat_id, "checkout"):
             self.memory_manager.set_flag(chat_id, "checkout", checkout)
-        if reservation_client_name and not self.memory_manager.get_flag(chat_id, "client_name"):
-            self.memory_manager.set_flag(chat_id, "client_name", reservation_client_name)
 
         if prop_id and not self.memory_manager.get_flag(chat_id, "property_name"):
             table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
