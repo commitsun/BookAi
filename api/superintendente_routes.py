@@ -355,6 +355,19 @@ def _build_chatter_context_block(
     chat_history: Optional[list[Any]],
 ) -> str:
     context: dict[str, Any] = {}
+
+    def _is_context_value(value: Any) -> bool:
+        if value in (None, "", [], {}):
+            return False
+        if isinstance(value, (bool, int, float)):
+            return True
+        if isinstance(value, str):
+            text = value.strip()
+            if not text:
+                return False
+            return len(text) <= 120
+        return False
+
     context["owner_id"] = owner_id
     context["session_id"] = session_key
     context["channel"] = "whatsapp"
@@ -431,6 +444,11 @@ def _build_chatter_context_block(
         for item in reversed(chat_history):
             if not isinstance(item, dict):
                 continue
+            for key, value in item.items():
+                if key in context:
+                    continue
+                if _is_context_value(value):
+                    context[key] = value
             ts = item.get("last_message_at") or item.get("created_at") or item.get("timestamp")
             if ts:
                 context.setdefault("last_message_at", ts)
@@ -439,7 +457,11 @@ def _build_chatter_context_block(
     if not context:
         return ""
 
-    lines = [f"- {k}: {v}" for k, v in sorted(context.items(), key=lambda it: str(it[0])) if v not in (None, "", [], {})]
+    lines = [
+        f"- {k}: {v}"
+        for k, v in sorted(context.items(), key=lambda it: str(it[0]))
+        if _is_context_value(v)
+    ]
     return "\n".join(lines)
 
 
@@ -1567,11 +1589,6 @@ def register_superintendente_routes(app, state) -> None:
             hotel_name=payload.hotel_name,
             chat_history=payload.chat_history,
         )
-        message_for_agent = (
-            f"{message}\n\n[CHATTER_CTX]\n{chatter_context_block}\n[/CHATTER_CTX]"
-            if chatter_context_block
-            else message
-        )
 
         def _persist_visible_super_response(reply_text: str, *, persist_user: bool = False) -> None:
             if not getattr(state, "memory_manager", None):
@@ -2159,7 +2176,7 @@ def register_superintendente_routes(app, state) -> None:
                     return {"result": response_text}
 
         result = await agent.ainvoke(
-            user_input=message_for_agent,
+            user_input=message,
             encargado_id=owner_id,
             hotel_name=payload.hotel_name,
             context_window=payload.context_window,
