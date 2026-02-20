@@ -442,6 +442,7 @@ def upsert_chat_reservation(
     instance_id: str | None = None,
     original_chat_id: str | None = None,
     reservation_locator: str | None = None,
+    client_name: str | None = None,
     source: str | None = None,
 ) -> None:
     """
@@ -501,6 +502,8 @@ def upsert_chat_reservation(
         payload["original_chat_id"] = str(original_chat_id).strip()
     if reservation_locator:
         payload["reservation_locator"] = str(reservation_locator).strip()
+    if client_name:
+        payload["client_name"] = str(client_name).strip()
     if source:
         payload["source"] = str(source).strip()
 
@@ -515,6 +518,17 @@ def upsert_chat_reservation(
             on_conflict="chat_id,folio_id",
         ).execute()
     except Exception as exc:
+        if "client_name" in payload and "client_name" in str(exc):
+            logging.warning("⚠️ Columna client_name no disponible en chat_reservations; reintentando sin client_name.")
+            payload.pop("client_name", None)
+            try:
+                supabase.table(Settings.CHAT_RESERVATIONS_TABLE).upsert(
+                    payload,
+                    on_conflict="chat_id,folio_id",
+                ).execute()
+                return
+            except Exception:
+                pass
         logging.warning("⚠️ No se pudo upsert chat_reservation: %s", exc, exc_info=True)
         try:
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE).insert(payload).execute()
@@ -541,7 +555,7 @@ def get_active_chat_reservation(
     try:
         query = (
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
-            .select("chat_id, folio_id, reservation_locator, checkin, checkout, property_id, instance_id, original_chat_id, source, updated_at")
+            .select("chat_id, folio_id, reservation_locator, client_name, checkin, checkout, property_id, instance_id, original_chat_id, source, updated_at")
             .eq("chat_id", clean_id)
             .order("updated_at", desc=True)
             .limit(limit)

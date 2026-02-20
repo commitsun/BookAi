@@ -150,6 +150,28 @@ def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+def _extract_reservation_client_name(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in (
+        "client_name",
+        "clientName",
+        "guest_name",
+        "guestName",
+        "partner_name",
+        "partnerName",
+        "full_name",
+        "fullName",
+        "name_guest",
+        "guest",
+        "titular",
+    ):
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
 def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -204,6 +226,27 @@ def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
         val = payload.get(key)
         if isinstance(val, str) and val.strip():
             return val.strip()
+    return None
+
+
+def _extract_client_name_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(payload, dict):
+        return None
+    for key in ("partner_name", "partnerName", "client_name", "clientName", "guest_name", "guestName"):
+        val = payload.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    reservations = payload.get("reservations") or payload.get("reservation") or []
+    if isinstance(reservations, dict):
+        reservations = [reservations]
+    if isinstance(reservations, list):
+        for item in reservations:
+            if not isinstance(item, dict):
+                continue
+            for key in ("partner_name", "partnerName", "client_name", "clientName", "guest_name", "guestName"):
+                val = item.get(key)
+                if isinstance(val, str) and val.strip():
+                    return val.strip()
     return None
 
 
@@ -359,6 +402,7 @@ def register_template_routes(app, state) -> None:
             reservation_locator = None
             checkin = None
             checkout = None
+            reservation_client_name = (payload.recipient.display_name or "").strip() or None
             folio_from_meta = False
             try:
                 if payload.meta and payload.meta.folio_id is not None:
@@ -370,6 +414,7 @@ def register_template_routes(app, state) -> None:
                     checkin = checkin or ci
                     checkout = checkout or co
                     reservation_locator = reservation_locator or _extract_reservation_locator(payload.template.parameters)
+                    reservation_client_name = _extract_reservation_client_name(payload.template.parameters) or reservation_client_name
                 if payload.template and payload.template.rendered_text:
                     f_id, ci, co = _extract_from_text(payload.template.rendered_text)
                     folio_id = folio_id or f_id
@@ -448,6 +493,7 @@ def register_template_routes(app, state) -> None:
                         instance_id=instance_id,
                         original_chat_id=context_id or None,
                         reservation_locator=reservation_locator,
+                        client_name=reservation_client_name,
                         source="template",
                     )
                 except Exception as exc:
@@ -516,6 +562,7 @@ def register_template_routes(app, state) -> None:
                     if parsed:
                         ci, co = _extract_dates_from_reservation(parsed)
                         locator = _extract_locator_from_reservation(parsed)
+                        reservation_client_name = _extract_client_name_from_reservation(parsed) or reservation_client_name
                         if ci:
                             state.memory_manager.set_flag(chat_id, "checkin", ci)
                         if co:
@@ -532,6 +579,7 @@ def register_template_routes(app, state) -> None:
                                 instance_id=instance_id,
                                 original_chat_id=context_id or None,
                                 reservation_locator=locator,
+                                client_name=reservation_client_name,
                                 source="pms",
                             )
                 except Exception as exc:
@@ -566,6 +614,7 @@ def register_template_routes(app, state) -> None:
                             instance_id=instance_id,
                             original_chat_id=context_id or None,
                             reservation_locator=reservation_locator,
+                            client_name=reservation_client_name,
                             source="rendered",
                         )
                     except Exception as exc:
