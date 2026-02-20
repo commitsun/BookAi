@@ -2045,13 +2045,14 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                 try:
                     cache_payload = {
                         "items": simplified,
-                        "meta": {
-                            "fecha_inicio": start_norm,
-                            "fecha_fin": end_norm,
-                            "property_id": pms_property_id,
-                            "instance_id": instance_id,
-                            "instance_url": payload.get("instance_url"),
-                        },
+                            "meta": {
+                                "fecha_inicio": fecha_inicio,
+                                "fecha_inicio": start_norm,
+                                "fecha_fin": end_norm,
+                                "property_id": pms_property_id,
+                                "instance_id": instance_id,
+                                "instance_url": payload.get("instance_url"),
+                            },
                         "stored_at": datetime.utcnow().isoformat(),
                     }
                     memory_manager.set_flag(chat_id, "superintendente_last_reservations", cache_payload)
