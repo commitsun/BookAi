@@ -610,13 +610,9 @@ async def _should_use_reservation_fastpath_with_llm(
         "\"reason\":\"string\""
         "}\n\n"
         "Reglas:\n"
-        "- Hay folio_id ya resuelto: prioriza use_fastpath=true por defecto.\n"
         "- use_fastpath=true si el mensaje pide consultar, resumir o gestionar datos de la reserva concreta del huésped.\n"
-        "- use_fastpath=false SOLO si el mensaje es claramente para enviar un WhatsApp al huésped, crear una reserva nueva o tarea no relacionada con consultar esa reserva.\n"
+        "- use_fastpath=false si el mensaje es para enviar un WhatsApp al huésped, crear una reserva nueva o tarea no relacionada.\n"
         "- Debes usar interpretación semántica, no coincidencia literal de palabras.\n\n"
-        "Ejemplos:\n"
-        "1) 'quiero más info de rafalillo' con folio resuelto -> use_fastpath=true\n"
-        "2) 'dile a rafalillo que pague' -> use_fastpath=false\n\n"
         f"folio_id_resuelto:\n{folio}\n\n"
         f"contexto_chatter:\n{(chatter_context_block or '').strip()}\n\n"
         f"mensaje:\n{raw}"
@@ -634,7 +630,7 @@ async def _should_use_reservation_fastpath_with_llm(
 
     use_fastpath = bool(data.get("use_fastpath")) if isinstance(data, dict) else False
     confidence = _safe_float(data.get("confidence"), 0.0) if isinstance(data, dict) else 0.0
-    return use_fastpath and confidence >= 0.45
+    return use_fastpath and confidence >= 0.55
 
 
 def _format_reservation_detail_response(detail: dict[str, Any]) -> str:
