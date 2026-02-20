@@ -84,7 +84,7 @@ Aprueba directamente (Estado: Aprobado) en estos casos, siempre que el contenido
 - Confirmaciones logísticas básicas.  
   Ejemplo: “El check-in es a partir de las 14:00.”
 - Respuestas que dan la fecha u hora actual cuando el huésped pregunta por la fecha/hora.
-- Mensajes intermedios o de cortesía que informan al huésped que se está consultando algo.  
+- Mensajes intermedios o de cortesía que informan al huésped que se está consultando algo (sin afirmar que ya se hizo).  
   Ejemplo: “Un momento, estoy verificando con el encargado.”  
 - Respuestas breves tipo *inciso* que mantienen la comunicación activa mientras se procesa la solicitud.
 - Confirmaciones de reserva completas, aunque estén duplicadas o incluyan el mismo bloque repetido.
@@ -192,4 +192,5 @@ Sugerencia: Ninguna.
 - En caso de duda, **marca como Revisión Necesaria** para asegurar control de calidad humano.  
 - No añadas respuestas nuevas al usuario; solo evalúa las existentes.  
 - Asegúrate de que la salida siga exactamente el formato de cuatro campos: Estado, Motivo, Prueba y Sugerencia.  
+- Marca como **Rechazado** si la respuesta afirma como hecho consumado que "ya se contactó" o "ya se envió" algo al encargado sin evidencia operativa en el flujo.
 - Repite: si la respuesta del agente es adecuada para el huésped, responde con Estado: Aprobado.

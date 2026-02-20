@@ -1,8 +1,10 @@
 import json
 import logging
 import re
+from datetime import datetime, timezone
 from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier
+from core.escalation_db import get_latest_pending_escalation
 from core.observability import ls_context
 
 log = logging.getLogger("SupervisorOutputAgent")
@@ -67,10 +69,68 @@ class SupervisorOutputAgent:
 
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
+        self._pending_escalation_max_age_min = 20
+
+    def _has_recent_pending_escalation(self, chat_id: str) -> bool:
+        if not chat_id:
+            return False
+        try:
+            property_id = None
+            if self.memory_manager:
+                property_id = self.memory_manager.get_flag(chat_id, "property_id")
+
+            latest = get_latest_pending_escalation(chat_id, property_id=property_id)
+            if not latest:
+                return False
+
+            ts_raw = str(latest.get("timestamp") or "").strip()
+            if not ts_raw:
+                return True
+
+            ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+            if ts.tzinfo is None:
+                ts = ts.replace(tzinfo=timezone.utc)
+
+            age_min = (datetime.now(timezone.utc) - ts).total_seconds() / 60.0
+            return age_min <= self._pending_escalation_max_age_min
+        except Exception:
+            return False
+
+    @staticmethod
+    def _claims_human_contact_already_done(text: str) -> bool:
+        normalized = (text or "").strip().lower()
+        if not normalized:
+            return False
+        done_patterns = [
+            r"\bacabo de (enviar|avisar|preguntar|trasladar|consultar)\b",
+            r"\bya he (enviado|avisado|preguntado|trasladado|consultado)\b",
+            r"\bhe (enviado|avisado|preguntado|trasladado|consultado)\b",
+            r"\bestoy esperando (su|la) respuesta\b",
+            r"\bte avisar[ée] en cuanto reciba (su|la) respuesta\b",
+        ]
+        return any(re.search(p, normalized, re.IGNORECASE) for p in done_patterns)
 
     async def validate(self, user_input: str, agent_response: str, chat_id: str = None) -> dict:
         """Evalúa la respuesta y aplica reglas de tolerancia + detección de loops."""
         try:
+            if self._claims_human_contact_already_done(agent_response):
+                if not self._has_recent_pending_escalation(chat_id):
+                    log.warning(
+                        "🚨 Afirmación de contacto humano sin evidencia de escalación activa (chat_id=%s).",
+                        chat_id,
+                    )
+                    return {
+                        "estado": "Rechazado",
+                        "motivo": (
+                            "La respuesta afirma que ya se contactó al encargado, "
+                            "pero no hay escalación activa verificable."
+                        ),
+                        "sugerencia": (
+                            "No afirmar acciones ya realizadas sin evidencia. "
+                            "Pedir confirmación para escalar o usar formulación condicional."
+                        ),
+                    }
+
             # =====================================================
             # 🚨 DETECCIÓN DE BUCLES DE INCISOS / REPETICIÓN
             # =====================================================

@@ -566,6 +566,7 @@ async def process_user_message(
         output_validation = await state.supervisor_output.validate(
             user_input=user_message,
             agent_response=response_raw,
+            chat_id=mem_id,
         )
         estado_out = (output_validation.get("estado", "Aprobado") or "").lower()
         motivo_out = output_validation.get("motivo", "")
