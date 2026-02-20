@@ -389,66 +389,13 @@ def _resolve_guest_id_by_name(
     except Exception:
         pass
 
-    # 2) Intentar resolver con reservas persistidas (chat_reservations.client_name)
-    try:
-        query = (
-            supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
-            .select("chat_id, original_chat_id, client_name, updated_at, property_id")
-            .ilike("client_name", f"%{name}%")
-        )
-        if property_id is not None:
-            query = query.eq("property_id", property_id)
-        rows = query.order("updated_at", desc=True).limit(limit).execute().data or []
-
-        reservation_candidates: list[dict] = []
-        for row in rows:
-            client_name = (row.get("client_name") or "").strip()
-            phone = _clean_phone(row.get("chat_id") or "")
-            if not phone:
-                phone = _clean_phone(row.get("original_chat_id") or "")
-            if not phone or not client_name:
-                continue
-            reservation_candidates.append(
-                {
-                    "phone": phone,
-                    "client_name": client_name,
-                    "created_at": row.get("updated_at"),
-                    "property_id": row.get("property_id"),
-                    "source": "chat_reservations",
-                }
-            )
-
-        if reservation_candidates:
-            reservation_candidates.sort(key=lambda c: (_score(c), -_parse_ts(c.get("created_at"))))
-            unique: list[dict] = []
-            seen = set()
-            for cand in reservation_candidates:
-                phone = cand.get("phone")
-                if not phone or phone in seen:
-                    continue
-                seen.add(phone)
-                cand["score"] = _score(cand)
-                unique.append(cand)
-            if unique:
-                best_score = unique[0].get("score", 3)
-                best = [c for c in unique if c.get("score", 3) == best_score]
-                if len(best) == 1:
-                    return best[0].get("phone"), unique
-                phones = {c.get("phone") for c in best if c.get("phone")}
-                if len(phones) == 1:
-                    return next(iter(phones)), unique
-                return None, unique
-    except Exception as exc:
-        log.warning("No se pudo resolver guest_id por chat_reservations: %s", exc)
-
-    def _run_query(filter_property: bool, search_name: bool = True) -> list[dict]:
+    def _run_query(filter_property: bool) -> list[dict]:
         query = (
             supabase.table("chat_history")
             .select("conversation_id, original_chat_id, client_name, created_at, property_id")
             .eq("role", "guest")
+            .ilike("client_name", f"%{name}%")
         )
-        if search_name:
-            query = query.ilike("client_name", f"%{name}%")
         if filter_property and property_id is not None:
             query = query.eq("property_id", property_id)
         resp = query.order("created_at", desc=True).limit(limit).execute()
@@ -459,11 +406,6 @@ def _resolve_guest_id_by_name(
         if not rows and property_id is not None:
             # Fallback cuando los mensajes no tienen property_id guardado.
             rows = _run_query(filter_property=False)
-        if not rows:
-            # Fallback dinámico: no depender solo de coincidencia literal ILIKE.
-            rows = _run_query(filter_property=True, search_name=False)
-            if not rows and property_id is not None:
-                rows = _run_query(filter_property=False, search_name=False)
     except Exception as exc:
         log.warning("No se pudo resolver guest_id por nombre: %s", exc)
         return None, []
@@ -471,12 +413,6 @@ def _resolve_guest_id_by_name(
     candidates = []
     for row in rows:
         client_name = (row.get("client_name") or "").strip()
-        if not client_name:
-            continue
-        candidate_norm = _normalize_name(client_name)
-        literal_match = query_name in candidate_norm or candidate_norm in query_name
-        if not (literal_match or _token_match(query_name, candidate_norm)):
-            continue
         phone = _clean_phone(row.get("conversation_id") or "")
         if not phone:
             phone = _clean_phone(row.get("original_chat_id") or "")
