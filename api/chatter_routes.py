@@ -328,6 +328,13 @@ def _is_internal_hidden_message(text: str) -> bool:
         return True
     if lowered.startswith("contexto de propiedad actualizado"):
         return True
+    # Oculta trazas internas/auditoría que no son mensajes para operador/huésped.
+    if lowered.startswith("salida modelo:"):
+        return True
+    if "api debug" in lowered:
+        return True
+    if "sender (api):" in lowered and "chat id:" in lowered:
+        return True
     return False
 
 

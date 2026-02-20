@@ -22,6 +22,20 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.info("✅ Conexión con Supabase inicializada correctamente.")
 
 
+def _is_internal_non_persistable_message(content: str) -> bool:
+    text = (content or "").strip()
+    if not text:
+        return False
+    lowered = text.lower()
+    if lowered.startswith("salida modelo:"):
+        return True
+    if "api debug" in lowered:
+        return True
+    if "sender (api):" in lowered and "chat id:" in lowered:
+        return True
+    return False
+
+
 def _get_day_key(timezone: str = DEFAULT_TZ) -> str:
     tz = pytz.timezone(timezone)
     now = datetime.now(tz)
@@ -128,6 +142,10 @@ def save_message(
     - table: tabla destino en Supabase
     """
     try:
+        if _is_internal_non_persistable_message(content):
+            logging.info("🧹 Mensaje interno omitido (no persistido en chat_history).")
+            return
+
         normalized_role = (role or "").strip().lower()
         if normalized_role in {"assistant", "system", "tool"}:
             normalized_role = "bookai"
