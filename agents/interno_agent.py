@@ -254,7 +254,11 @@ class InternoAgent:
             return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
         def _clean_chat_id(value: str) -> str:
-            return re.sub(r"\\D", "", str(value or "")).strip()
+            raw = str(value or "").strip()
+            if ":" in raw:
+                # Para ids compuestos "instancia:telefono" conservar el chat real.
+                raw = raw.split(":")[-1].strip()
+            return re.sub(r"\D", "", raw).strip() or raw
 
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"

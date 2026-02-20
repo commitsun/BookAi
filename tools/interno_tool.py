@@ -361,6 +361,7 @@ class ConfirmarYEnviarInput(BaseModel):
 def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_type, reason, context) -> str:
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
+        normalized_guest_chat_id = _normalize_guest_chat_id(guest_chat_id) or str(guest_chat_id or "").strip()
         # Evita notificaciones duplicadas cuando la misma escalación se dispara más de una vez.
         if escalation_id in NOTIFIED_ESCALATIONS:
             log.info("🔁 Escalación %s ya notificada; se omite reenvío.", escalation_id)
@@ -487,7 +488,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 
         esc = Escalation(
             escalation_id=escalation_id,
-            guest_chat_id=guest_chat_id,
+            guest_chat_id=normalized_guest_chat_id,
             guest_message=guest_message,
             escalation_type=escalation_type,
             escalation_reason=clean_reason,

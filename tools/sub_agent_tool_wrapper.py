@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
 from datetime import datetime
 from inspect import iscoroutinefunction, signature
 from typing import Any, Type
@@ -54,6 +55,13 @@ class SubAgentTool(BaseTool):
     @staticmethod
     def _normalize_text(text: str) -> str:
         return " ".join(str(text or "").strip().lower().split())
+
+    @staticmethod
+    def _normalize_chat_id(chat_id: str) -> str:
+        raw = str(chat_id or "").strip()
+        if ":" in raw:
+            raw = raw.split(":")[-1].strip()
+        return re.sub(r"\D", "", raw).strip() or raw
 
     async def _is_query_aligned(self, canonical_question: str, tool_query: str) -> bool:
         canonical = self._normalize_text(canonical_question)
@@ -174,9 +182,10 @@ class SubAgentTool(BaseTool):
                     invoke_kwargs["chat_history"] = chat_history
 
                 if "escalation_payload" in params or "auto_notify" in params:
+                    normalized_chat_id = self._normalize_chat_id(self.chat_id)
                     payload = {
-                        "escalation_id": f"esc_{self.chat_id}_{int(datetime.utcnow().timestamp())}",
-                        "guest_chat_id": self.chat_id,
+                        "escalation_id": f"esc_{normalized_chat_id}_{int(datetime.utcnow().timestamp())}",
+                        "guest_chat_id": normalized_chat_id,
                         "guest_message": effective_query,
                         "escalation_type": tipo or "manual",
                         "reason": motivo or "Solicitud del huésped desde MainAgent",
