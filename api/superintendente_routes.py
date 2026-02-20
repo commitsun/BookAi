@@ -282,79 +282,21 @@ def _normalize_guest_id(guest_id: str | None) -> str:
 def _extract_candidate_chat_id_from_payload(chat_history: Optional[list[Any]]) -> Optional[str]:
     if not isinstance(chat_history, list):
         return None
-
-    def _iter_values(node: Any):
-        if isinstance(node, dict):
-            for value in node.values():
-                yield value
-                yield from _iter_values(value)
-        elif isinstance(node, list):
-            for value in node:
-                yield value
-                yield from _iter_values(value)
-
-    def _pick_value(node: Any, keys: tuple[str, ...]) -> Optional[str]:
-        if not isinstance(node, (dict, list)):
-            return None
-        stack = [node]
-        while stack:
-            cur = stack.pop()
-            if isinstance(cur, dict):
-                for key in keys:
-                    if key in cur and cur[key] not in (None, ""):
-                        raw = str(cur[key]).strip()
-                        if raw:
-                            return raw
-                for value in cur.values():
-                    if isinstance(value, (dict, list)):
-                        stack.append(value)
-            elif isinstance(cur, list):
-                for value in cur:
-                    if isinstance(value, (dict, list)):
-                        stack.append(value)
-        return None
-
     for item in chat_history:
         if not isinstance(item, dict):
             continue
-        raw = _pick_value(item, ("chat_id", "conversation_id", "guest_chat_id", "client_phone", "phone"))
-        if not raw:
-            for value in _iter_values(item):
-                if value in (None, ""):
-                    continue
-                raw_candidate = str(value).strip()
-                if raw_candidate and re.search(r"\d{7,}", raw_candidate):
-                    raw = raw_candidate
-                    break
-        if not raw:
-            continue
-        if ":" in raw:
-            raw = raw.split(":")[-1].strip()
-        clean = _normalize_guest_id(raw)
-        if clean:
-            return clean
-    return None
-
-
-def _extract_payload_field(chat_history: Optional[list[Any]], keys: tuple[str, ...]) -> Optional[str]:
-    if not isinstance(chat_history, list):
-        return None
-    stack = list(chat_history)
-    while stack:
-        node = stack.pop()
-        if isinstance(node, dict):
-            for key in keys:
-                if key in node and node[key] not in (None, ""):
-                    value = str(node[key]).strip()
-                    if value:
-                        return value
-            for value in node.values():
-                if isinstance(value, (dict, list)):
-                    stack.append(value)
-        elif isinstance(node, list):
-            for value in node:
-                if isinstance(value, (dict, list)):
-                    stack.append(value)
+        for key in ("chat_id", "conversation_id", "guest_chat_id", "client_phone", "phone"):
+            val = item.get(key)
+            if val in (None, ""):
+                continue
+            raw = str(val).strip()
+            if not raw:
+                continue
+            if ":" in raw:
+                raw = raw.split(":")[-1].strip()
+            clean = _normalize_guest_id(raw)
+            if clean:
+                return clean
     return None
 
 
@@ -432,18 +374,6 @@ def _build_chatter_context_block(
     context["hotel_name"] = hotel_name
     if property_id:
         context["property_id"] = property_id
-
-    payload_folio = _extract_payload_field(chat_history, ("folio_id", "reservation_id"))
-    payload_phone = _extract_payload_field(chat_history, ("client_phone", "phone", "chat_id", "guest_chat_id"))
-    payload_name = _extract_payload_field(chat_history, ("client_name", "guest_name", "name"))
-    if payload_folio and _is_valid_folio_id(payload_folio):
-        context["folio_id"] = payload_folio
-        context.setdefault("reservation_id", payload_folio)
-    if payload_phone:
-        context["client_phone"] = _normalize_guest_id(payload_phone)
-        context.setdefault("chat_id", _normalize_guest_id(payload_phone))
-    if payload_name:
-        context["client_name"] = payload_name
 
     candidate_chat_id = None
     for source in (
@@ -2461,7 +2391,6 @@ def register_superintendente_routes(app, state) -> None:
         ) or ""
         should_fastpath = False
         if folio_ctx and folio_ctx.lower() != "n/d":
-            log.info("Fast-path candidato: folio_id=%s property_id=%s session=%s", folio_ctx, property_id, session_key)
             if _looks_like_direct_send_intent(message):
                 should_fastpath = False
                 log.info("Fast-path reserva omitido por intención de envío directo WA.")
@@ -2476,8 +2405,6 @@ def register_superintendente_routes(app, state) -> None:
                     # para evitar llamadas amplias e innecesarias.
                     should_fastpath = True
                     log.info("Fast-path reserva forzado por folio_id resuelto=%s", folio_ctx)
-        else:
-            log.info("Fast-path sin folio resoluble (session=%s property_id=%s)", session_key, property_id)
         if should_fastpath:
             try:
                 from tools.superintendente_tool import create_consulta_reserva_persona_tool
