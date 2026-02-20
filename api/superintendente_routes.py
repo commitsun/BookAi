@@ -634,7 +634,14 @@ async def _should_use_reservation_fastpath_with_llm(
 
     use_fastpath = bool(data.get("use_fastpath")) if isinstance(data, dict) else False
     confidence = _safe_float(data.get("confidence"), 0.0) if isinstance(data, dict) else 0.0
-    return use_fastpath and confidence >= 0.45
+    return use_fastpath and confidence >= 0.35
+
+
+def _looks_like_direct_send_intent(text: str) -> bool:
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    return bool(re.search(r"\b(dile|envia|envíale|enviale|manda|mándale|mandale)\b", raw))
 
 
 def _format_reservation_detail_response(detail: dict[str, Any]) -> str:
@@ -2370,62 +2377,70 @@ def register_superintendente_routes(app, state) -> None:
                     _persist_visible_super_response(response_text, persist_user=True)
                     return {"result": response_text}
 
-        # Fast-path semántico: si hay folio_id resoluble y el LLM detecta
-        # intención de consulta de reserva, evita consulta_reserva_general.
-        if not pending_last:
-            folio_ctx = _resolve_fastpath_folio_id(
-                state,
-                message=message,
-                chatter_context_block=chatter_context_block,
-                session_key=session_key,
-                alt_key=alt_key,
-                owner_key=owner_key,
-                owner_id=owner_id,
-                property_id=property_id,
-            ) or ""
-            should_fastpath = False
-            if folio_ctx and folio_ctx.lower() != "n/d":
+        # Fast-path fuerte: si hay folio_id resoluble, prioriza consulta_reserva_persona
+        # y evita consulta_reserva_general (excepto intención explícita de envío WA).
+        folio_ctx = _resolve_fastpath_folio_id(
+            state,
+            message=message,
+            chatter_context_block=chatter_context_block,
+            session_key=session_key,
+            alt_key=alt_key,
+            owner_key=owner_key,
+            owner_id=owner_id,
+            property_id=property_id,
+        ) or ""
+        should_fastpath = False
+        if folio_ctx and folio_ctx.lower() != "n/d":
+            if _looks_like_direct_send_intent(message):
+                should_fastpath = False
+                log.info("Fast-path reserva omitido por intención de envío directo WA.")
+            else:
                 should_fastpath = await _should_use_reservation_fastpath_with_llm(
                     message,
                     chatter_context_block=chatter_context_block,
                     folio_id=folio_ctx,
                 )
-            if should_fastpath:
-                try:
-                    from tools.superintendente_tool import create_consulta_reserva_persona_tool
+                if not should_fastpath:
+                    # Guard rail: con folio resuelto, por defecto detallamos reserva
+                    # para evitar llamadas amplias e innecesarias.
+                    should_fastpath = True
+                    log.info("Fast-path reserva forzado por folio_id resuelto=%s", folio_ctx)
+        if should_fastpath:
+            try:
+                from tools.superintendente_tool import create_consulta_reserva_persona_tool
 
-                    consulta_tool = create_consulta_reserva_persona_tool(
-                        memory_manager=state.memory_manager,
-                        chat_id=session_key,
-                    )
-                    tool_property_id: Any = property_id
-                    if isinstance(tool_property_id, str) and tool_property_id.isdigit():
-                        tool_property_id = int(tool_property_id)
+                consulta_tool = create_consulta_reserva_persona_tool(
+                    memory_manager=state.memory_manager,
+                    chat_id=session_key,
+                )
+                tool_property_id: Any = property_id
+                if isinstance(tool_property_id, str) and tool_property_id.isdigit():
+                    tool_property_id = int(tool_property_id)
 
-                    raw = await consulta_tool.ainvoke(
-                        {
-                            "folio_id": str(folio_ctx),
-                            "property_id": tool_property_id,
-                        }
-                    )
-                    parsed = raw
-                    if isinstance(raw, str):
-                        try:
-                            parsed = json.loads(raw)
-                        except Exception:
-                            parsed = raw
-                    if isinstance(parsed, list) and parsed:
-                        parsed = parsed[0]
-                    normalized = _normalize_reservation_detail(parsed if isinstance(parsed, dict) else {})
-                    if normalized:
-                        response_text = _format_reservation_detail_response(normalized)
-                        _persist_visible_super_response(response_text, persist_user=True)
-                        return {"result": response_text}
-                    if isinstance(raw, str) and raw.strip():
-                        _persist_visible_super_response(raw.strip(), persist_user=True)
-                        return {"result": raw.strip()}
-                except Exception as exc:
-                    log.debug("Fast-path folio_id no aplicado: %s", exc)
+                raw = await consulta_tool.ainvoke(
+                    {
+                        "folio_id": str(folio_ctx),
+                        "property_id": tool_property_id,
+                    }
+                )
+                parsed = raw
+                if isinstance(raw, str):
+                    try:
+                        parsed = json.loads(raw)
+                    except Exception:
+                        parsed = raw
+                if isinstance(parsed, list) and parsed:
+                    parsed = parsed[0]
+                normalized = _normalize_reservation_detail(parsed if isinstance(parsed, dict) else {})
+                if normalized:
+                    response_text = _format_reservation_detail_response(normalized)
+                    _persist_visible_super_response(response_text, persist_user=True)
+                    return {"result": response_text}
+                if isinstance(raw, str) and raw.strip():
+                    _persist_visible_super_response(raw.strip(), persist_user=True)
+                    return {"result": raw.strip()}
+            except Exception as exc:
+                log.debug("Fast-path folio_id no aplicado: %s", exc)
 
         result = await agent.ainvoke(
             user_input=message,
