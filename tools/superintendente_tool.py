@@ -7,6 +7,7 @@ import json
 import logging
 import re
 import unicodedata
+import calendar
 from datetime import datetime, timedelta
 from typing import Any, Optional, Callable
 
@@ -1813,6 +1814,33 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
         """
         Consulta folios/reservas en un rango de fechas vía MCP → n8n.
         """
+        def _normalize_input_date(raw: str) -> Optional[str]:
+            text = str(raw or "").strip()
+            if not text:
+                return None
+            # Acepta fechas con tiempo y separadores mixtos.
+            text = text.split("T")[0].replace("/", "-")
+            parts = text.split("-")
+            if len(parts) != 3:
+                return None
+            try:
+                year = int(parts[0])
+                month = int(parts[1])
+                day = int(parts[2])
+            except Exception:
+                return None
+            month = min(12, max(1, month))
+            max_day = calendar.monthrange(year, month)[1]
+            day = min(max_day, max(1, day))
+            return f"{year:04d}-{month:02d}-{day:02d}"
+
+        start_norm = _normalize_input_date(fecha_inicio)
+        end_norm = _normalize_input_date(fecha_fin)
+        if not start_norm or not end_norm:
+            return "❌ Formato de fechas inválido. Usa YYYY-MM-DD."
+        if start_norm > end_norm:
+            start_norm, end_norm = end_norm, start_norm
+
         try:
             tools = await get_tools(server_name="DispoPreciosAgent")
         except Exception as exc:
@@ -1828,8 +1856,8 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             return "No se encontró la tool 'consulta_reserva_general' en MCP."
 
         payload = {
-            "parameters0_Value": fecha_inicio.strip(),
-            "parameters1_Value": fecha_fin.strip(),
+            "parameters0_Value": start_norm,
+            "parameters1_Value": end_norm,
             "key": token,
         }
         if property_id is not None:
@@ -1918,8 +1946,8 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                 except Exception:
                     return None
 
-            date_from_dt = _parse_date(fecha_inicio)
-            date_to_dt = _parse_date(fecha_fin)
+            date_from_dt = _parse_date(start_norm)
+            date_to_dt = _parse_date(end_norm)
             filtered = []
             if isinstance(parsed, list) and date_from_dt and date_to_dt:
                 start_min = date_from_dt - timedelta(days=1)  # acepta llegadas 1 día antes (ej. 27/11 para finde 28-30)
@@ -2019,7 +2047,8 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                         "items": simplified,
                             "meta": {
                                 "fecha_inicio": fecha_inicio,
-                                "fecha_fin": fecha_fin,
+                                "fecha_inicio": start_norm,
+                                "fecha_fin": end_norm,
                                 "property_id": pms_property_id,
                                 "instance_id": instance_id,
                                 "instance_url": payload.get("instance_url"),

@@ -2180,7 +2180,7 @@ def register_superintendente_routes(app, state) -> None:
             encargado_id=owner_id,
             hotel_name=payload.hotel_name,
             context_window=payload.context_window,
-            chat_history=payload.chat_history,
+            chat_history=None,
             session_id=payload.session_id or session_key,
         )
         result = _ensure_owner_language(str(result or ""), owner_lang)
