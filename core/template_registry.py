@@ -43,9 +43,13 @@ def _canonical_template_code(
 
     code = _norm_code(raw_code)
     lang = _norm_lang(language)
-    suffix = f"__{lang}"
-    if code.endswith(suffix):
-        return code[: -len(suffix)]
+    # Compatibilidad con formatos históricos:
+    # - nombre__es
+    # - nombre_es
+    # - nombre-es
+    for suffix in (f"__{lang}", f"_{lang}", f"-{lang}"):
+        if code.endswith(suffix):
+            return code[: -len(suffix)]
     return code
 
 
