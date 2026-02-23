@@ -4,7 +4,7 @@
 Convierte el subagente de información del hotel (InfoAgent)
 en una herramienta LangChain compatible con el MainAgent.
 Responde preguntas sobre servicios, instalaciones, horarios,
-políticas, amenities y más.
+políticas,  amenities y más.
 """
 
 import logging
