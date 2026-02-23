@@ -117,6 +117,63 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+def _as_bool_or_none(value: Any) -> Optional[bool]:
+    if isinstance(value, bool):
+        return value
+    if value is None:
+        return None
+    if isinstance(value, (int, float)):
+        return bool(value)
+    text = str(value).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _resolve_bookai_enabled(
+    state: Any,
+    *,
+    chat_id: str,
+    mem_id: str,
+    clean_id: str,
+) -> Optional[bool]:
+    bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
+    if not isinstance(bookai_flags, dict):
+        return None
+
+    memory = getattr(state, "memory_manager", None)
+    property_candidates: list[str] = []
+    if memory:
+        for key in (mem_id, chat_id, clean_id):
+            if not key:
+                continue
+            try:
+                prop = memory.get_flag(key, "property_id")
+            except Exception:
+                prop = None
+            if prop is not None and str(prop).strip():
+                property_candidates.append(str(prop).strip())
+        try:
+            hint = memory.get_last_property_id_hint(mem_id or chat_id)
+            if hint is not None and str(hint).strip():
+                property_candidates.append(str(hint).strip())
+        except Exception:
+            pass
+
+    seen_props = set()
+    for prop in property_candidates:
+        if prop in seen_props:
+            continue
+        seen_props.add(prop)
+        candidate_value = _as_bool_or_none(bookai_flags.get(f"{clean_id}:{prop}"))
+        if candidate_value is not None:
+            return candidate_value
+
+    return _as_bool_or_none(bookai_flags.get(clean_id))
+
+
 def _humanize_offer_type(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -331,8 +388,13 @@ async def process_user_message(
                 return text
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
-        bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
-        if isinstance(bookai_flags, dict) and bookai_flags.get(clean_id) is False:
+        bookai_enabled = _resolve_bookai_enabled(
+            state,
+            chat_id=str(chat_id or ""),
+            mem_id=str(mem_id or ""),
+            clean_id=clean_id,
+        )
+        if bookai_enabled is False:
             try:
                 state.memory_manager.save(mem_id, "user", user_message)
             except Exception as exc:
