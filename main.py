@@ -53,7 +53,7 @@ def _parse_cors_origins(raw: str) -> list[str]:
         return []
     if raw == "*" or raw.lower() == "all":
         return ["*"]
-    parts = [item.strip() for item in raw.split(",")]
+    parts = [item.strip().rstrip("/") for item in raw.split(",")]
     return [item for item in parts if item]
 
 

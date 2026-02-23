@@ -171,6 +171,22 @@ def _resolve_bookai_enabled(
         if candidate_value is not None:
             return candidate_value
 
+    # Fallback útil cuando aún no hay property_id en memoria:
+    # si existe una única configuración por propiedad para este chat, úsala.
+    prefix = f"{clean_id}:"
+    prefixed_values: list[bool] = []
+    for key, raw_val in bookai_flags.items():
+        if not str(key).startswith(prefix):
+            continue
+        parsed = _as_bool_or_none(raw_val)
+        if parsed is None:
+            continue
+        prefixed_values.append(parsed)
+    if len(prefixed_values) == 1:
+        return prefixed_values[0]
+    if len(prefixed_values) > 1 and all(v == prefixed_values[0] for v in prefixed_values):
+        return prefixed_values[0]
+
     return _as_bool_or_none(bookai_flags.get(clean_id))
 
 
