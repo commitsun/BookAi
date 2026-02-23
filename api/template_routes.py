@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import re
 from typing import Any, Dict, Optional
+from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -182,6 +183,77 @@ def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+_FOLIO_URL_PARAM_KEYS = ("folio_details_url", "folioDetailsUrl")
+_FOLIO_BASE_URL_PARAM_KEYS = ("folio_base_url", "folioBaseUrl")
+
+
+def _extract_folio_details_url(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in _FOLIO_URL_PARAM_KEYS:
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _extract_folio_base_url(params: Dict[str, Any]) -> Optional[str]:
+    if not params:
+        return None
+    for key in _FOLIO_BASE_URL_PARAM_KEYS:
+        val = params.get(key)
+        if isinstance(val, str) and val.strip():
+            return val.strip()
+    return None
+
+
+def _sanitize_base_url(value: Any) -> Optional[str]:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if not re.match(r"^https?://", raw, re.IGNORECASE):
+        return None
+    if not raw.endswith("/"):
+        raw += "/"
+    return raw
+
+
+def _build_folio_details_url(base_url: Optional[str], dynamic_part: Optional[str]) -> Optional[str]:
+    dynamic = str(dynamic_part or "").strip()
+    if not dynamic:
+        return None
+    if re.match(r"^https?://", dynamic, re.IGNORECASE):
+        return dynamic
+    if not base_url:
+        return None
+    return f"{base_url}{dynamic.lstrip('/')}"
+
+
+def _to_folio_dynamic_part(raw_value: Optional[str], base_url: Optional[str]) -> Optional[str]:
+    """
+    Meta URL buttons con {{1}} esperan la parte dinámica, no la URL completa.
+    Si llega una URL absoluta, intentamos recortar la base conocida o al menos host/scheme.
+    """
+    raw = str(raw_value or "").strip()
+    if not raw:
+        return None
+
+    known_base = _sanitize_base_url(base_url)
+    if known_base and raw.lower().startswith(known_base.lower()):
+        tail = raw[len(known_base):].lstrip("/")
+        return tail or None
+
+    if re.match(r"^https?://", raw, re.IGNORECASE):
+        parsed = urlsplit(raw)
+        path = (parsed.path or "").lstrip("/")
+        query = f"?{parsed.query}" if parsed.query else ""
+        fragment = f"#{parsed.fragment}" if parsed.fragment else ""
+        dynamic = f"{path}{query}{fragment}".strip()
+        return dynamic or None
+
+    return raw.lstrip("/") or None
+
+
 def _extract_url_button_indexes(components: Any) -> list[int]:
     if not isinstance(components, list):
         return []
@@ -315,6 +387,14 @@ def register_template_routes(app, state) -> None:
             language = (payload.template.language or "es").lower()
             template_code = payload.template.code
             idempotency_key = (payload.meta.idempotency_key if payload.meta else "") or ""
+            property_id = payload.meta.property_id if payload.meta else None
+            template_params = dict(payload.template.parameters or {})
+            folio_details_url_raw = _extract_folio_details_url(template_params)
+            folio_base_url_raw = _extract_folio_base_url(template_params)
+            for control_key in _FOLIO_URL_PARAM_KEYS:
+                template_params.pop(control_key, None)
+            for control_key in _FOLIO_BASE_URL_PARAM_KEYS:
+                template_params.pop(control_key, None)
 
             if idempotency_key:
                 if idempotency_key in state.processed_template_keys:
@@ -341,10 +421,10 @@ def register_template_routes(app, state) -> None:
                         wa_template = wa_template[: -len(suffix)]
                         break
             if template_def:
-                parameters = template_def.build_meta_parameters(payload.template.parameters)
+                parameters = template_def.build_meta_parameters(template_params)
                 language = template_def.language or language
             else:
-                raw_params = payload.template.parameters or {}
+                raw_params = template_params
                 if isinstance(raw_params, dict):
                     # Fallback robusto: si no resolvemos la plantilla en registry,
                     # preservamos nombres para plantillas NAMED de Meta.
@@ -380,9 +460,9 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar display_name en memoria: %s", exc)
 
-            if payload.meta and payload.meta.property_id is not None:
+            if property_id is not None:
                 try:
-                    state.memory_manager.set_flag(chat_id, "property_id", payload.meta.property_id)
+                    state.memory_manager.set_flag(chat_id, "property_id", property_id)
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
 
@@ -484,7 +564,7 @@ def register_template_routes(app, state) -> None:
                         folio_id,
                         checkin,
                         checkout,
-                        payload.meta.property_id if payload.meta else None,
+                        property_id,
                         instance_id,
                     )
                     upsert_chat_reservation(
@@ -492,7 +572,7 @@ def register_template_routes(app, state) -> None:
                         folio_id=folio_id,
                         checkin=checkin,
                         checkout=checkout,
-                        property_id=payload.meta.property_id if payload.meta else None,
+                        property_id=property_id,
                         instance_id=instance_id,
                         original_chat_id=context_id or None,
                         reservation_locator=reservation_locator,
@@ -512,18 +592,25 @@ def register_template_routes(app, state) -> None:
                 # asumimos índice 0 si no hay metadata pero sí localizador.
                 if (
                     not url_button_indexes
-                    and template_def.code == "booking_confirmation_aldahotels_v1"
+                    and template_def.code in {"booking_confirmation_aldahotels_v1", "reserva_confirmation_aldahotels_v1"}
                     and reservation_locator
                 ):
                     url_button_indexes = [0]
-                if url_button_indexes and reservation_locator:
+                button_url_value = None
+                if folio_details_url_raw:
+                    base_url = _sanitize_base_url(folio_base_url_raw)
+                    button_url_value = _to_folio_dynamic_part(folio_details_url_raw, base_url)
+                elif reservation_locator:
+                    button_url_value = reservation_locator
+
+                if url_button_indexes and button_url_value:
                     outbound_parameters = {
                         "body": parameters,
                         "buttons": [
                             {
                                 "index": idx,
                                 "sub_type": "url",
-                                "text": reservation_locator,
+                                "text": button_url_value,
                             }
                             for idx in url_button_indexes
                         ],
@@ -548,7 +635,7 @@ def register_template_routes(app, state) -> None:
                     raw = await consulta_tool.ainvoke(
                         {
                             "folio_id": folio_id,
-                            "property_id": payload.meta.property_id if payload.meta else None,
+                            "property_id": property_id,
                             "instance_id": instance_id,
                         }
                     )
@@ -578,7 +665,7 @@ def register_template_routes(app, state) -> None:
                                 folio_id=folio_id,
                                 checkin=ci or checkin,
                                 checkout=co or checkout,
-                                property_id=payload.meta.property_id if payload.meta else None,
+                                property_id=property_id,
                                 instance_id=instance_id,
                                 original_chat_id=context_id or None,
                                 reservation_locator=locator,
@@ -613,7 +700,7 @@ def register_template_routes(app, state) -> None:
                             folio_id=folio_id,
                             checkin=checkin,
                             checkout=checkout,
-                            property_id=payload.meta.property_id if payload.meta else None,
+                            property_id=property_id,
                             instance_id=instance_id,
                             original_chat_id=context_id or None,
                             reservation_locator=reservation_locator,
@@ -670,7 +757,7 @@ def register_template_routes(app, state) -> None:
                     sent_message=rendered or wa_template,
                     source="template_api",
                     session_id=context_id or chat_id,
-                    property_id=(payload.meta.property_id if payload.meta else None),
+                    property_id=property_id,
                 )
             except Exception:
                 pass
