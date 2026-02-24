@@ -294,8 +294,10 @@ def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
 
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
-    if role in {"user", "guest", "bookai", "system", "tool"}:
+    if role in {"guest", "bookai", "system", "tool"}:
         return role
+    if role in {"user", "hotel", "staff"}:
+        return "bookai"
     if role in {"assistant", "ai"}:
         return "bookai"
     return "bookai"
@@ -1747,6 +1749,7 @@ def register_chatter_routes(app, state) -> None:
             log.warning("No se pudo auto-resolver escalaciones para %s: %s", chat_id, exc)
 
         now_iso = datetime.now(timezone.utc).isoformat()
+        sender_for_ui = _map_sender(role)
         await _emit(
             "chat.message.created",
             {
@@ -1754,7 +1757,7 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "property_id": property_id,
                 "channel": payload.channel.lower(),
-                "sender": role,
+                "sender": sender_for_ui,
                 "message": outgoing_message,
                 "created_at": now_iso,
             },
@@ -1781,7 +1784,7 @@ def register_chatter_routes(app, state) -> None:
             "status": "sent",
             "chat_id": chat_id,
             "user_id": payload.user_id,
-            "sender": role,
+            "sender": sender_for_ui,
         }
 
     @router.post("/chats/{chat_id}/proposed-response")
