@@ -142,6 +142,14 @@ def _map_sender(role: str) -> str:
     return "bookai"
 
 
+def _format_history_content(content: str) -> str:
+    """Normaliza content del historial para render en frontend."""
+    text = str(content or "")
+    if "|" not in text:
+        return text
+    return text.replace("|", ";")
+
+
 def _normalize_pending_key(guest_id: str) -> str:
     raw = str(guest_id or "").strip()
     if not raw:
@@ -1038,7 +1046,7 @@ def register_chatter_routes(app, state) -> None:
                     "chat_id": clean_id,
                     "created_at": row.get("created_at"),
                     "read_status": row.get("read_status"),
-                    "content": row.get("content"),
+                    "content": _format_history_content(row.get("content")),
                     "message": row.get("content"),
                     "sender": _map_sender(row.get("role")),
                     "original_chat_id": row.get("original_chat_id"),
