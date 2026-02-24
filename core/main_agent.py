@@ -188,6 +188,7 @@ class MainAgent:
             motivo = pending.get("reason") or "Solicitud del huésped"
             escalation_type = pending.get("escalation_type", "info_not_found")
             original_message = pending.get("guest_message") or user_input
+            self.memory_manager.clear_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING)
 
             await self._delegate_escalation_to_interno(
                 user_input=original_message,
@@ -217,14 +218,31 @@ class MainAgent:
         if not t:
             return None
 
-        negatives = ["prefiero que no", "mejor no", "no gracias", "no hace falta", "no por ahora", "no quiero"]
-        positives = ["sí", "si", "hazlo", "adelante", "claro", "vale", "ok", "confirmo", "yes"]
-
-        if any(n in t for n in negatives):
-            return False
-        if any(p in t for p in positives):
-            return True
-        return None
+        try:
+            llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+            system_prompt = (
+                "Clasifica la respuesta del huésped sobre si autoriza contactar con el encargado.\n"
+                "Responde SOLO con una etiqueta exacta: yes, no, unclear.\n"
+                "- yes: confirma explícitamente que se contacte al encargado.\n"
+                "- no: rechaza explícitamente contactar al encargado.\n"
+                "- unclear: cualquier otro caso ambiguo o tema distinto."
+            )
+            user_prompt = f"Respuesta del huésped:\n{t}\n\nEtiqueta:"
+            raw = llm.invoke(
+                [
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ]
+            )
+            label = (getattr(raw, "content", None) or str(raw or "")).strip().lower()
+            label = re.sub(r"[^a-z_]", "", label)
+            if label == "yes":
+                return True
+            if label == "no":
+                return False
+            return None
+        except Exception:
+            return None
 
     def _request_escalation_confirmation(self, chat_id: str, user_input: str, motivo: str) -> str:
         self.memory_manager.set_flag(
@@ -2481,14 +2499,11 @@ class MainAgent:
                 consulta_flag = self.memory_manager.get_flag(chat_id, "consulta_base_realizada")
 
                 if consulta_flag and not self.memory_manager.get_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING):
-                    await self._delegate_escalation_to_interno(
-                        user_input=user_input,
-                        chat_id=chat_id,
+                    return self._request_escalation_confirmation(
+                        chat_id,
+                        user_input,
                         motivo="Consulta repetida sin información",
-                        escalation_type="info_not_found",
-                        context="Escalación automática",
                     )
-                    return EscalationMessages.get_by_context("info")
 
                 result = await executor.ainvoke(
                     input={"input": user_input, "chat_history": chat_history},
