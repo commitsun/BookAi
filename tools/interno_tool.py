@@ -620,6 +620,8 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         "Tu tarea es reformular el mensaje del encargado para el huésped con un tono cálido, empático y profesional.\n"
         "Genera el borrador SIEMPRE en español para revisión interna en Chatter.\n"
         "Aunque el huésped escriba en otro idioma, aquí debes responder en español.\n"
+        "Sé breve y directo: prioriza una respuesta corta de 1 a 3 frases.\n"
+        "Evita repeticiones, rodeos y detalles innecesarios.\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
@@ -632,7 +634,10 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
     if adjustment:
         user_prompt += f"\nInstrucciones de ajuste del encargado:\n{adjustment}\n"
 
-    user_prompt += "\nReformula la respuesta final para el huésped siguiendo esas pautas."
+    user_prompt += (
+        "\nReformula la respuesta final para el huésped siguiendo esas pautas.\n"
+        "Importante: entrega una versión breve (idealmente 1-3 frases, máximo ~350 caracteres)."
+    )
 
     try:
         response = llm.invoke([

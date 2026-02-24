@@ -391,7 +391,7 @@ def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: A
                 question_es = language_manager.translate_if_needed(question, guest_lang, "es").strip() or question
             except Exception:
                 question_es = question
-        result[guest_id] = f"El huésped solicita: {question_es} (Idioma huésped: {guest_lang})"
+        result[guest_id] = f"El huésped solicita: {question_es}"
     return result
 
 
@@ -426,8 +426,7 @@ def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: A
         latest = _latest_pending(escs) or {}
         reason = (latest.get("escalation_reason") or latest.get("reason") or "").strip()
         if reason:
-            guest_lang = _resolve_guest_lang(latest, memory_manager=memory_manager)
-            result[guest_id] = f"{reason} (Idioma huésped: {guest_lang})"
+            result[guest_id] = reason
     return result
 
 
@@ -510,17 +509,34 @@ def _strip_draft_instruction_block(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+def _compact_ai_draft(text: str, max_chars: int = 380, max_sentences: int = 3) -> str:
+    """Compacta borradores para que la sugerencia sea breve y legible en Chatter."""
+    raw = (text or "").strip()
+    if not raw:
+        return ""
+    raw = re.sub(r"^\s*\d+\.\s*\[esc_[^\]]+\]\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"^\s*\[esc_[^\]]+\]\s*", "", raw, flags=re.IGNORECASE)
+    raw = re.sub(r"\s*\[esc_[^\]]+\]\s*", " ", raw, flags=re.IGNORECASE)
+    normalized = re.sub(r"\s+", " ", raw).strip()
+    sentences = [s.strip() for s in re.split(r"(?<=[.!?])\s+", normalized) if s.strip()]
+    if len(sentences) > max_sentences:
+        normalized = " ".join(sentences[:max_sentences]).strip()
+    if len(normalized) > max_chars:
+        clipped = normalized[:max_chars].rsplit(" ", 1)[0].strip()
+        normalized = (clipped or normalized[:max_chars].strip()).rstrip(".,;:") + "..."
+    return normalized
+
+
 def _pending_escalations_summary(escalations: List[Dict[str, Any]]) -> str:
     if not escalations:
         return "No hay escalaciones pendientes."
     lines = []
     for idx, esc in enumerate(escalations, start=1):
-        esc_id = str(esc.get("escalation_id") or "").strip() or f"esc_{idx}"
         guest_message = (esc.get("guest_message") or "").strip() or "No disponible"
         esc_type = (esc.get("escalation_type") or esc.get("type") or "").strip() or "No disponible"
         reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip() or "No disponible"
         lines.append(
-            f"{idx}. [{esc_id}] Tipo: {esc_type} | Motivo: {reason} | Mensaje huésped: {guest_message}"
+            f"{idx}. Tipo: {esc_type} | Motivo: {reason} | Mensaje huésped: {guest_message}"
         )
     return "\n".join(lines)
 
@@ -1380,6 +1396,7 @@ def register_chatter_routes(app, state) -> None:
 
         refined = extract_clean_draft(result or "").strip() or result.strip()
         refined = _strip_instruction_block(refined)
+        refined = _compact_ai_draft(refined)
         update_escalation(escalation_id, {"draft_response": refined})
 
         await _emit(
@@ -1501,10 +1518,11 @@ def register_chatter_routes(app, state) -> None:
             ).strip()
             clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
             clean_draft = _strip_draft_instruction_block(clean_draft)
+            clean_draft = _compact_ai_draft(clean_draft)
             if not clean_draft:
                 clean_draft = "No tengo suficiente información para generar un borrador."
 
-            draft_sections.append(f"{idx}. [{pending_id}] {clean_draft}")
+            draft_sections.append(f"{idx}. {clean_draft}")
 
         draft_response = "\n\n".join(draft_sections).strip()
         ai_message = None
@@ -1632,7 +1650,7 @@ def register_chatter_routes(app, state) -> None:
                 merged_messages.append(enriched)
             draft = (esc.get("draft_response") or "").strip()
             if draft:
-                draft_parts.append(f"{idx}. [{esc_id}] {draft}")
+                draft_parts.append(f"{idx}. {_compact_ai_draft(draft)}")
         merged_messages = sorted(merged_messages, key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min)
         merged_draft = "\n\n".join(draft_parts).strip()
 
