@@ -77,6 +77,8 @@ jobs:
           echo "ROOMDOO_PMS_PROPERTY_ID=${{ secrets.ROOMDOO_PMS_PROPERTY_ID }}" >> .env
           echo "ROOMDOO_BOOKAI_TOKEN_TEST=${{ secrets.ROOMDOO_BOOKAI_TOKEN_TEST }}" >> .env
           echo "ROOMDOO_BOOKAI_TOKEN_ALDA=${{ secrets.ROOMDOO_BOOKAI_TOKEN_ALDA }}" >> .env
+          echo "ROOMDOO_INSTANCE_ID_TEST=${{ secrets.ROOMDOO_INSTANCE_ID_TEST }}" >> .env
+          echo "ROOMDOO_INSTANCE_ID_ALDA=${{ secrets.ROOMDOO_INSTANCE_ID_ALDA }}" >> .env
           echo "ROOMDOO_BEARER_TOKEN=${{ secrets.ROOMDOO_BEARER_TOKEN }}" >> .env
 
           # AWS S3

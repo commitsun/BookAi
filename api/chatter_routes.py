@@ -98,10 +98,12 @@ def _parse_token_instance_map() -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
     token_alda = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
+    instance_test = str(Settings.ROOMDOO_INSTANCE_ID_TEST or "").strip()
+    instance_alda = str(Settings.ROOMDOO_INSTANCE_ID_ALDA or "").strip()
     if token_test:
-        parsed[token_test] = "bookai-test"
+        parsed[token_test] = instance_test or "bookai-test"
     if token_alda:
-        parsed[token_alda] = "bookai-alda"
+        parsed[token_alda] = instance_alda or "bookai-alda"
 
     raw = (Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
     if not raw:

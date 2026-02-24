@@ -49,6 +49,14 @@ class Settings:
     ROOMDOO_BEARER_TOKEN = os.getenv("ROOMDOO_BEARER_TOKEN")
     ROOMDOO_BOOKAI_TOKEN_TEST = os.getenv("ROOMDOO_BOOKAI_TOKEN_TEST")
     ROOMDOO_BOOKAI_TOKEN_ALDA = os.getenv("ROOMDOO_BOOKAI_TOKEN_ALDA")
+    ROOMDOO_INSTANCE_ID_TEST = os.getenv(
+        "ROOMDOO_INSTANCE_ID_TEST",
+        "https://odoo.staging.aldahotels.roomdoo.com",
+    )
+    ROOMDOO_INSTANCE_ID_ALDA = os.getenv(
+        "ROOMDOO_INSTANCE_ID_ALDA",
+        "https://alda.host.roomdoo.com",
+    )
     # Mapa estático token->instancia para multi-instancia.
     # Formatos soportados:
     # - JSON: {"tokenA":"instA","tokenB":"instB"}
