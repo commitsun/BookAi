@@ -97,6 +97,7 @@ jobs:
           echo "TEMP_SUPERVISOR=${{ secrets.TEMP_SUPERVISOR }}" >> .env
           echo "MODEL_INTERNAL=${{ secrets.MODEL_INTERNAL }}" >> .env
           echo "TEMP_INTERNAL=${{ secrets.TEMP_INTERNAL }}" >> .env
+          echo "BOOKAI_GLOBAL_ENABLED=${{ secrets.BOOKAI_GLOBAL_ENABLED != '' && secrets.BOOKAI_GLOBAL_ENABLED || 'true' }}" >> .env
 
       - name: "📦 Sync files to EC2"
         run: |

@@ -114,6 +114,9 @@ class Settings:
         False,
     )
 
+    # Kill-switch global de BookAI (si es False, no se responde automáticamente en ningún chat)
+    BOOKAI_GLOBAL_ENABLED = _env_bool("BOOKAI_GLOBAL_ENABLED", True)
+
 
 # =============================================================
 # ⚙️ ENUM DE TIER

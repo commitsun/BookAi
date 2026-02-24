@@ -292,6 +292,33 @@ def register_whatsapp_routes(app, state):
                     state.memory_manager.set_flag(sender, "property_id", property_id)
                 except Exception:
                     pass
+            clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
+            bookai_enabled = _resolve_bookai_enabled(
+                state,
+                chat_id=str(sender or ""),
+                mem_id=str(memory_id or ""),
+                clean_id=clean_sender,
+                property_id=property_id,
+            )
+            if bookai_enabled is False:
+                try:
+                    if property_id is not None:
+                        state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                    state.memory_manager.save(
+                        conversation_id=memory_id,
+                        role="user",
+                        content=text,
+                        channel="whatsapp",
+                        original_chat_id=memory_id,
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
+                log.info(
+                    "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
+                    clean_sender,
+                    property_id,
+                )
+                return JSONResponse({"status": "bookai_disabled"})
             # Registrar en RAM el mensaje entrante en el contexto compuesto de instancia.
             # La persistencia en DB la hará el flujo normal del agente para evitar duplicados.
             try:
@@ -306,21 +333,6 @@ def register_whatsapp_routes(app, state):
                 )
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
-            clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
-            bookai_enabled = _resolve_bookai_enabled(
-                state,
-                chat_id=str(sender or ""),
-                mem_id=str(memory_id or ""),
-                clean_id=clean_sender,
-                property_id=property_id,
-            )
-            if bookai_enabled is False:
-                log.info(
-                    "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
-                    clean_sender,
-                    property_id,
-                )
-                return JSONResponse({"status": "bookai_disabled"})
             target_chat_room = memory_id or sender
             rooms = [f"chat:{target_chat_room}"]
             if property_id is not None:

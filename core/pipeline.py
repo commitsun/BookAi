@@ -8,7 +8,7 @@ import re
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from core.config import ModelConfig, ModelTier
+from core.config import ModelConfig, ModelTier, Settings
 from core.language_manager import language_manager
 from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
@@ -192,6 +192,9 @@ def _resolve_bookai_enabled(
     clean_id: str,
     property_id: Any = None,
 ) -> Optional[bool]:
+    if Settings.BOOKAI_GLOBAL_ENABLED is False:
+        return False
+
     bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
     if not isinstance(bookai_flags, dict):
         return None
