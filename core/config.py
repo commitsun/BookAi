@@ -47,6 +47,13 @@ class Settings:
 
     # Roomdoo / PMS
     ROOMDOO_BEARER_TOKEN = os.getenv("ROOMDOO_BEARER_TOKEN")
+    ROOMDOO_BOOKAI_TOKEN_TEST = os.getenv("ROOMDOO_BOOKAI_TOKEN_TEST")
+    ROOMDOO_BOOKAI_TOKEN_ALDA = os.getenv("ROOMDOO_BOOKAI_TOKEN_ALDA")
+    # Mapa estático token->instancia para multi-instancia.
+    # Formatos soportados:
+    # - JSON: {"tokenA":"instA","tokenB":"instB"}
+    # - CSV: "instA=tokenA,instB=tokenB"
+    ROOMDOO_TOKEN_INSTANCE_MAP = os.getenv("ROOMDOO_TOKEN_INSTANCE_MAP", "")
     ROOMDOO_LOGIN_URL = os.getenv("ROOMDOO_LOGIN_URL")
     ROOMDOO_USERNAME = os.getenv("ROOMDOO_USERNAME")
     ROOMDOO_PASSWORD = os.getenv("ROOMDOO_PASSWORD")

@@ -2,11 +2,12 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from urllib.parse import unquote
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -93,19 +94,118 @@ class EscalationChatRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------------
-def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> None:
-    """Verifica Bearer Token contra el valor configurado."""
-    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
-    if not expected:
-        log.error("ROOMDOO_BEARER_TOKEN no configurado.")
-        raise HTTPException(status_code=401, detail="Token de integracion no configurado")
+def _parse_token_instance_map() -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
+    token_alda = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
+    if token_test:
+        parsed[token_test] = "bookai-test"
+    if token_alda:
+        parsed[token_alda] = "bookai-alda"
 
+    raw = (Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
+    if not raw:
+        return parsed
+
+    if raw.startswith("{"):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                for token, instance in payload.items():
+                    token_text = str(token or "").strip()
+                    instance_text = str(instance or "").strip()
+                    if token_text and instance_text:
+                        parsed[token_text] = instance_text
+        except Exception:
+            log.warning("ROOMDOO_TOKEN_INSTANCE_MAP en formato JSON inválido; se ignora.")
+        return parsed
+
+    for part in raw.split(","):
+        chunk = (part or "").strip()
+        if not chunk or "=" not in chunk:
+            continue
+        instance_id, token = chunk.split("=", 1)
+        instance_text = str(instance_id or "").strip()
+        token_text = str(token or "").strip()
+        if not instance_text or not token_text:
+            continue
+        parsed[token_text] = instance_text
+    return parsed
+
+
+def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
+    """Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Autenticacion Bearer requerida")
 
     token = auth_header.split(" ", 1)[1].strip()
+    token_map = _parse_token_instance_map()
+    if token_map:
+        instance_id = token_map.get(token)
+        if not instance_id:
+            raise HTTPException(status_code=403, detail="Token invalido")
+        return {"token": token, "instance_id": instance_id}
+
+    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
+    if not expected:
+        log.error("ROOMDOO_BEARER_TOKEN/ROOMDOO_TOKEN_INSTANCE_MAP no configurado.")
+        raise HTTPException(status_code=401, detail="Token de integracion no configurado")
     if token != expected:
         raise HTTPException(status_code=403, detail="Token invalido")
+    return {"token": token, "instance_id": None}
+
+
+def _instance_chat_sets(
+    instance_id: str,
+    channel: str,
+    property_id: Optional[str | int],
+) -> Tuple[set[str], set[str]]:
+    chat_ids: set[str] = set()
+    original_chat_ids: set[str] = set()
+
+    try:
+        query = (
+            supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+            .select("chat_id, original_chat_id")
+            .eq("instance_id", instance_id)
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        rows = (query.limit(2000).execute().data or [])
+        for row in rows:
+            chat = _clean_chat_id(str(row.get("chat_id") or ""))
+            original = str(row.get("original_chat_id") or "").strip()
+            if chat:
+                chat_ids.add(chat)
+            if original:
+                original_chat_ids.add(original)
+                tail = _clean_chat_id(original.split(":")[-1])
+                if tail:
+                    chat_ids.add(tail)
+    except Exception as exc:
+        log.warning("No se pudo cargar chat_reservations por instancia %s: %s", instance_id, exc)
+
+    try:
+        query = (
+            supabase.table("chat_history")
+            .select("conversation_id, original_chat_id")
+            .eq("channel", channel)
+            .like("original_chat_id", f"{instance_id}:%")
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        rows = (query.limit(3000).execute().data or [])
+        for row in rows:
+            cid = _clean_chat_id(str(row.get("conversation_id") or ""))
+            original = str(row.get("original_chat_id") or "").strip()
+            if cid:
+                chat_ids.add(cid)
+            if original:
+                original_chat_ids.add(original)
+    except Exception as exc:
+        log.warning("No se pudo cargar chat_history por instancia %s: %s", instance_id, exc)
+
+    return chat_ids, original_chat_ids
 
 
 def _clean_chat_id(chat_id: str) -> str:
@@ -813,12 +913,21 @@ def register_chatter_routes(app, state) -> None:
         page_size: int = Query(default=20, ge=1, le=100),
         channel: str = Query(default="whatsapp"),
         property_id: Optional[str] = Query(default=None),
-        _: None = Depends(_verify_bearer),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         channel = (channel or "whatsapp").strip().lower()
         if channel not in {"whatsapp", "telegram"}:
             raise HTTPException(status_code=422, detail="Canal no soportado")
         property_id = _normalize_property_id(property_id)
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        allowed_chat_ids: Optional[set[str]] = None
+        allowed_original_chat_ids: Optional[set[str]] = None
+        if instance_id:
+            chat_ids, original_chat_ids = _instance_chat_sets(instance_id, channel, property_id)
+            allowed_chat_ids = chat_ids
+            allowed_original_chat_ids = original_chat_ids
+            if not allowed_chat_ids and not allowed_original_chat_ids:
+                return {"page": page, "page_size": page_size, "items": []}
 
         target = page * page_size
         batch_size = max(200, page_size * 10)
@@ -829,7 +938,7 @@ def register_chatter_routes(app, state) -> None:
         while len(ordered_keys) < target:
             query = (
                 supabase.table("chat_history")
-                .select("conversation_id, property_id, content, created_at, client_name, channel")
+                .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
             )
             if property_id is not None:
@@ -843,9 +952,16 @@ def register_chatter_routes(app, state) -> None:
                 break
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
+                clean_cid = _clean_chat_id(cid)
+                original_chat_id = str(row.get("original_chat_id") or "").strip()
                 prop_id = row.get("property_id")
                 if property_id is not None and prop_id is None:
                     continue
+                if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
+                    in_chat_set = bool(clean_cid and clean_cid in allowed_chat_ids)
+                    in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
+                    if not in_chat_set and not in_original_set:
+                        continue
                 key = cid
                 content = (row.get("content") or "").strip()
                 if (
