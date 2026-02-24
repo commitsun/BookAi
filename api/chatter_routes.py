@@ -548,6 +548,7 @@ def _instance_prefixes(instance_id: Optional[str]) -> set[str]:
 def _filter_pending_by_instance(
     grouped: Dict[str, List[Dict[str, Any]]],
     instance_id: Optional[str],
+    allowed_chat_ids: Optional[set[str]] = None,
 ) -> Dict[str, List[Dict[str, Any]]]:
     if not instance_id:
         return grouped
@@ -563,7 +564,11 @@ def _filter_pending_by_instance(
             if not guest_chat_id:
                 continue
             if ":" not in guest_chat_id:
-                # Sin prefijo de instancia no podemos asegurar origen: se descarta en modo multi-instancia.
+                # Compatibilidad: escalaciones legacy pueden venir sin prefijo de instancia.
+                # Si el chat está dentro del conjunto permitido de la instancia, se conserva.
+                guest_clean = _clean_chat_id(guest_chat_id)
+                if allowed_chat_ids and guest_clean and guest_clean in allowed_chat_ids:
+                    kept.append(esc)
                 continue
             head = guest_chat_id.split(":", 1)[0].strip()
             head_clean = _clean_chat_id(head)
@@ -683,6 +688,45 @@ def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, lis
             key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min,
         )
     return result
+
+
+def _pending_snapshot_for_chat(
+    chat_id: str,
+    property_id: Optional[str | int],
+    memory_manager: Any = None,
+) -> Dict[str, Any]:
+    """Estado consolidado de la última escalación pendiente para un chat."""
+    pending = list_pending_escalations_for_chat(
+        chat_id,
+        limit=100,
+        property_id=property_id,
+    ) or []
+    if not pending:
+        return {
+            "needs_action": None,
+            "needs_action_type": None,
+            "needs_action_reason": None,
+            "proposed_response": None,
+            "is_final_response": False,
+            "escalation_messages": None,
+        }
+
+    key = _pending_compound_key(chat_id, property_id)
+    grouped = {key: pending}
+    pending_map = _pending_actions(grouped, memory_manager=memory_manager)
+    pending_reason_map = _pending_reasons(grouped, memory_manager=memory_manager)
+    pending_type_map = _pending_types(grouped)
+    proposed_map = _pending_responses(grouped)
+    pending_messages_map = _pending_messages(grouped)
+    proposed = proposed_map.get(key)
+    return {
+        "needs_action": pending_map.get(key),
+        "needs_action_type": pending_type_map.get(key),
+        "needs_action_reason": pending_reason_map.get(key),
+        "proposed_response": proposed,
+        "is_final_response": bool(proposed),
+        "escalation_messages": pending_messages_map.get(key),
+    }
 
 
 def _strip_draft_instruction_block(text: str) -> str:
@@ -1107,7 +1151,11 @@ def register_chatter_routes(app, state) -> None:
 
         page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
         pending_grouped = _pending_by_chat(property_id=property_id)
-        pending_grouped = _filter_pending_by_instance(pending_grouped, instance_id=instance_id)
+        pending_grouped = _filter_pending_by_instance(
+            pending_grouped,
+            instance_id=instance_id,
+            allowed_chat_ids=allowed_chat_ids,
+        )
         pending_map = _pending_actions(
             pending_grouped,
             memory_manager=getattr(state, "memory_manager", None),
@@ -1548,6 +1596,11 @@ def register_chatter_routes(app, state) -> None:
                 "channel": payload.channel.lower(),
                 "last_message": outgoing_message,
                 "last_message_at": now_iso,
+                **_pending_snapshot_for_chat(
+                    chat_id,
+                    property_id,
+                    memory_manager=getattr(state, "memory_manager", None),
+                ),
             },
         )
 
@@ -1987,6 +2040,11 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": clean_id,
                 "property_id": property_id,
                 "bookai_enabled": payload.bookai_enabled,
+                **_pending_snapshot_for_chat(
+                    clean_id,
+                    property_id,
+                    memory_manager=getattr(state, "memory_manager", None),
+                ),
             },
         )
 
@@ -2035,6 +2093,11 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": clean_id,
                 "property_id": property_id,
                 "read_status": True,
+                **_pending_snapshot_for_chat(
+                    clean_id,
+                    property_id,
+                    memory_manager=getattr(state, "memory_manager", None),
+                ),
             },
         )
 
@@ -2393,6 +2456,11 @@ def register_chatter_routes(app, state) -> None:
                 "channel": "whatsapp",
                 "last_message": rendered or template_name,
                 "last_message_at": now_iso,
+                **_pending_snapshot_for_chat(
+                    chat_id,
+                    property_id,
+                    memory_manager=getattr(state, "memory_manager", None),
+                ),
             },
         )
 
