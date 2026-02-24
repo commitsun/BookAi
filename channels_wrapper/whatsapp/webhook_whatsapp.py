@@ -49,6 +49,84 @@ def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | Non
         log.debug("No se pudo enviar read receipt: %s", exc)
 
 
+def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | None:
+    """Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook."""
+    try:
+        from core.db import supabase
+        from core.config import Settings
+    except Exception:
+        return None
+
+    raw_memory = str(memory_id or "").strip()
+    raw_sender = str(sender or "").strip()
+    clean_sender = re.sub(r"\D", "", raw_sender).strip()
+
+    # 1) Preferir contexto compuesto exacto (original_chat_id = instancia:telefono)
+    if raw_memory:
+        try:
+            rows = (
+                supabase.table("chat_history")
+                .select("property_id, created_at")
+                .eq("channel", "whatsapp")
+                .eq("original_chat_id", raw_memory)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data
+                or []
+            )
+            for row in rows:
+                prop = row.get("property_id")
+                if prop is not None:
+                    return prop
+        except Exception:
+            pass
+
+    # 2) Fallback por conversation_id (sender limpio o memory_id)
+    for cid in [raw_memory, raw_sender, clean_sender]:
+        if not cid:
+            continue
+        try:
+            rows = (
+                supabase.table("chat_history")
+                .select("property_id, created_at")
+                .eq("channel", "whatsapp")
+                .eq("conversation_id", cid)
+                .order("created_at", desc=True)
+                .limit(50)
+                .execute()
+                .data
+                or []
+            )
+            for row in rows:
+                prop = row.get("property_id")
+                if prop is not None:
+                    return prop
+        except Exception:
+            continue
+
+    # 3) Último recurso: chat_reservations por teléfono limpio.
+    if clean_sender:
+        try:
+            rows = (
+                supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+                .select("property_id")
+                .eq("chat_id", clean_sender)
+                .limit(50)
+                .execute()
+                .data
+                or []
+            )
+            for row in rows:
+                prop = row.get("property_id")
+                if prop is not None:
+                    return prop
+        except Exception:
+            pass
+
+    return None
+
+
 def register_whatsapp_routes(app, state):
     """Registra los endpoints de webhook de WhatsApp en la app FastAPI."""
 
@@ -185,6 +263,10 @@ def register_whatsapp_routes(app, state):
                         if len(prop_ids) == 1:
                             property_id = next(iter(prop_ids))
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                if property_id is None:
+                    property_id = _resolve_property_id_fallback(memory_id, sender)
+                    if property_id is not None:
+                        state.memory_manager.set_flag(memory_id, "property_id", property_id)
                 # Limpiar cualquier property_id heredado del sender global para evitar mezcla.
                 if sender:
                     state.memory_manager.clear_flag(sender, "property_id")

@@ -303,27 +303,63 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
         # Fallback: busca en DB el último property_id registrado para el chat.
         try:
             from core.db import supabase
+            from core.config import Settings
+            clean_chat_base = _clean_chat_id(raw) if raw else None
+            # Prioriza contexto compuesto por original_chat_id (instancia:telefono) si existe.
+            if raw:
+                rows = (
+                    supabase.table("chat_history")
+                    .select("property_id")
+                    .eq("channel", "whatsapp")
+                    .eq("original_chat_id", raw)
+                    .order("created_at", desc=True)
+                    .limit(50)
+                    .execute()
+                    .data
+                    or []
+                )
+                for row in rows:
+                    prop_id = row.get("property_id")
+                    if prop_id is not None:
+                        return prop_id
             for cid in candidates:
                 if not cid:
                     continue
                 clean = _clean_chat_id(cid) or cid
-                resp = (
+                rows = (
                     supabase.table("chat_history")
                     .select("property_id")
+                    .eq("channel", "whatsapp")
                     .eq("conversation_id", clean)
                     .order("created_at", desc=True)
-                    .limit(1)
+                    .limit(50)
                     .execute()
+                    .data
+                    or []
                 )
-                rows = resp.data or []
-                if rows:
-                    prop_id = rows[0].get("property_id")
+                for row in rows:
+                    prop_id = row.get("property_id")
                     if prop_id is not None:
                         # cache en memoria si es posible
                         try:
                             _MEMORY_MANAGER.set_flag(cid, "property_id", prop_id)
                         except Exception:
                             pass
+                        return prop_id
+            # Último recurso: tabla de reservas por chat limpio.
+            if clean_chat_base:
+                rows = (
+                    supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
+                    .select("property_id")
+                    .eq("chat_id", clean_chat_base)
+                    .limit(50)
+                    .execute()
+                    .data
+                    or []
+                )
+                for row in rows:
+                    prop_id = row.get("property_id")
+                    if prop_id is not None:
                         return prop_id
         except Exception:
             pass

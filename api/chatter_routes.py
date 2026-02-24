@@ -690,6 +690,32 @@ def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, lis
     return result
 
 
+def _pending_property_for_guest(
+    grouped: Dict[str, List[Dict[str, Any]]],
+    guest_chat_id: str,
+) -> Optional[str | int]:
+    """Si existe una única property en pendientes para el huésped, devuélvela."""
+    guest_key = _normalize_pending_key(guest_chat_id)
+    if not guest_key:
+        return None
+    matches = [k for k in grouped.keys() if str(k).startswith(f"{guest_key}|")]
+    if not matches:
+        return None
+    prop_values: set[str] = set()
+    for key in matches:
+        _, _, prop = str(key).partition("|")
+        prop_clean = (prop or "").strip()
+        if not prop_clean or prop_clean == "*":
+            continue
+        prop_values.add(prop_clean)
+    if len(prop_values) != 1:
+        return None
+    value = next(iter(prop_values))
+    if str(value).isdigit():
+        return int(value)
+    return value
+
+
 def _pending_snapshot_for_chat(
     chat_id: str,
     property_id: Optional[str | int],
@@ -1201,6 +1227,8 @@ def register_chatter_routes(app, state) -> None:
             last = summaries.get(key, {})
             cid = str(last.get("conversation_id") or "").strip()
             prop_id = last.get("property_id")
+            if prop_id is None and cid:
+                prop_id = _resolve_property_id_from_history(cid, channel)
             phone = _extract_guest_phone(cid)
             folio_id = None
             reservation_locator = None
@@ -1226,6 +1254,8 @@ def register_chatter_routes(app, state) -> None:
                 reservation_property_filter = property_id if property_id is not None else None
                 active = get_active_chat_reservation(chat_id=cid, property_id=reservation_property_filter)
                 if active:
+                    if prop_id is None and isinstance(active, dict):
+                        prop_id = active.get("property_id") if active.get("property_id") is not None else prop_id
                     folio_id = active.get("folio_id") or folio_id
                     reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else reservation_locator
                     checkin = active.get("checkin") or checkin
@@ -1241,6 +1271,10 @@ def register_chatter_routes(app, state) -> None:
                         memory_manager.set_flag(cid, "checkout", checkout)
             except Exception:
                 pass
+            if prop_id is None and cid:
+                pending_prop = _pending_property_for_guest(pending_grouped, cid)
+                if pending_prop is not None:
+                    prop_id = pending_prop
             items.append(
                 {
                     "chat_id": cid,
