@@ -324,10 +324,27 @@ def fetch_property_by_code(table: str, instance_id: str) -> Dict[str, Any]:
 def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any]]:
     """
     Devuelve multiples properties por instance_id si existen.
-    Usa MCP como fuente única.
+    Prioriza MCP y cae a Supabase cuando sea necesario.
     """
     mcp_rows = _fetch_properties_by_code_mcp(table, instance_id)
-    return mcp_rows or []
+    if mcp_rows:
+        return mcp_rows
+    if supabase and table and instance_id:
+        try:
+            iid = str(instance_id).strip()
+            resp = (
+                supabase.table(table)
+                .select("*")
+                .or_(f"instance_id.eq.{iid},instance_url.eq.{iid}")
+                .limit(50)
+                .execute()
+            )
+            rows = resp.data or []
+            if rows:
+                return rows
+        except Exception as exc:
+            log.warning("Fallback supabase properties by code fallo: %s", exc)
+    return []
 
 
 def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
@@ -374,6 +391,20 @@ def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
                 return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_id fallo: %s", exc)
+        try:
+            resp = (
+                supabase.table(table)
+                .select("*")
+                .eq("id", property_id)
+                .limit(1)
+                .execute()
+            )
+            rows = resp.data or []
+            if rows:
+                log.info("✅ Property found in Supabase by id: table=%s id=%s", table, property_id)
+                return rows[0]
+        except Exception:
+            pass
     payload = {"tabla": table, "property_id": property_id}
     data = _post_json(PROPERTY_BY_ID_WEBHOOK, payload)
     if data:

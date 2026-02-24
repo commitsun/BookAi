@@ -114,21 +114,36 @@ class MemoryManager:
                 "instance_hotel_code",
             )
             if instance_id:
-                from core.instance_context import fetch_property_by_id, DEFAULT_PROPERTY_TABLE
+                from core.instance_context import fetch_property_by_id, fetch_instance_by_code, DEFAULT_PROPERTY_TABLE
 
                 table = self.get_flag(conversation_id, "property_table") or DEFAULT_PROPERTY_TABLE
                 payload = fetch_property_by_id(str(table), prop_id) if table else {}
                 prop_instance = payload.get("instance_id") or payload.get("instance_url")
-                if prop_instance and str(prop_instance).strip() and str(instance_id).strip():
-                    if str(prop_instance).strip() != str(instance_id).strip():
-                        log.warning(
-                            "⚠️ property_id no coincide con instance_id; ignorando. chat_id=%s property_id=%s instance_id=%s prop_instance=%s",
-                            conversation_id,
-                            prop_id,
-                            instance_id,
-                            prop_instance,
-                        )
-                        return None
+                instance_aliases = {str(instance_id).strip()}
+                try:
+                    inst_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+                    for key in ("instance_id", "instance_url"):
+                        val = inst_payload.get(key)
+                        if val:
+                            instance_aliases.add(str(val).strip())
+                except Exception:
+                    pass
+                property_aliases = set()
+                if prop_instance:
+                    property_aliases.add(str(prop_instance).strip())
+                for key in ("instance_id", "instance_url"):
+                    val = payload.get(key)
+                    if val:
+                        property_aliases.add(str(val).strip())
+                if instance_aliases and property_aliases and instance_aliases.isdisjoint(property_aliases):
+                    log.warning(
+                        "⚠️ property_id no coincide con instance_id; ignorando. chat_id=%s property_id=%s instance_id=%s prop_instance=%s",
+                        conversation_id,
+                        prop_id,
+                        instance_id,
+                        prop_instance,
+                    )
+                    return None
         except Exception:
             return None
         return prop_id
