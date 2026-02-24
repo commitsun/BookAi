@@ -6,12 +6,12 @@ import logging
 import os
 import re
 import json
-import asyncio
 import time
 from urllib.parse import urlsplit
 from typing import Any, Dict, Optional
 
 import requests
+from core.async_bridge import run_coro_sync
 
 try:
     from core.db import supabase
@@ -84,17 +84,7 @@ def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
 
 
 def _run_async(coro):
-    try:
-        loop = asyncio.get_event_loop()
-    except RuntimeError:
-        loop = asyncio.new_event_loop()
-        asyncio.set_event_loop(loop)
-
-    if loop.is_running():
-        import nest_asyncio
-
-        nest_asyncio.apply()
-    return loop.run_until_complete(coro)
+    return run_coro_sync(coro)
 
 
 def _mcp_tool_matches(name: str, description: str | None = None) -> bool:
