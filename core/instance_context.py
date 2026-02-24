@@ -469,7 +469,7 @@ def _resolve_property_table(instance_payload: Dict[str, Any]) -> Optional[str]:
 
 
 def _resolve_property_id(payload: Dict[str, Any]) -> Optional[Any]:
-    for key in ("property_id", "propertyId", "pms_property_id", "pmsPropertyId"):
+    for key in ("property_id", "propertyId", "pms_property_id", "pmsPropertyId", "id"):
         if key in payload and payload.get(key) is not None:
             return payload.get(key)
     return None

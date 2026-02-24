@@ -77,6 +77,8 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
             )
             for row in rows:
                 prop = row.get("property_id")
+                if prop is None:
+                    prop = row.get("id")
                 if prop is not None:
                     return prop
         except Exception:
@@ -100,6 +102,8 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
             )
             for row in rows:
                 prop = row.get("property_id")
+                if prop is None:
+                    prop = row.get("id")
                 if prop is not None:
                     return prop
         except Exception:
@@ -119,6 +123,8 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
             )
             for row in rows:
                 prop = row.get("property_id")
+                if prop is None:
+                    prop = row.get("id")
                 if prop is not None:
                     return prop
         except Exception:
@@ -256,9 +262,12 @@ def register_whatsapp_routes(app, state):
                     if isinstance(rows, list) and rows:
                         # Acepta múltiples filas si todas apuntan al mismo property_id.
                         prop_ids = {
-                            row.get("property_id")
+                            (row.get("property_id") if isinstance(row, dict) else None)
+                            if (isinstance(row, dict) and row.get("property_id") is not None)
+                            else (row.get("id") if isinstance(row, dict) else None)
                             for row in rows
-                            if isinstance(row, dict) and row.get("property_id") is not None
+                            if isinstance(row, dict)
+                            and ((row.get("property_id") is not None) or (row.get("id") is not None))
                         }
                         if len(prop_ids) == 1:
                             property_id = next(iter(prop_ids))

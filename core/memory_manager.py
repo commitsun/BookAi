@@ -56,6 +56,45 @@ class MemoryManager:
             "pms_property_id",
         )
         if prop_id is None:
+            # 1) Fallback por historial (conversation/original_chat_id)
+            try:
+                hint = self.get_last_property_id_hint(conversation_id)
+            except Exception:
+                hint = None
+            if hint is not None:
+                try:
+                    self.set_flag(conversation_id, "property_id", hint)
+                except Exception:
+                    pass
+                return hint
+
+            # 2) Fallback por instancia cuando existe una única property asociada
+            try:
+                instance_id = self.get_flag(conversation_id, "instance_id") or self.get_flag(
+                    conversation_id,
+                    "instance_hotel_code",
+                )
+                if instance_id:
+                    from core.instance_context import fetch_properties_by_code, DEFAULT_PROPERTY_TABLE
+
+                    table = self.get_flag(conversation_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                    rows = fetch_properties_by_code(str(table), str(instance_id)) if table else []
+                    if isinstance(rows, list) and rows:
+                        prop_ids = {
+                            (row.get("property_id") if row.get("property_id") is not None else row.get("id"))
+                            for row in rows
+                            if isinstance(row, dict)
+                            and ((row.get("property_id") is not None) or (row.get("id") is not None))
+                        }
+                        if len(prop_ids) == 1:
+                            inferred = next(iter(prop_ids))
+                            try:
+                                self.set_flag(conversation_id, "property_id", inferred)
+                            except Exception:
+                                pass
+                            return inferred
+            except Exception:
+                pass
             return None
         # Si es un chat compuesto (instancia:telefono) y no hay instance_id, no arrastrar property_id.
         try:
