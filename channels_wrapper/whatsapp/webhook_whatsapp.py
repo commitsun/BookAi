@@ -175,9 +175,15 @@ def register_whatsapp_routes(app, state):
 
                     table = state.memory_manager.get_flag(memory_id, "property_table") or DEFAULT_PROPERTY_TABLE
                     rows = fetch_properties_by_code(table, str(instance_id)) if table else []
-                    if isinstance(rows, list) and len(rows) == 1:
-                        property_id = rows[0].get("property_id")
-                        if property_id is not None:
+                    if isinstance(rows, list) and rows:
+                        # Acepta múltiples filas si todas apuntan al mismo property_id.
+                        prop_ids = {
+                            row.get("property_id")
+                            for row in rows
+                            if isinstance(row, dict) and row.get("property_id") is not None
+                        }
+                        if len(prop_ids) == 1:
+                            property_id = next(iter(prop_ids))
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
                 # Limpiar cualquier property_id heredado del sender global para evitar mezcla.
                 if sender:
@@ -209,6 +215,7 @@ def register_whatsapp_routes(app, state):
                         role="user",
                         content=text,
                         channel="whatsapp",
+                        property_id=property_id,
                         original_chat_id=memory_id,
                     )
                 except Exception as exc:

@@ -186,7 +186,8 @@ def save_message(
 
         try:
             supabase.table(table).insert(data).execute()
-        except Exception:
+        except Exception as exc:
+            err = str(exc).lower()
             retry = False
             if "escalation_id" in data:
                 data.pop("escalation_id", None)
@@ -206,7 +207,8 @@ def save_message(
             if "user_last_name2" in data:
                 data.pop("user_last_name2", None)
                 retry = True
-            if "property_id" in data:
+            # Conservar property_id salvo error explícito de esa columna.
+            if "property_id" in data and "property_id" in err:
                 data.pop("property_id", None)
                 retry = True
             if "original_chat_id" in data:
