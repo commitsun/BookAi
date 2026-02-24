@@ -10,7 +10,7 @@ from typing import Any, Optional
 
 from core.config import ModelConfig, ModelTier
 from core.language_manager import language_manager
-from core.main_agent import create_main_agent
+from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
 from core.escalation_db import get_latest_pending_escalation
 
@@ -696,6 +696,9 @@ async def process_user_message(
                 hotel_name=hotel_name,
                 chat_history=history,
             )
+            if response_raw == NO_GUEST_REPLY:
+                log.info("🔇 Respuesta silenciosa (solo interno) para chat_id=%s", mem_id)
+                return None
 
         if not response_raw:
             await state.interno_agent.escalate(
@@ -713,37 +716,6 @@ async def process_user_message(
         # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
         response_raw = _ensure_guest_language(response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
-        if response_raw:
-            llm_for_escalation = semantic_llm
-            if llm_for_escalation is None:
-                try:
-                    llm_for_escalation = ModelConfig.get_llm(ModelTier.INTERNAL)
-                except Exception:
-                    llm_for_escalation = None
-            promises_escalation = await _llm_response_promises_human_escalation(
-                llm_for_escalation,
-                user_message=user_message,
-                assistant_response=response_raw,
-            )
-        else:
-            promises_escalation = False
-
-        if response_raw and promises_escalation:
-            has_pending = _has_recent_pending_escalation(mem_id, state)
-            in_progress = False
-            try:
-                in_progress = bool(state.memory_manager.get_flag(mem_id, "escalation_in_progress"))
-            except Exception:
-                in_progress = False
-            if not has_pending and not in_progress:
-                await state.interno_agent.escalate(
-                    guest_chat_id=escalation_chat_id,
-                    guest_message=user_message,
-                    escalation_type="info_not_found",
-                    reason="La respuesta al huésped indicó consulta con encargado; se fuerza escalación real.",
-                    context=f"Respuesta enviada/prometida al huésped: {response_raw}",
-                    property_id=property_id,
-                )
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,

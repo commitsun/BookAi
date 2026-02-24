@@ -35,7 +35,6 @@ from core.utils.time_context import get_time_context
 from core.utils.dynamic_context import build_dynamic_context_from_memory
 from core.memory_manager import MemoryManager
 from core.config import ModelConfig, ModelTier
-from core.utils.escalation_messages import EscalationMessages
 from core.instance_context import (
     DEFAULT_PROPERTY_TABLE,
     fetch_property_by_id,
@@ -59,6 +58,7 @@ FLAG_PROPERTY_CITY_FILTER_PENDING = "property_city_filter_pending"
 FLAG_PROPERTY_ZONE_FILTER_PENDING = "property_zone_filter_pending"
 FLAG_PROPERTY_SELECTED_CITY = "property_selected_city"
 FLAG_PROPERTY_LAST_PRESENTED_CANDIDATES = "property_last_presented_candidates"
+NO_GUEST_REPLY = "__NO_GUEST_REPLY__"
 
 
 class MainAgent:
@@ -197,7 +197,7 @@ class MainAgent:
                 escalation_type=escalation_type,
                 context="Escalación confirmada por el huésped",
             )
-            return self._localize(chat_id, EscalationMessages.get_by_context("info"))
+            return NO_GUEST_REPLY
 
         if decision is False:
             self.memory_manager.clear_flag(chat_id, FLAG_ESCALATION_CONFIRMATION_PENDING)
