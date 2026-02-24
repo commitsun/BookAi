@@ -1940,7 +1940,10 @@ def register_chatter_routes(app, state) -> None:
         return {"items": results}
 
     @router.post("/templates/send")
-    async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
+    async def send_template(
+        payload: SendTemplateRequest,
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
         property_id = _normalize_property_id(payload.property_id)
         if payload.channel.lower() != "whatsapp":
@@ -1949,7 +1952,11 @@ def register_chatter_routes(app, state) -> None:
         registry = _template_registry(state)
         template_code = payload.template_code
         language = (payload.language or "es").lower()
-        instance_id = (payload.instance_id or "").strip() or None
+        payload_instance_id = (payload.instance_id or "").strip() or None
+        token_instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        if payload_instance_id and token_instance_id and payload_instance_id != token_instance_id:
+            raise HTTPException(status_code=403, detail="instance_id no coincide con el token")
+        instance_id = payload_instance_id or token_instance_id
 
         template_def = None
         if registry:
@@ -1978,7 +1985,8 @@ def register_chatter_routes(app, state) -> None:
             else:
                 parameters = list(raw_params)
 
-        context_id = _resolve_whatsapp_context_id(state, chat_id)
+        context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+        session_id = context_id or chat_id
         folio_id = None
         reservation_locator = None
         checkin = None
@@ -2004,34 +2012,34 @@ def register_chatter_routes(app, state) -> None:
 
         if state.memory_manager:
             if property_id is not None:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "property_id", property_id)
             if instance_id:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "instance_id", instance_id)
                         state.memory_manager.set_flag(mem_id, "instance_hotel_code", instance_id)
             if payload.parameters:
                 inferred_name = _extract_property_name(payload.parameters)
                 if inferred_name:
-                    for mem_id in [context_id, chat_id]:
+                    for mem_id in [session_id, context_id, chat_id]:
                         if mem_id:
                             state.memory_manager.set_flag(mem_id, "property_name", inferred_name)
             if folio_id:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "folio_id", folio_id)
             if reservation_locator:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "reservation_locator", reservation_locator)
             if checkin:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "checkin", checkin)
             if checkout:
-                for mem_id in [context_id, chat_id]:
+                for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "checkout", checkout)
             ensure_instance_credentials(state.memory_manager, session_id)

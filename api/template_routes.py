@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import logging
 import re
 from typing import Any, Dict, Optional
@@ -97,19 +98,67 @@ class SendTemplateRequest(BaseModel):
 # ---------------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------------
-def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> None:
-    """Verifica Bearer Token contra el valor configurado."""
-    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
-    if not expected:
-        log.error("ROOMDOO_BEARER_TOKEN no configurado.")
-        raise HTTPException(status_code=401, detail="Token de integración no configurado")
+def _parse_token_instance_map() -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
+    token_alda = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
+    instance_test = str(Settings.ROOMDOO_INSTANCE_ID_TEST or "").strip()
+    instance_alda = str(Settings.ROOMDOO_INSTANCE_ID_ALDA or "").strip()
+    if token_test:
+        parsed[token_test] = instance_test or "bookai-test"
+    if token_alda:
+        parsed[token_alda] = instance_alda or "bookai-alda"
 
+    raw = (Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
+    if not raw:
+        return parsed
+
+    if raw.startswith("{"):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                for token, instance in payload.items():
+                    token_text = str(token or "").strip()
+                    instance_text = str(instance or "").strip()
+                    if token_text and instance_text:
+                        parsed[token_text] = instance_text
+        except Exception:
+            log.warning("ROOMDOO_TOKEN_INSTANCE_MAP en formato JSON inválido; se ignora.")
+        return parsed
+
+    for part in raw.split(","):
+        chunk = (part or "").strip()
+        if not chunk or "=" not in chunk:
+            continue
+        instance_id, token = chunk.split("=", 1)
+        instance_text = str(instance_id or "").strip()
+        token_text = str(token or "").strip()
+        if not instance_text or not token_text:
+            continue
+        parsed[token_text] = instance_text
+    return parsed
+
+
+def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
+    """Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Autenticación Bearer requerida")
 
     token = auth_header.split(" ", 1)[1].strip()
+    token_map = _parse_token_instance_map()
+    if token_map:
+        instance_id = token_map.get(token)
+        if not instance_id:
+            raise HTTPException(status_code=403, detail="Token inválido")
+        return {"token": token, "instance_id": instance_id}
+
+    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
+    if not expected:
+        log.error("ROOMDOO_BEARER_TOKEN/ROOMDOO_TOKEN_INSTANCE_MAP no configurado.")
+        raise HTTPException(status_code=401, detail="Token de integración no configurado")
     if token != expected:
         raise HTTPException(status_code=403, detail="Token inválido")
+    return {"token": token, "instance_id": None}
 
 
 def _normalize_phone(phone: str) -> str:
@@ -394,10 +443,22 @@ def _resolve_whatsapp_context_id(
         return None
 
     clean = _normalize_phone(chat_id) or str(chat_id).strip()
+    normalized_instance = str(instance_id or "").strip() or None
     if clean:
         last_mem = memory_manager.get_flag(clean, "last_memory_id")
         if isinstance(last_mem, str) and last_mem.strip():
-            return last_mem.strip()
+            candidate = last_mem.strip()
+            if not normalized_instance:
+                return candidate
+            try:
+                candidate_instance = (
+                    memory_manager.get_flag(candidate, "instance_id")
+                    or memory_manager.get_flag(candidate, "instance_hotel_code")
+                )
+            except Exception:
+                candidate_instance = None
+            if str(candidate_instance or "").strip() == normalized_instance:
+                return candidate
 
     suffix = f":{clean}" if clean else ""
     if not suffix:
@@ -408,8 +469,19 @@ def _resolve_whatsapp_context_id(
         if isinstance(store, dict):
             for key in list(store.keys()):
                 if isinstance(key, str) and key.endswith(suffix):
-                    memory_manager.set_flag(clean, "last_memory_id", key.strip())
-                    return key.strip()
+                    candidate = key.strip()
+                    if normalized_instance:
+                        try:
+                            candidate_instance = (
+                                memory_manager.get_flag(candidate, "instance_id")
+                                or memory_manager.get_flag(candidate, "instance_hotel_code")
+                            )
+                        except Exception:
+                            candidate_instance = None
+                        if str(candidate_instance or "").strip() != normalized_instance:
+                            continue
+                    memory_manager.set_flag(clean, "last_memory_id", candidate)
+                    return candidate
 
     return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
 
@@ -432,14 +504,21 @@ def register_template_routes(app, state) -> None:
     registry: TemplateRegistry = getattr(state, "template_registry", None)
 
     @router.post("/send-template")
-    async def send_template(payload: SendTemplateRequest, _: None = Depends(_verify_bearer)):
+    async def send_template(
+        payload: SendTemplateRequest,
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
         try:
             property_code = payload.source.hotel.external_code
-            instance_id = (
+            payload_instance_id = (
                 (payload.meta.instance_id if payload.meta else None)
                 or payload.source.instance_id
                 or payload.source.instance_url
             )
+            token_instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+            if payload_instance_id and token_instance_id and payload_instance_id != token_instance_id:
+                raise HTTPException(status_code=403, detail="instance_id no coincide con el token")
+            instance_id = token_instance_id or payload_instance_id
             instance_id = _validate_instance_id(instance_id)
             language = (payload.template.language or "es").lower()
             template_code = payload.template.code
@@ -659,6 +738,20 @@ def register_template_routes(app, state) -> None:
                     log.warning("No se pudo persistir reserva en tabla: %s", exc)
 
             ensure_instance_credentials(state.memory_manager, session_id)
+            # Refuerzo: fija credenciales WA de la instancia resuelta por token,
+            # evitando arrastre de otra instancia para el mismo guest chat_id.
+            try:
+                inst_payload = fetch_instance_by_code(instance_id) if instance_id else {}
+                if inst_payload:
+                    for target in [session_id, context_id, chat_id]:
+                        if not target:
+                            continue
+                        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                            val = inst_payload.get(key)
+                            if val:
+                                state.memory_manager.set_flag(target, key, val)
+            except Exception as exc:
+                log.warning("No se pudo reforzar credenciales WA por instance_id: %s", exc)
 
             outbound_parameters = parameters
             if template_def:
