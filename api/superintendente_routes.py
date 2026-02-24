@@ -177,6 +177,14 @@ def _render_internal_super_message(content: str) -> Optional[str]:
     return None
 
 
+def _format_history_content(content: str) -> str:
+    """Normaliza content para render de historial en frontend."""
+    text = str(content or "")
+    if "|" not in text:
+        return text
+    return text.replace("|", ";")
+
+
 def _sanitize_generated_title(raw: str) -> Optional[str]:
     text = re.sub(r"\s+", " ", str(raw or "").strip())
     if not text:
@@ -2658,7 +2666,7 @@ def register_superintendente_routes(app, state) -> None:
             item["role"] = _normalize_super_role(raw_role)
             item["sender"] = _normalize_super_sender(raw_role)
             item["message"] = content
-            item["content"] = content
+            item["content"] = _format_history_content(content)
             item["structured"] = structured
             item["structured_payload"] = structured_payload or structured
             item["_rendered_internal"] = bool(rendered_internal)
