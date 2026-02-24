@@ -391,6 +391,13 @@ async def process_user_message(
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
         if state.memory_manager:
+            if property_id is not None:
+                # Asegura que los saves posteriores persistan property_id en chat_history.
+                for key in [mem_id, chat_id]:
+                    try:
+                        state.memory_manager.set_flag(key, "property_id", property_id)
+                    except Exception:
+                        pass
             state.memory_manager.set_flag(mem_id, "default_channel", channel)
             try:
                 prev_lang = state.memory_manager.get_flag(mem_id, "guest_lang")
