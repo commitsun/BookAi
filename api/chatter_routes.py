@@ -1244,7 +1244,7 @@ def register_chatter_routes(app, state) -> None:
                     # Evita mezcla entre instancias cuando el mismo teléfono existe en ambas:
                     # con original_chat_id presente, la validación fuerte debe ser por original.
                     if original_chat_id:
-                        if not in_original_set:
+                        if not in_original_set and not in_chat_set:
                             continue
                     elif not in_chat_set and not in_original_set:
                         continue
@@ -1496,7 +1496,7 @@ def register_chatter_routes(app, state) -> None:
                 in_chat_set = bool(cid_clean and cid_clean in allowed_chat_ids)
                 in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
                 if original_chat_id:
-                    if not in_original_set:
+                    if not in_original_set and not in_chat_set:
                         continue
                 elif not in_chat_set and not in_original_set:
                     continue
@@ -1679,6 +1679,23 @@ def register_chatter_routes(app, state) -> None:
             resolved_original_chat_id = context_id or (
                 str(session_id).strip() if isinstance(session_id, str) and ":" in session_id else None
             )
+            if not resolved_original_chat_id and state.memory_manager:
+                try:
+                    last_mem = (
+                        state.memory_manager.get_flag(chat_id, "last_memory_id")
+                        or state.memory_manager.get_flag(session_id, "last_memory_id")
+                    )
+                    if isinstance(last_mem, str) and ":" in last_mem:
+                        resolved_original_chat_id = last_mem.strip()
+                except Exception:
+                    pass
+            if not resolved_original_chat_id and instance_id:
+                try:
+                    built_ctx = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+                    if isinstance(built_ctx, str) and ":" in built_ctx:
+                        resolved_original_chat_id = built_ctx.strip()
+                except Exception:
+                    pass
             state.memory_manager.save(
                 session_id,
                 role,
