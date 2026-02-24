@@ -164,6 +164,20 @@ def _instance_chat_sets(
 ) -> Tuple[set[str], set[str]]:
     chat_ids: set[str] = set()
     original_chat_ids: set[str] = set()
+    original_prefixes: set[str] = {str(instance_id or "").strip()}
+    try:
+        instance_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+        instance_number = _resolve_instance_number(instance_payload)
+        if instance_number:
+            original_prefixes.add(str(instance_number).strip())
+            clean_number = _clean_chat_id(instance_number)
+            if clean_number:
+                original_prefixes.add(clean_number)
+        phone_id = str(instance_payload.get("whatsapp_phone_id") or "").strip()
+        if phone_id:
+            original_prefixes.add(phone_id)
+    except Exception as exc:
+        log.warning("No se pudo resolver payload de instancia %s: %s", instance_id, exc)
 
     try:
         query = (
@@ -187,31 +201,61 @@ def _instance_chat_sets(
     except Exception as exc:
         log.warning("No se pudo cargar chat_reservations por instancia %s: %s", instance_id, exc)
 
-    try:
-        query = (
-            supabase.table("chat_history")
-            .select("conversation_id, original_chat_id")
-            .eq("channel", channel)
-            .like("original_chat_id", f"{instance_id}:%")
-        )
-        if property_id is not None:
-            query = query.eq("property_id", property_id)
-        rows = (query.limit(3000).execute().data or [])
-        for row in rows:
-            cid = _clean_chat_id(str(row.get("conversation_id") or ""))
-            original = str(row.get("original_chat_id") or "").strip()
-            if cid:
-                chat_ids.add(cid)
-            if original:
-                original_chat_ids.add(original)
-    except Exception as exc:
-        log.warning("No se pudo cargar chat_history por instancia %s: %s", instance_id, exc)
+    for prefix in [p for p in original_prefixes if p]:
+        try:
+            query = (
+                supabase.table("chat_history")
+                .select("conversation_id, original_chat_id")
+                .eq("channel", channel)
+                .like("original_chat_id", f"{prefix}:%")
+            )
+            if property_id is not None:
+                query = query.eq("property_id", property_id)
+            rows = (query.limit(3000).execute().data or [])
+            for row in rows:
+                cid = _clean_chat_id(str(row.get("conversation_id") or ""))
+                original = str(row.get("original_chat_id") or "").strip()
+                if cid:
+                    chat_ids.add(cid)
+                if original:
+                    original_chat_ids.add(original)
+        except Exception as exc:
+            log.warning(
+                "No se pudo cargar chat_history por instancia %s prefijo %s: %s",
+                instance_id,
+                prefix,
+                exc,
+            )
 
     return chat_ids, original_chat_ids
 
 
 def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
+
+
+def _extract_guest_phone(chat_id: str) -> str:
+    raw = str(chat_id or "").strip()
+    if ":" in raw:
+        raw = raw.split(":")[-1]
+    clean = _clean_chat_id(raw)
+    return clean or raw
+
+
+def _to_international_phone(phone: str) -> Optional[str]:
+    raw = str(phone or "").strip()
+    if not raw:
+        return None
+    if raw.startswith("+"):
+        clean = _clean_chat_id(raw)
+        return f"+{clean}" if clean else raw
+    if raw.startswith("00"):
+        clean = _clean_chat_id(raw[2:])
+        return f"+{clean}" if clean else None
+    clean = _clean_chat_id(raw)
+    if not clean:
+        return None
+    return f"+{clean}"
 
 
 def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
@@ -930,6 +974,14 @@ def register_chatter_routes(app, state) -> None:
             allowed_original_chat_ids = original_chat_ids
             if not allowed_chat_ids and not allowed_original_chat_ids:
                 return {"page": page, "page_size": page_size, "items": []}
+        instance_whatsapp_phone_number: Optional[str] = None
+        if instance_id:
+            try:
+                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_number = _resolve_instance_number(instance_payload)
+                instance_whatsapp_phone_number = _to_international_phone(instance_number or "")
+            except Exception:
+                instance_whatsapp_phone_number = None
 
         target = page * page_size
         batch_size = max(200, page_size * 10)
@@ -1027,7 +1079,7 @@ def register_chatter_routes(app, state) -> None:
             last = summaries.get(key, {})
             cid = str(last.get("conversation_id") or "").strip()
             prop_id = last.get("property_id")
-            phone = _clean_chat_id(cid)
+            phone = _extract_guest_phone(cid)
             folio_id = None
             reservation_locator = None
             checkin = None
@@ -1083,6 +1135,7 @@ def register_chatter_routes(app, state) -> None:
                     "avatar": None,
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
+                    "whatsapp_phone_number": instance_whatsapp_phone_number,
                     "bookai_enabled": bool(
                         bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))
                     ),
@@ -1109,10 +1162,19 @@ def register_chatter_routes(app, state) -> None:
         page: int = Query(default=1, ge=1),
         page_size: int = Query(default=20, ge=1, le=100),
         property_id: Optional[str] = Query(default=None),
-        _: None = Depends(_verify_bearer),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         decoded_id = unquote(chat_id or "").strip()
         clean_id = _clean_chat_id(decoded_id) or decoded_id
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        whatsapp_phone_number: Optional[str] = None
+        if instance_id:
+            try:
+                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_number = _resolve_instance_number(instance_payload)
+                whatsapp_phone_number = _to_international_phone(instance_number or "")
+            except Exception:
+                whatsapp_phone_number = None
         id_candidates = {clean_id}
         if decoded_id and decoded_id != clean_id:
             id_candidates.add(decoded_id)
@@ -1195,6 +1257,7 @@ def register_chatter_routes(app, state) -> None:
 
         return {
             "chat_id": clean_id,
+            "whatsapp_phone_number": whatsapp_phone_number,
             "page": page,
             "page_size": page_size,
             "items": items,
