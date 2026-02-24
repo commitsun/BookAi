@@ -713,9 +713,20 @@ def _pending_property_for_guest(
 ) -> Optional[str | int]:
     """Si existe una única property en pendientes para el huésped, devuélvela."""
     guest_key = _normalize_pending_key(guest_chat_id)
-    if not guest_key:
+    guest_tail = _clean_chat_id(str(guest_key).split(":")[-1]) if guest_key else ""
+    if not guest_key and not guest_tail:
         return None
-    matches = [k for k in grouped.keys() if str(k).startswith(f"{guest_key}|")]
+    matches: List[str] = []
+    for key in grouped.keys():
+        key_text = str(key or "")
+        guest_part, _, _ = key_text.partition("|")
+        guest_part = _normalize_pending_key(guest_part)
+        guest_part_tail = _clean_chat_id(str(guest_part).split(":")[-1]) if guest_part else ""
+        if guest_key and guest_part == guest_key:
+            matches.append(key_text)
+            continue
+        if guest_tail and guest_part_tail and guest_part_tail == guest_tail:
+            matches.append(key_text)
     if not matches:
         return None
     prop_values: set[str] = set()
@@ -796,7 +807,39 @@ def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property
     if exact in mapping and mapping.get(exact) is not None:
         return mapping.get(exact)
     legacy = _pending_compound_key(chat_id, None)
-    return mapping.get(legacy)
+    if legacy in mapping and mapping.get(legacy) is not None:
+        return mapping.get(legacy)
+
+    # Compat: escalaciones pueden guardarse con guest_chat_id compuesto
+    # (instancia:telefono) mientras el chatter lista por telefono limpio.
+    chat_norm = _normalize_pending_key(chat_id)
+    chat_tail = _clean_chat_id(str(chat_norm).split(":")[-1]) if chat_norm else ""
+    target_prop = _normalize_pending_property(property_id)
+
+    candidate_any_prop = None
+    for key, value in mapping.items():
+        if value is None:
+            continue
+        guest_part, _, prop_part = str(key or "").partition("|")
+        guest_norm = _normalize_pending_key(guest_part)
+        guest_tail = _clean_chat_id(str(guest_norm).split(":")[-1]) if guest_norm else ""
+        if chat_norm and guest_norm == chat_norm:
+            if target_prop and prop_part == target_prop:
+                return value
+            if not target_prop and (not prop_part or prop_part == "*"):
+                return value
+            if candidate_any_prop is None:
+                candidate_any_prop = value
+            continue
+        if chat_tail and guest_tail and guest_tail == chat_tail:
+            if target_prop and prop_part == target_prop:
+                return value
+            if not target_prop and (not prop_part or prop_part == "*"):
+                return value
+            if candidate_any_prop is None:
+                candidate_any_prop = value
+
+    return candidate_any_prop
 
 
 def _strip_draft_instruction_block(text: str) -> str:

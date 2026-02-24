@@ -15,6 +15,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
+from core.escalation_db import save_escalation
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
@@ -264,6 +265,23 @@ class InternoAgent:
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         guest_lang = _guest_lang()
+        # Persistimos la escalación antes de emitir eventos para evitar
+        # parpadeos en Chatter por carreras entre socket y lectura REST.
+        try:
+            esc_record = Escalation(
+                escalation_id=escalation_id,
+                guest_chat_id=str(guest_chat_id or "").strip(),
+                guest_message=guest_message,
+                escalation_type=escalation_type,
+                escalation_reason=reason,
+                context=context,
+                timestamp=datetime.utcnow().isoformat(),
+                property_id=property_id,
+            )
+            self.escalations[escalation_id] = esc_record
+            save_escalation(vars(esc_record))
+        except Exception as exc:
+            log.warning("No se pudo pre-persistir escalación %s: %s", escalation_id, exc)
         if self.memory_manager and property_id is not None:
             try:
                 for key in [str(guest_chat_id or "").strip(), str(clean_chat_id or "").strip()]:
