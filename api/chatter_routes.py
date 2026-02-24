@@ -719,6 +719,7 @@ def _pending_property_for_guest(
 def _pending_snapshot_for_chat(
     chat_id: str,
     property_id: Optional[str | int],
+    instance_id: Optional[str] = None,
     memory_manager: Any = None,
 ) -> Dict[str, Any]:
     """Estado consolidado de la última escalación pendiente para un chat."""
@@ -727,6 +728,14 @@ def _pending_snapshot_for_chat(
         limit=100,
         property_id=property_id,
     ) or []
+    if pending and instance_id:
+        key = _pending_compound_key(chat_id, property_id)
+        grouped = _filter_pending_by_instance(
+            {key: pending},
+            instance_id=instance_id,
+            allowed_chat_ids={_clean_chat_id(chat_id)} if _clean_chat_id(chat_id) else None,
+        )
+        pending = grouped.get(key) or []
     if not pending:
         return {
             "needs_action": None,
@@ -753,6 +762,17 @@ def _pending_snapshot_for_chat(
         "is_final_response": bool(proposed),
         "escalation_messages": pending_messages_map.get(key),
     }
+
+
+def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property_id: Any) -> Any:
+    """Busca valor por key exacta y, si no existe, cae a key sin property (legacy)."""
+    if not isinstance(mapping, dict):
+        return None
+    exact = _pending_compound_key(chat_id, property_id)
+    if exact in mapping and mapping.get(exact) is not None:
+        return mapping.get(exact)
+    legacy = _pending_compound_key(chat_id, None)
+    return mapping.get(legacy)
 
 
 def _strip_draft_instruction_block(text: str) -> str:
@@ -1296,12 +1316,12 @@ def register_chatter_routes(app, state) -> None:
                         bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))
                     ),
                     "unread_count": 0,
-                    "needs_action": pending_map.get(_pending_compound_key(cid, prop_id)),
-                    "needs_action_type": pending_type_map.get(_pending_compound_key(cid, prop_id)),
-                    "needs_action_reason": pending_reason_map.get(_pending_compound_key(cid, prop_id)),
-                    "proposed_response": proposed_map.get(_pending_compound_key(cid, prop_id)),
-                    "is_final_response": bool(proposed_map.get(_pending_compound_key(cid, prop_id))),
-                    "escalation_messages": pending_messages_map.get(_pending_compound_key(cid, prop_id)),
+                    "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
+                    "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
+                    "needs_action_reason": _pending_value_with_fallback(pending_reason_map, cid, prop_id),
+                    "proposed_response": _pending_value_with_fallback(proposed_map, cid, prop_id),
+                    "is_final_response": bool(_pending_value_with_fallback(proposed_map, cid, prop_id)),
+                    "escalation_messages": _pending_value_with_fallback(pending_messages_map, cid, prop_id),
                     "folio_id": folio_id,
                 }
             )
@@ -1322,7 +1342,22 @@ def register_chatter_routes(app, state) -> None:
     ):
         decoded_id = unquote(chat_id or "").strip()
         clean_id = _clean_chat_id(decoded_id) or decoded_id
+        property_id = _normalize_property_id(property_id)
         instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        allowed_chat_ids: Optional[set[str]] = None
+        allowed_original_chat_ids: Optional[set[str]] = None
+        if instance_id:
+            chat_ids, original_chat_ids = _instance_chat_sets(instance_id, "whatsapp", property_id)
+            allowed_chat_ids = chat_ids
+            allowed_original_chat_ids = original_chat_ids
+            if not allowed_chat_ids and not allowed_original_chat_ids:
+                return {
+                    "chat_id": clean_id,
+                    "whatsapp_phone_number": None,
+                    "page": page,
+                    "page_size": page_size,
+                    "items": [],
+                }
         whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
@@ -1338,7 +1373,6 @@ def register_chatter_routes(app, state) -> None:
         tail_clean = _clean_chat_id(tail) or tail
         if tail_clean:
             id_candidates.add(tail_clean)
-        property_id = _normalize_property_id(property_id)
         offset = (page - 1) * page_size
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
@@ -1384,6 +1418,21 @@ def register_chatter_routes(app, state) -> None:
                 ).execute()
 
         rows = resp.data or []
+        if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
+            filtered_rows = []
+            for row in rows:
+                cid = str((row or {}).get("conversation_id") or "").strip()
+                cid_clean = _clean_chat_id(cid)
+                original_chat_id = str((row or {}).get("original_chat_id") or "").strip()
+                in_chat_set = bool(cid_clean and cid_clean in allowed_chat_ids)
+                in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
+                if original_chat_id:
+                    if not in_original_set:
+                        continue
+                elif not in_chat_set and not in_original_set:
+                    continue
+                filtered_rows.append(row)
+            rows = filtered_rows
         rows = [
             row
             for row in rows
@@ -1633,6 +1682,7 @@ def register_chatter_routes(app, state) -> None:
                 **_pending_snapshot_for_chat(
                     chat_id,
                     property_id,
+                    instance_id=instance_id,
                     memory_manager=getattr(state, "memory_manager", None),
                 ),
             },
@@ -2024,10 +2074,11 @@ def register_chatter_routes(app, state) -> None:
         chat_id: str,
         payload: ToggleBookAiRequest,
         property_id: Optional[str] = Query(default=None),
-        _: None = Depends(_verify_bearer),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         property_id = _normalize_property_id(property_id) or _normalize_property_id(payload.property_id)
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
@@ -2077,6 +2128,7 @@ def register_chatter_routes(app, state) -> None:
                 **_pending_snapshot_for_chat(
                     clean_id,
                     property_id,
+                    instance_id=instance_id,
                     memory_manager=getattr(state, "memory_manager", None),
                 ),
             },
@@ -2092,10 +2144,11 @@ def register_chatter_routes(app, state) -> None:
     async def mark_chat_read(
         chat_id: str,
         property_id: Optional[str] = Query(default=None),
-        _: None = Depends(_verify_bearer),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         property_id = _normalize_property_id(property_id)
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         like_pattern = f"%:{clean_id}"
@@ -2130,6 +2183,7 @@ def register_chatter_routes(app, state) -> None:
                 **_pending_snapshot_for_chat(
                     clean_id,
                     property_id,
+                    instance_id=instance_id,
                     memory_manager=getattr(state, "memory_manager", None),
                 ),
             },
@@ -2493,6 +2547,7 @@ def register_chatter_routes(app, state) -> None:
                 **_pending_snapshot_for_chat(
                     chat_id,
                     property_id,
+                    instance_id=instance_id,
                     memory_manager=getattr(state, "memory_manager", None),
                 ),
             },
