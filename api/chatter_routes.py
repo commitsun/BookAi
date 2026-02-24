@@ -508,6 +508,57 @@ def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) 
     return grouped
 
 
+def _instance_prefixes(instance_id: Optional[str]) -> set[str]:
+    prefixes: set[str] = set()
+    normalized = str(instance_id or "").strip()
+    if not normalized:
+        return prefixes
+    prefixes.add(normalized)
+    try:
+        payload = fetch_instance_by_code(normalized) or {}
+        instance_number = _resolve_instance_number(payload)
+        if instance_number:
+            prefixes.add(str(instance_number).strip())
+            clean_number = _clean_chat_id(instance_number)
+            if clean_number:
+                prefixes.add(clean_number)
+        phone_id = str(payload.get("whatsapp_phone_id") or "").strip()
+        if phone_id:
+            prefixes.add(phone_id)
+    except Exception:
+        pass
+    return {p for p in prefixes if p}
+
+
+def _filter_pending_by_instance(
+    grouped: Dict[str, List[Dict[str, Any]]],
+    instance_id: Optional[str],
+) -> Dict[str, List[Dict[str, Any]]]:
+    if not instance_id:
+        return grouped
+    prefixes = _instance_prefixes(instance_id)
+    if not prefixes:
+        return grouped
+
+    filtered: Dict[str, List[Dict[str, Any]]] = {}
+    for key, escs in grouped.items():
+        kept: List[Dict[str, Any]] = []
+        for esc in escs:
+            guest_chat_id = str((esc or {}).get("guest_chat_id") or "").strip()
+            if not guest_chat_id:
+                continue
+            if ":" not in guest_chat_id:
+                # Sin prefijo de instancia no podemos asegurar origen: se descarta en modo multi-instancia.
+                continue
+            head = guest_chat_id.split(":", 1)[0].strip()
+            head_clean = _clean_chat_id(head)
+            if head in prefixes or (head_clean and head_clean in prefixes):
+                kept.append(esc)
+        if kept:
+            filtered[key] = kept
+    return filtered
+
+
 def _join_pending_values(values: List[str]) -> Optional[str]:
     clean = [v.strip() for v in values if isinstance(v, str) and v.strip()]
     if not clean:
@@ -1041,6 +1092,7 @@ def register_chatter_routes(app, state) -> None:
 
         page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
         pending_grouped = _pending_by_chat(property_id=property_id)
+        pending_grouped = _filter_pending_by_instance(pending_grouped, instance_id=instance_id)
         pending_map = _pending_actions(
             pending_grouped,
             memory_manager=getattr(state, "memory_manager", None),
