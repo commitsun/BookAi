@@ -511,6 +511,23 @@ def _is_internal_hidden_message(text: str) -> bool:
 def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Agrupa pendientes por chat+property para evitar cruces entre hoteles."""
     pending = list_pending_escalations(limit=limit, property_id=property_id) or []
+    if property_id is not None:
+        # Compatibilidad: muchas escalaciones históricas quedaron con property_id=NULL.
+        # En vistas filtradas por propiedad, las incluimos y luego filtramos por instancia/chat permitido.
+        pending_null_prop = list_pending_escalations(limit=limit, property_id=None) or []
+        if pending_null_prop:
+            seen_ids = {
+                str((esc or {}).get("escalation_id") or "").strip()
+                for esc in pending
+                if str((esc or {}).get("escalation_id") or "").strip()
+            }
+            for esc in pending_null_prop:
+                esc_id = str((esc or {}).get("escalation_id") or "").strip()
+                if esc_id and esc_id in seen_ids:
+                    continue
+                pending.append(esc)
+                if esc_id:
+                    seen_ids.add(esc_id)
     grouped: Dict[str, List[Dict[str, Any]]] = {}
     for esc in pending:
         guest_id = _normalize_pending_key(esc.get("guest_chat_id"))
@@ -728,6 +745,13 @@ def _pending_snapshot_for_chat(
         limit=100,
         property_id=property_id,
     ) or []
+    if not pending and property_id is not None:
+        # Fallback para escalaciones legacy con property_id NULL.
+        pending = list_pending_escalations_for_chat(
+            chat_id,
+            limit=100,
+            property_id=None,
+        ) or []
     if pending and instance_id:
         key = _pending_compound_key(chat_id, property_id)
         grouped = _filter_pending_by_instance(
