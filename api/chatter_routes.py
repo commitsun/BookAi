@@ -1213,6 +1213,16 @@ def register_chatter_routes(app, state) -> None:
         if not outgoing_message:
             raise HTTPException(status_code=422, detail="Mensaje vacio tras limpieza")
 
+        instance_id = None
+        if state.memory_manager:
+            try:
+                instance_id = (
+                    state.memory_manager.get_flag(chat_id, "instance_id")
+                    or state.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                )
+            except Exception:
+                instance_id = None
+
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
         if context_id and state.memory_manager:
@@ -1222,10 +1232,12 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.set_flag(chat_id, "force_guest_role", True)
             except Exception:
                 pass
-        instance_id = None
-        if state.memory_manager:
+        if state.memory_manager and not instance_id:
             try:
-                instance_id = state.memory_manager.get_flag(context_id or chat_id, "instance_id") or state.memory_manager.get_flag(context_id or chat_id, "instance_hotel_code")
+                instance_id = (
+                    state.memory_manager.get_flag(context_id or chat_id, "instance_id")
+                    or state.memory_manager.get_flag(context_id or chat_id, "instance_hotel_code")
+                )
             except Exception:
                 instance_id = None
         # Si hay context_id compuesto y no viene property_id, es ambiguo en multi-instancia.
