@@ -8,7 +8,7 @@ import re
 import secrets
 import string
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Dict, Optional
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
@@ -66,17 +66,63 @@ class CreateSessionRequest(SuperintendenteContext):
 # ---------------------------------------------------------------------------
 # Utilidades
 # ---------------------------------------------------------------------------
-def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> None:
-    """Verifica Bearer Token contra el valor configurado."""
-    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
-    if not expected:
-        log.error("ROOMDOO_BEARER_TOKEN no configurado.")
-        raise HTTPException(status_code=401, detail="Token de integración no configurado")
+def _parse_token_instance_map() -> Dict[str, str]:
+    parsed: Dict[str, str] = {}
+    token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
+    token_alda = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
+    instance_test = str(Settings.ROOMDOO_INSTANCE_ID_TEST or "").strip()
+    instance_alda = str(Settings.ROOMDOO_INSTANCE_ID_ALDA or "").strip()
+    if token_test:
+        parsed[token_test] = instance_test or "bookai-test"
+    if token_alda:
+        parsed[token_alda] = instance_alda or "bookai-alda"
 
+    raw = (Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
+    if not raw:
+        return parsed
+
+    if raw.startswith("{"):
+        try:
+            payload = json.loads(raw)
+            if isinstance(payload, dict):
+                for token, instance in payload.items():
+                    token_text = str(token or "").strip()
+                    instance_text = str(instance or "").strip()
+                    if token_text and instance_text:
+                        parsed[token_text] = instance_text
+        except Exception:
+            log.warning("ROOMDOO_TOKEN_INSTANCE_MAP en formato JSON inválido; se ignora.")
+        return parsed
+
+    for part in raw.split(","):
+        chunk = (part or "").strip()
+        if not chunk or "=" not in chunk:
+            continue
+        instance_id, token = chunk.split("=", 1)
+        instance_text = str(instance_id or "").strip()
+        token_text = str(token or "").strip()
+        if not instance_text or not token_text:
+            continue
+        parsed[token_text] = instance_text
+    return parsed
+
+
+def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> None:
+    """Verifica Bearer Token usando mapa multi-instancia o token único."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Autenticación Bearer requerida")
 
     token = auth_header.split(" ", 1)[1].strip()
+    token_map = _parse_token_instance_map()
+    if token_map:
+        if token not in token_map:
+            raise HTTPException(status_code=403, detail="Token inválido")
+        return
+
+    expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
+    if not expected:
+        log.error("ROOMDOO_BEARER_TOKEN/ROOMDOO_TOKEN_INSTANCE_MAP no configurado.")
+        raise HTTPException(status_code=401, detail="Token de integración no configurado")
     if token != expected:
         raise HTTPException(status_code=403, detail="Token inválido")
 
