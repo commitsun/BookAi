@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import logging
 import re
+import time
 from urllib.parse import unquote
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
@@ -27,6 +28,8 @@ from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
 log = logging.getLogger("ChatterRoutes")
+_INSTANCE_CHAT_SETS_TTL_SECONDS = 5
+_instance_chat_sets_cache: Dict[str, Tuple[float, set[str], set[str]]] = {}
 
 
 # ---------------------------------------------------------------------------
@@ -162,6 +165,15 @@ def _instance_chat_sets(
     channel: str,
     property_id: Optional[str | int],
 ) -> Tuple[set[str], set[str]]:
+    cache_key = f"{str(instance_id or '').strip()}|{str(channel or '').strip()}|{str(property_id)}"
+    cached = _instance_chat_sets_cache.get(cache_key)
+    now_ts = time.time()
+    if cached:
+        cached_at, cached_chats, cached_originals = cached
+        if now_ts - cached_at <= _INSTANCE_CHAT_SETS_TTL_SECONDS:
+            return set(cached_chats), set(cached_originals)
+        _instance_chat_sets_cache.pop(cache_key, None)
+
     chat_ids: set[str] = set()
     original_chat_ids: set[str] = set()
     original_prefixes: set[str] = {str(instance_id or "").strip()}
@@ -227,6 +239,7 @@ def _instance_chat_sets(
                 exc,
             )
 
+    _instance_chat_sets_cache[cache_key] = (time.time(), set(chat_ids), set(original_chat_ids))
     return chat_ids, original_chat_ids
 
 
@@ -302,8 +315,10 @@ def _normalize_pending_key(guest_id: str) -> str:
     if not raw:
         return ""
     if ":" in raw:
-        tail = raw.split(":")[-1]
-        return _clean_chat_id(tail) or tail.strip()
+        left, right = raw.rsplit(":", 1)
+        left_clean = _clean_chat_id(left) or left.strip()
+        right_clean = _clean_chat_id(right) or right.strip()
+        return f"{left_clean}:{right_clean}".strip(":")
     clean = _clean_chat_id(raw)
     if clean:
         return clean

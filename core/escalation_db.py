@@ -11,7 +11,7 @@ def _normalize_guest_chat_id(value: str) -> str:
     if not raw:
         return ""
     if ":" in raw:
-        left, right = raw.split(":", 1)
+        left, right = raw.rsplit(":", 1)
         left_clean = re.sub(r"\D", "", left).strip() or left.strip()
         right_clean = re.sub(r"\D", "", right).strip() or right.strip()
         return f"{left_clean}:{right_clean}".strip(":")
