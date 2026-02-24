@@ -137,13 +137,13 @@ class MemoryManager:
                         property_aliases.add(str(val).strip())
                 if instance_aliases and property_aliases and instance_aliases.isdisjoint(property_aliases):
                     log.warning(
-                        "⚠️ property_id no coincide con instance_id; ignorando. chat_id=%s property_id=%s instance_id=%s prop_instance=%s",
+                        "⚠️ property_id no coincide con instance_id; se conserva por compatibilidad. chat_id=%s property_id=%s instance_id=%s prop_instance=%s",
                         conversation_id,
                         prop_id,
                         instance_id,
                         prop_instance,
                     )
-                    return None
+                    return prop_id
         except Exception:
             return None
         return prop_id

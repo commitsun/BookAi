@@ -161,8 +161,9 @@ def register_whatsapp_routes(app, state):
 
             text = ""
             instance_number = metadata.get("display_phone_number") or ""
+            normalized_instance_number = re.sub(r"\D", "", str(instance_number or "")).strip() or instance_number
             instance_phone_id = metadata.get("phone_number_id") or ""
-            memory_id = f"{instance_number}:{sender}" if instance_number and sender else sender
+            memory_id = f"{normalized_instance_number}:{sender}" if normalized_instance_number and sender else sender
             instance_token = None
             if sender and instance_number:
                 try:
@@ -170,15 +171,15 @@ def register_whatsapp_routes(app, state):
 
                     # Guarda identificadores crudos para fallback posterior.
                     if state.memory_manager:
-                        if instance_number:
-                            state.memory_manager.set_flag(memory_id, "instance_number", instance_number)
+                        if normalized_instance_number:
+                            state.memory_manager.set_flag(memory_id, "instance_number", normalized_instance_number)
                         if instance_phone_id:
                             state.memory_manager.set_flag(memory_id, "whatsapp_phone_id", instance_phone_id)
 
                     hydrate_dynamic_context(
                         state=state,
                         chat_id=memory_id,
-                        instance_number=instance_number,
+                        instance_number=normalized_instance_number,
                         instance_phone_id=instance_phone_id or None,
                     )
                     # Fallback duro: si no quedó instance_id, resolver directo por phone_id.
@@ -291,6 +292,20 @@ def register_whatsapp_routes(app, state):
                     state.memory_manager.set_flag(sender, "property_id", property_id)
                 except Exception:
                     pass
+            # Registrar en RAM el mensaje entrante en el contexto compuesto de instancia.
+            # La persistencia en DB la hará el flujo normal del agente para evitar duplicados.
+            try:
+                if property_id is not None:
+                    state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                state.memory_manager.add_runtime_message(
+                    conversation_id=memory_id,
+                    role="user",
+                    content=text,
+                    channel="whatsapp",
+                    original_chat_id=memory_id,
+                )
+            except Exception as exc:
+                log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
             clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
             bookai_enabled = _resolve_bookai_enabled(
                 state,
@@ -300,17 +315,6 @@ def register_whatsapp_routes(app, state):
                 property_id=property_id,
             )
             if bookai_enabled is False:
-                try:
-                    state.memory_manager.save(
-                        conversation_id=memory_id,
-                        role="user",
-                        content=text,
-                        channel="whatsapp",
-                        property_id=property_id,
-                        original_chat_id=memory_id,
-                    )
-                except Exception as exc:
-                    log.warning("No se pudo guardar mensaje con BookAI desactivado: %s", exc)
                 log.info(
                     "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
                     clean_sender,
@@ -364,7 +368,7 @@ def register_whatsapp_routes(app, state):
                     sender,
                     state=state,
                     channel="whatsapp",
-                    instance_number=instance_number,
+                    instance_number=normalized_instance_number,
                     memory_id=cid,
                     property_id=property_id,
                 )

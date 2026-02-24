@@ -8,6 +8,7 @@ import re
 import json
 import asyncio
 import time
+from urllib.parse import urlsplit
 from typing import Any, Dict, Optional
 
 import requests
@@ -344,6 +345,24 @@ def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any
                 return rows
         except Exception as exc:
             log.warning("Fallback supabase properties by code fallo: %s", exc)
+        # Segundo fallback: si el instance_id es URL, emparejar por hostname.
+        try:
+            iid = str(instance_id).strip()
+            host = (urlsplit(iid).hostname or "").strip().lower()
+            if host:
+                pattern = f"%{host}%"
+                resp = (
+                    supabase.table(table)
+                    .select("*")
+                    .ilike("instance_url", pattern)
+                    .limit(50)
+                    .execute()
+                )
+                rows = resp.data or []
+                if rows:
+                    return rows
+        except Exception as exc:
+            log.warning("Fallback supabase properties by hostname fallo: %s", exc)
     return []
 
 

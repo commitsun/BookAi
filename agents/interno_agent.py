@@ -210,6 +210,7 @@ class InternoAgent:
         escalation_type: str,
         reason: str,
         context: str,
+        property_id: Optional[str | int] = None,
     ) -> str:
         def _guest_lang() -> str:
             msg = (guest_message or "").strip()
@@ -263,6 +264,13 @@ class InternoAgent:
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         guest_lang = _guest_lang()
+        if self.memory_manager and property_id is not None:
+            try:
+                for key in [str(guest_chat_id or "").strip(), str(clean_chat_id or "").strip()]:
+                    if key:
+                        self.memory_manager.set_flag(key, "property_id", property_id)
+            except Exception:
+                pass
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
             prop_id = None
@@ -277,6 +285,8 @@ class InternoAgent:
                         prop_id = self.memory_manager.get_last_property_id_hint(guest_chat_id)
                 except Exception:
                     prop_id = None
+            if prop_id is None and property_id is not None:
+                prop_id = property_id
             rooms = [f"chat:{clean_chat_id}", "channel:whatsapp"]
             if prop_id is not None:
                 rooms.append(f"property:{prop_id}")

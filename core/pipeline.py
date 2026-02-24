@@ -31,6 +31,58 @@ def _message_requests_human_intervention(text: str) -> bool:
     return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
 
 
+def _response_promises_human_escalation(text: str) -> bool:
+    raw = (text or "").strip().lower()
+    if not raw:
+        return False
+    patterns = [
+        r"\b(d[ée]jame|un momento|espera|aguarda)\b.{0,60}\b(consult|pregunt|verific|confirm)\w*\b.{0,40}\b(encargad[oa]|gerente|recepci[oó]n|equipo|personal)\b",
+        r"\b(he trasladado|voy a trasladar|escalar[eé]|derivar[eé])\b.{0,50}\b(encargad[oa]|gerente|recepci[oó]n|equipo|personal|humano)\b",
+        r"\b(i'?ll|let me|one moment|hold on)\b.{0,60}\b(check|ask|confirm|consult)\b.{0,40}\b(manager|reception|staff|team|human)\b",
+    ]
+    return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
+
+
+async def _llm_response_promises_human_escalation(
+    llm: Any,
+    *,
+    user_message: str,
+    assistant_response: str,
+) -> bool:
+    if not llm:
+        return _response_promises_human_escalation(assistant_response)
+    try:
+        system = (
+            "Eres un clasificador binario.\n"
+            "Debes decidir si la respuesta del asistente PROMETE que va a consultar/escalar a una persona del hotel "
+            "(encargado, recepción, gerente, equipo humano).\n"
+            "Responde SOLO JSON: {\"promises_human_escalation\": true|false, \"confidence\": 0..1}."
+        )
+        user = (
+            f"Mensaje del huésped:\n{user_message}\n\n"
+            f"Respuesta del asistente:\n{assistant_response}\n\n"
+            "Si la respuesta indica explícita o implícitamente 'consultaré/preguntaré/verificaré con el encargado/equipo', "
+            "entonces true."
+        )
+        raw = await llm.ainvoke(
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": user},
+            ]
+        )
+        content = (getattr(raw, "content", None) or str(raw or "")).strip()
+        data = _extract_json_object(content) or {}
+        promised = bool(data.get("promises_human_escalation", False))
+        confidence = _safe_float(data.get("confidence"), 0.0)
+        if promised and confidence >= 0.45:
+            return True
+        if promised and confidence <= 0.0:
+            return True
+        return False
+    except Exception:
+        return _response_promises_human_escalation(assistant_response)
+
+
 def _has_recent_pending_escalation(mem_id: str, state) -> bool:
     if not mem_id:
         return False
@@ -445,6 +497,7 @@ async def process_user_message(
                 escalation_type="inappropriate",
                 reason=motivo_in,
                 context="Rechazado por Supervisor Input",
+                property_id=property_id,
             )
             return None
 
@@ -600,6 +653,7 @@ async def process_user_message(
                         f"original_offer_text={original_text}\n"
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}"
                     ),
+                    property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
                     "Gracias por escribirnos. Estamos validando con recepción el horario, lugar y condiciones "
@@ -619,6 +673,7 @@ async def process_user_message(
                     escalation_type="info_not_found",
                     reason="El huésped solicita consulta/intervención de personal humano.",
                     context="Escalación forzada por petición explícita de manager/recepción/humano.",
+                    property_id=property_id,
                 )
             response_raw = _ensure_guest_language(
                 "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
@@ -649,6 +704,7 @@ async def process_user_message(
                 escalation_type="info_not_found",
                 reason="Main Agent no devolvió respuesta",
                 context="Respuesta vacía o nula",
+                property_id=property_id,
             )
             return None
 
@@ -657,6 +713,37 @@ async def process_user_message(
         # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
         response_raw = _ensure_guest_language(response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
+        if response_raw:
+            llm_for_escalation = semantic_llm
+            if llm_for_escalation is None:
+                try:
+                    llm_for_escalation = ModelConfig.get_llm(ModelTier.INTERNAL)
+                except Exception:
+                    llm_for_escalation = None
+            promises_escalation = await _llm_response_promises_human_escalation(
+                llm_for_escalation,
+                user_message=user_message,
+                assistant_response=response_raw,
+            )
+        else:
+            promises_escalation = False
+
+        if response_raw and promises_escalation:
+            has_pending = _has_recent_pending_escalation(mem_id, state)
+            in_progress = False
+            try:
+                in_progress = bool(state.memory_manager.get_flag(mem_id, "escalation_in_progress"))
+            except Exception:
+                in_progress = False
+            if not has_pending and not in_progress:
+                await state.interno_agent.escalate(
+                    guest_chat_id=escalation_chat_id,
+                    guest_message=user_message,
+                    escalation_type="info_not_found",
+                    reason="La respuesta al huésped indicó consulta con encargado; se fuerza escalación real.",
+                    context=f"Respuesta enviada/prometida al huésped: {response_raw}",
+                    property_id=property_id,
+                )
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,
@@ -685,6 +772,7 @@ async def process_user_message(
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}\n"
                         f"proposed_response={response_raw}"
                     ),
+                    property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
                     "Estamos revisando con recepción los detalles exactos de esta cortesía para darte una "
@@ -738,6 +826,7 @@ async def process_user_message(
                 escalation_type="bad_response",
                 reason=motivo_out,
                 context=context_full,
+                property_id=property_id,
             )
             return None
 
@@ -800,5 +889,6 @@ async def process_user_message(
             escalation_type="info_not_found",
             reason=f"Error crítico: {str(exc)}",
             context="Excepción general en process_user_message",
+            property_id=property_id,
         )
         return None
