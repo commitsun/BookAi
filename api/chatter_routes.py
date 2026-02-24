@@ -1599,6 +1599,30 @@ def register_chatter_routes(app, state) -> None:
         bookai_flags[f"{clean_id}:{property_id}"] = payload.bookai_enabled
         state.save_tracking()
 
+        if payload.bookai_enabled is False:
+            # Evita que mensajes recibidos antes de desactivar queden pendientes y
+            # se procesen luego al reactivar.
+            try:
+                buffer_mgr = getattr(state, "buffer_manager", None)
+                memory_mgr = getattr(state, "memory_manager", None)
+                convs = list(getattr(buffer_mgr, "_convs", {}).keys()) if buffer_mgr else []
+                target_keys = []
+                for cid in convs:
+                    if cid != clean_id and not str(cid).endswith(f":{clean_id}"):
+                        continue
+                    if memory_mgr:
+                        try:
+                            cid_prop = memory_mgr.get_flag(cid, "property_id")
+                        except Exception:
+                            cid_prop = None
+                        if cid_prop is not None and str(cid_prop).strip() != str(property_id).strip():
+                            continue
+                    target_keys.append(cid)
+                for cid in target_keys:
+                    await buffer_mgr.discard_conversation(cid)
+            except Exception as exc:
+                log.warning("No se pudo purgar buffer al desactivar BookAI: %s", exc)
+
         await _emit(
             "chat.bookai.toggled",
             {

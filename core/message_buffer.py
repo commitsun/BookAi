@@ -152,3 +152,33 @@ class MessageBufferManager:
         combined = "\n".join(cleaned).strip()
         log.info(f"🧠 Combinando {len(cleaned)} mensajes:\n{combined}")
         return combined
+
+    async def discard_conversation(self, conversation_id: str, cancel_processing: bool = False) -> bool:
+        """
+        Descarta mensajes pendientes de una conversación.
+        - Limpia `messages` aún no combinados
+        - Limpia bloques en `pending_blocks`
+        - Cancela el temporizador activo
+        - Opcionalmente cancela procesamiento en curso
+        """
+        state = self._convs.get(conversation_id)
+        if not state:
+            return False
+
+        async with state.lock:
+            dropped = bool(state.messages or state.pending_blocks)
+            state.messages.clear()
+            state.pending_blocks.clear()
+
+            if state.timer_task and not state.timer_task.done():
+                state.timer_task.cancel()
+            state.timer_task = None
+
+            if cancel_processing and state.processing_task and not state.processing_task.done():
+                state.processing_task.cancel()
+                state.processing_task = None
+
+            state.version += 1
+            if dropped:
+                log.info("🧹 Buffer descartado para %s", conversation_id)
+            return dropped

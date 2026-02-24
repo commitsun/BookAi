@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import logging
 import os
+import re
 from datetime import datetime, timezone
 
 import requests
@@ -11,7 +12,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.utils.text_utils import send_fragmented_async
-from core.pipeline import process_user_message
+from core.pipeline import process_user_message, _resolve_bookai_enabled
 
 log = logging.getLogger("WhatsAppWebhook")
 
@@ -193,6 +194,31 @@ def register_whatsapp_routes(app, state):
                     state.memory_manager.set_flag(sender, "property_id", property_id)
                 except Exception:
                     pass
+            clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
+            bookai_enabled = _resolve_bookai_enabled(
+                state,
+                chat_id=str(sender or ""),
+                mem_id=str(memory_id or ""),
+                clean_id=clean_sender,
+                property_id=property_id,
+            )
+            if bookai_enabled is False:
+                try:
+                    state.memory_manager.save(
+                        conversation_id=memory_id,
+                        role="user",
+                        content=text,
+                        channel="whatsapp",
+                        original_chat_id=memory_id,
+                    )
+                except Exception as exc:
+                    log.warning("No se pudo guardar mensaje con BookAI desactivado: %s", exc)
+                log.info(
+                    "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
+                    clean_sender,
+                    property_id,
+                )
+                return JSONResponse({"status": "bookai_disabled"})
             target_chat_room = memory_id or sender
             rooms = [f"chat:{target_chat_room}"]
             if property_id is not None:
