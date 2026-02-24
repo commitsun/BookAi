@@ -1611,6 +1611,10 @@ def register_chatter_routes(app, state) -> None:
         elif state.memory_manager:
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
+        # IMPORTANTE: session_id debe resolverse después de cualquier ajuste de context_id.
+        # Si no, puede persistirse en el contexto equivocado y no aparecer en chatter.
+        session_id = context_id or chat_id
+
         outgoing_message = _ensure_guest_language_for_outgoing(
             state,
             chat_id,
