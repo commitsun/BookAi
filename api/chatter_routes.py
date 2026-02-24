@@ -995,7 +995,9 @@ def register_chatter_routes(app, state) -> None:
                 .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
             )
-            if property_id is not None:
+            # En multi-instancia, algunos mensajes nuevos pueden no traer property_id aún.
+            # Mantenemos aislamiento por instancia y dejamos pasar esos chats.
+            if property_id is not None and not instance_id:
                 query = query.eq("property_id", property_id)
             resp = query.order("created_at", desc=True).range(
                 offset,
@@ -1009,7 +1011,7 @@ def register_chatter_routes(app, state) -> None:
                 clean_cid = _clean_chat_id(cid)
                 original_chat_id = str(row.get("original_chat_id") or "").strip()
                 prop_id = row.get("property_id")
-                if property_id is not None and prop_id is None:
+                if property_id is not None and not instance_id and prop_id is None:
                     continue
                 if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
                     in_chat_set = bool(clean_cid and clean_cid in allowed_chat_ids)
@@ -1062,7 +1064,7 @@ def register_chatter_routes(app, state) -> None:
                         .eq("channel", channel)
                         .in_("role", ["guest"])
                     )
-                    if property_id is not None:
+                    if property_id is not None and not instance_id:
                         query = query.eq("property_id", property_id)
                     resp_names = query.order("created_at", desc=True).limit(500).execute()
                     for row in resp_names.data or []:
