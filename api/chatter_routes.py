@@ -1646,6 +1646,9 @@ def register_chatter_routes(app, state) -> None:
             else:
                 role = "bookai"
             related_ids = _related_memory_ids(state, chat_id)
+            for extra_id in (session_id, context_id):
+                if extra_id and extra_id not in related_ids:
+                    related_ids.append(extra_id)
             if property_id is None:
                 for mem_id in related_ids:
                     try:
@@ -1655,8 +1658,9 @@ def register_chatter_routes(app, state) -> None:
                     if candidate is not None:
                         property_id = candidate
                         break
-            if property_id is None and ":" not in str(chat_id):
-                property_id = _resolve_property_id_from_history(chat_id, payload.channel.lower())
+            if property_id is None:
+                history_key = context_id or session_id or chat_id
+                property_id = _resolve_property_id_from_history(history_key, payload.channel.lower())
             for mem_id in related_ids:
                 if property_id is not None:
                     state.memory_manager.set_flag(mem_id, "property_id", property_id)
@@ -1666,8 +1670,11 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.clear_flag(mem_id, "escalation_confirmation_pending")
                 state.memory_manager.clear_flag(mem_id, "consulta_base_realizada")
                 state.memory_manager.clear_flag(mem_id, "inciso_enviado")
+            resolved_original_chat_id = context_id or (
+                str(session_id).strip() if isinstance(session_id, str) and ":" in session_id else None
+            )
             state.memory_manager.save(
-                chat_id,
+                session_id,
                 role,
                 outgoing_message,
                 user_id=user_id if role == "user" else None,
@@ -1675,18 +1682,18 @@ def register_chatter_routes(app, state) -> None:
                 user_last_name=payload.user_last_name if role == "user" else None,
                 user_last_name2=payload.user_last_name2 if role == "user" else None,
                 channel=payload.channel.lower(),
-                original_chat_id=context_id or None,
+                original_chat_id=resolved_original_chat_id,
                 bypass_force_guest_role=role == "user",
             )
             for mem_id in related_ids:
-                if mem_id == chat_id:
+                if mem_id == session_id:
                     continue
                 state.memory_manager.add_runtime_message(
                     mem_id,
                     role,
                     outgoing_message,
                     channel=payload.channel.lower(),
-                    original_chat_id=chat_id,
+                    original_chat_id=resolved_original_chat_id or chat_id,
                     bypass_force_guest_role=role == "user",
                     user_id=user_id if role == "user" else None,
                     user_first_name=payload.user_first_name if role == "user" else None,
