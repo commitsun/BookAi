@@ -1380,7 +1380,7 @@ def register_chatter_routes(app, state) -> None:
         extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
         try:
             query = supabase.table("chat_history").select(extended_fields)
-            if property_id is not None:
+            if property_id is not None and not instance_id:
                 query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
             else:
                 or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
@@ -1394,7 +1394,7 @@ def register_chatter_routes(app, state) -> None:
             try:
                 fallback_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
                 query = supabase.table("chat_history").select(fallback_fields)
-                if property_id is not None:
+                if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
                 else:
                     or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
@@ -1406,7 +1406,7 @@ def register_chatter_routes(app, state) -> None:
                 ).execute()
             except Exception:
                 query = supabase.table("chat_history").select(base_fields)
-                if property_id is not None:
+                if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
                 else:
                     or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
@@ -1432,6 +1432,17 @@ def register_chatter_routes(app, state) -> None:
                 elif not in_chat_set and not in_original_set:
                     continue
                 filtered_rows.append(row)
+            rows = filtered_rows
+        if property_id is not None:
+            filtered_rows = []
+            for row in rows:
+                row_prop = row.get("property_id")
+                if row_prop is None and instance_id:
+                    # Compatibilidad: mensajes legacy en multi-instancia sin property_id.
+                    filtered_rows.append(row)
+                    continue
+                if str(row_prop).strip() == str(property_id).strip():
+                    filtered_rows.append(row)
             rows = filtered_rows
         rows = [
             row
