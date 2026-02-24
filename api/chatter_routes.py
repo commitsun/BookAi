@@ -145,9 +145,10 @@ def _map_sender(role: str) -> str:
 def _format_history_content(content: str) -> str:
     """Normaliza content del historial para render en frontend."""
     text = str(content or "")
-    if "|" not in text:
-        return text
-    return text.replace("|", ";")
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"\s*\|\s*", ";", text)
+    text = re.sub(r"\s*;\s*", ";", text)
+    return text
 
 
 def _normalize_pending_key(guest_id: str) -> str:

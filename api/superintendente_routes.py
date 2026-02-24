@@ -180,9 +180,10 @@ def _render_internal_super_message(content: str) -> Optional[str]:
 def _format_history_content(content: str) -> str:
     """Normaliza content para render de historial en frontend."""
     text = str(content or "")
-    if "|" not in text:
-        return text
-    return text.replace("|", ";")
+    text = text.replace("\r\n", "\n")
+    text = re.sub(r"\s*\|\s*", ";", text)
+    text = re.sub(r"\s*;\s*", ";", text)
+    return text
 
 
 def _sanitize_generated_title(raw: str) -> Optional[str]:
