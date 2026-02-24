@@ -138,6 +138,7 @@ def _resolve_bookai_enabled(
     chat_id: str,
     mem_id: str,
     clean_id: str,
+    property_id: Any = None,
 ) -> Optional[bool]:
     bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
     if not isinstance(bookai_flags, dict):
@@ -145,6 +146,8 @@ def _resolve_bookai_enabled(
 
     memory = getattr(state, "memory_manager", None)
     property_candidates: list[str] = []
+    if property_id is not None and str(property_id).strip():
+        property_candidates.append(str(property_id).strip())
     if memory:
         for key in (mem_id, chat_id, clean_id):
             if not key:
@@ -156,9 +159,12 @@ def _resolve_bookai_enabled(
             if prop is not None and str(prop).strip():
                 property_candidates.append(str(prop).strip())
         try:
-            hint = memory.get_last_property_id_hint(mem_id or chat_id)
-            if hint is not None and str(hint).strip():
-                property_candidates.append(str(hint).strip())
+            for hint_key in (mem_id, chat_id, clean_id):
+                if not hint_key:
+                    continue
+                hint = memory.get_last_property_id_hint(hint_key)
+                if hint is not None and str(hint).strip():
+                    property_candidates.append(str(hint).strip())
         except Exception:
             pass
 
@@ -370,6 +376,7 @@ async def process_user_message(
     channel: str = "whatsapp",
     instance_number: str | None = None,
     memory_id: str | None = None,
+    property_id: str | int | None = None,
 ) -> str | None:
     """
     Flujo principal:
@@ -409,6 +416,7 @@ async def process_user_message(
             chat_id=str(chat_id or ""),
             mem_id=str(mem_id or ""),
             clean_id=clean_id,
+            property_id=property_id,
         )
         if bookai_enabled is False:
             try:

@@ -242,6 +242,7 @@ def register_whatsapp_routes(app, state):
                     channel="whatsapp",
                     instance_number=instance_number,
                     memory_id=cid,
+                    property_id=property_id,
                 )
 
                 if not resp:
