@@ -341,7 +341,53 @@ def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optiona
     return folio_id, checkin, checkout
 
 
-def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
+def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(instance_payload, dict):
+        return None
+    for key in ("display_phone_number", "whatsapp_number", "phone_number", "phone"):
+        value = instance_payload.get(key)
+        normalized = _normalize_phone(str(value or ""))
+        if normalized:
+            return normalized
+    return None
+
+
+def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[str] = None) -> Optional[str]:
+    memory_manager = getattr(state, "memory_manager", None)
+    clean = _normalize_phone(chat_id) or str(chat_id).strip()
+    if not memory_manager or not clean or not instance_id:
+        return None
+    try:
+        instance_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+    except Exception:
+        instance_payload = {}
+    instance_number = _resolve_instance_number(instance_payload)
+    if not instance_number:
+        return None
+
+    context_id = f"{instance_number}:{clean}"
+    for target in (clean, str(chat_id).strip(), context_id):
+        if not target:
+            continue
+        memory_manager.set_flag(target, "guest_number", clean)
+        memory_manager.set_flag(target, "force_guest_role", True)
+        memory_manager.set_flag(target, "last_memory_id", context_id)
+        memory_manager.set_flag(target, "instance_number", instance_number)
+        memory_manager.set_flag(target, "instance_id", str(instance_id).strip())
+        memory_manager.set_flag(target, "instance_hotel_code", str(instance_id).strip())
+        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+            val = instance_payload.get(key)
+            if val:
+                memory_manager.set_flag(target, key, val)
+
+    return context_id
+
+
+def _resolve_whatsapp_context_id(
+    state,
+    chat_id: str,
+    instance_id: Optional[str] = None,
+) -> Optional[str]:
     """Resuelve context_id (instancia:telefono) desde flags/memoria."""
     memory_manager = getattr(state, "memory_manager", None)
     if not memory_manager or not chat_id:
@@ -365,7 +411,7 @@ def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
                     memory_manager.set_flag(clean, "last_memory_id", key.strip())
                     return key.strip()
 
-    return None
+    return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
 
 
 def _validate_instance_id(instance_id: Optional[str]) -> str:
@@ -549,7 +595,26 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo guardar origin_folio en memoria: %s", exc)
 
-            context_id = _resolve_whatsapp_context_id(state, chat_id)
+            context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+            session_id = context_id or chat_id
+            if context_id:
+                try:
+                    state.memory_manager.set_flag(chat_id, "last_memory_id", context_id)
+                    state.memory_manager.set_flag(chat_id, "guest_number", chat_id)
+                    state.memory_manager.set_flag(chat_id, "force_guest_role", True)
+                    for key in (
+                        "instance_url",
+                        "instance_id",
+                        "instance_hotel_code",
+                        "client_name",
+                        "property_id",
+                        "property_name",
+                    ):
+                        val = state.memory_manager.get_flag(chat_id, key)
+                        if val is not None:
+                            state.memory_manager.set_flag(context_id, key, val)
+                except Exception:
+                    pass
             try:
                 targets = [chat_id, context_id] if context_id else [chat_id]
                 if folio_id:
@@ -593,7 +658,7 @@ def register_template_routes(app, state) -> None:
                 except Exception as exc:
                     log.warning("No se pudo persistir reserva en tabla: %s", exc)
 
-            ensure_instance_credentials(state.memory_manager, context_id or chat_id)
+            ensure_instance_credentials(state.memory_manager, session_id)
 
             outbound_parameters = parameters
             if template_def:
@@ -641,7 +706,7 @@ def register_template_routes(app, state) -> None:
                 try:
                     consulta_tool = create_consulta_reserva_persona_tool(
                         memory_manager=state.memory_manager,
-                        chat_id=chat_id,
+                        chat_id=session_id,
                     )
                     raw = await consulta_tool.ainvoke(
                         {
@@ -739,9 +804,10 @@ def register_template_routes(app, state) -> None:
                     except Exception as exc:
                         log.warning("No se pudo extraer folio/checkin/checkout desde rendered: %s", exc)
                 if rendered:
-                    state.memory_manager.set_flag(chat_id, "default_channel", "whatsapp")
+                    for target in [chat_id, context_id] if context_id else [chat_id]:
+                        state.memory_manager.set_flag(target, "default_channel", "whatsapp")
                     state.memory_manager.save(
-                        chat_id,
+                        session_id,
                         role="bookai",
                         content=rendered,
                         channel="whatsapp",
@@ -750,7 +816,7 @@ def register_template_routes(app, state) -> None:
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = instance_id or payload.source.instance_url or property_code
                 state.memory_manager.save(
-                    chat_id,
+                    session_id,
                     role="system",
                     content=(
                         f"[TEMPLATE_SENT] plantilla={wa_template} lang={language} instance={instance_id or ''} "

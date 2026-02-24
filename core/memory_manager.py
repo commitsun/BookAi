@@ -161,18 +161,12 @@ class MemoryManager:
                 return True
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             table = self._resolve_history_table(conversation_id)
-            original_chat_id = None
-            if isinstance(conversation_id, str) and ":" in conversation_id:
-                original_chat_id = conversation_id
-            else:
-                last_mem = self.get_flag(conversation_id, "last_memory_id")
-                if isinstance(last_mem, str) and ":" in last_mem:
-                    original_chat_id = last_mem
+            property_id = self._resolve_property_id(conversation_id)
             rows = get_conversation_history(
                 db_conversation_id,
                 limit=limit,
                 table=table,
-                original_chat_id=original_chat_id,
+                property_id=property_id,
             )
             return bool(rows)
         except Exception:
@@ -195,20 +189,12 @@ class MemoryManager:
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             property_id = self._resolve_property_id(conversation_id)
             history_table = self._resolve_history_table(conversation_id)
-            original_chat_id = None
-            if isinstance(conversation_id, str) and ":" in conversation_id:
-                original_chat_id = conversation_id
-            else:
-                last_mem = self.get_flag(conversation_id, "last_memory_id")
-                if isinstance(last_mem, str) and ":" in last_mem:
-                    original_chat_id = last_mem
             db_msgs = (
                 get_conversation_history(
                     db_conversation_id,
                     limit=limit,
                     since=since,
                     property_id=property_id,
-                    original_chat_id=original_chat_id,
                     table=history_table,
                 )
                 or []
@@ -221,7 +207,6 @@ class MemoryManager:
                         limit=limit,
                         since=since,
                         property_id=None,
-                        original_chat_id=original_chat_id,
                         table=history_table,
                     )
                     or []
