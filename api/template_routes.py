@@ -13,7 +13,7 @@ from pydantic import BaseModel, Field, model_validator
 
 from core.config import Settings
 from core.template_registry import TemplateRegistry
-from core.instance_context import ensure_instance_credentials
+from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation
@@ -368,6 +368,16 @@ def _resolve_whatsapp_context_id(state, chat_id: str) -> Optional[str]:
     return None
 
 
+def _validate_instance_id(instance_id: Optional[str]) -> str:
+    normalized = str(instance_id or "").strip()
+    if not normalized:
+        raise HTTPException(status_code=422, detail="instance_id requerido")
+    instance_payload = fetch_instance_by_code(normalized)
+    if not instance_payload:
+        raise HTTPException(status_code=400, detail=f"instance_id no registrado: {normalized}")
+    return normalized
+
+
 # ---------------------------------------------------------------------------
 # Registro de rutas
 # ---------------------------------------------------------------------------
@@ -384,6 +394,7 @@ def register_template_routes(app, state) -> None:
                 or payload.source.instance_id
                 or payload.source.instance_url
             )
+            instance_id = _validate_instance_id(instance_id)
             language = (payload.template.language or "es").lower()
             template_code = payload.template.code
             idempotency_key = (payload.meta.idempotency_key if payload.meta else "") or ""
