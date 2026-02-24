@@ -113,6 +113,8 @@ def _sanitize_guest_text(text: str) -> str:
     lines = []
     for line in raw.splitlines():
         current = line.strip()
+        # Quita numeración tipo "1. ", "1) " o "1 - " al inicio.
+        current = re.sub(r"^\s*\d+\s*[\.\)\-]\s+", "", current, flags=re.IGNORECASE)
         current = re.sub(r"^\s*\d+\.\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
         current = re.sub(r"^\s*\[esc_[^\]]+\]\s*", "", current, flags=re.IGNORECASE)
         current = re.sub(r"\s*\[esc_[^\]]+\]\s*", " ", current, flags=re.IGNORECASE)
