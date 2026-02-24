@@ -15,6 +15,13 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 
+def _env_bool(name: str, default: bool = False) -> bool:
+    raw = os.getenv(name)
+    if raw is None:
+        return default
+    return str(raw).strip().lower() in {"1", "true", "yes", "on", "si", "sí"}
+
+
 # =============================================================
 # ⚙️ CONFIGURACIÓN GENERAL (.env)
 # =============================================================
@@ -100,6 +107,12 @@ class Settings:
 
     # Reservas por chat
     CHAT_RESERVATIONS_TABLE = os.getenv("CHAT_RESERVATIONS_TABLE", "chat_reservations")
+
+    # Onboarding (bloqueo reversible de creación de reservas)
+    ONBOARDING_RESERVATION_CREATION_ENABLED = _env_bool(
+        "ONBOARDING_RESERVATION_CREATION_ENABLED",
+        False,
+    )
 
 
 # =============================================================
