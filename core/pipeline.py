@@ -278,6 +278,10 @@ def _resolve_bookai_enabled(
         return prefixed_values[0]
     if len(prefixed_values) > 1 and all(v == prefixed_values[0] for v in prefixed_values):
         return prefixed_values[0]
+    if prefixed_values and any(v is False for v in prefixed_values):
+        # Fail-safe: si hay configuraciones por propiedad y al menos una está desactivada,
+        # no reactivar automáticamente cuando aún no se pudo resolver property_id.
+        return False
 
     return _as_bool_or_none(bookai_flags.get(clean_id))
 

@@ -2210,6 +2210,8 @@ def register_chatter_routes(app, state) -> None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
         bookai_flags[f"{clean_id}:{property_id}"] = payload.bookai_enabled
+        # Refuerzo por chat: evita reactivación accidental cuando aún no se resolvió property_id.
+        bookai_flags[clean_id] = payload.bookai_enabled
         state.save_tracking()
 
         if payload.bookai_enabled is False:

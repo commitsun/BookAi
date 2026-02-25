@@ -320,6 +320,13 @@ def register_whatsapp_routes(app, state):
                 except Exception:
                     pass
             clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
+            context_id = str(memory_id or sender or "").strip()
+            clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
+            if property_id is not None:
+                rooms.append(f"property:{property_id}")
+            rooms.append("channel:whatsapp")
+            socket_mgr = getattr(state, "socket_manager", None)
             bookai_enabled = _resolve_bookai_enabled(
                 state,
                 chat_id=str(sender or ""),
@@ -340,6 +347,38 @@ def register_whatsapp_routes(app, state):
                     )
                 except Exception as exc:
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
+                try:
+                    if socket_mgr and getattr(socket_mgr, "enabled", False):
+                        now_iso = datetime.now(timezone.utc).isoformat()
+                        await socket_mgr.emit(
+                            "chat.message.created",
+                            {
+                                "chat_id": clean_chat_id,
+                                "guest_chat_id": clean_chat_id,
+                                "context_id": context_id,
+                                "property_id": property_id,
+                                "channel": "whatsapp",
+                                "sender": "guest",
+                                "message": text,
+                                "created_at": now_iso,
+                            },
+                            rooms=rooms,
+                        )
+                        await socket_mgr.emit(
+                            "chat.updated",
+                            {
+                                "chat_id": clean_chat_id,
+                                "guest_chat_id": clean_chat_id,
+                                "context_id": context_id,
+                                "property_id": property_id,
+                                "channel": "whatsapp",
+                                "last_message": text,
+                                "last_message_at": now_iso,
+                            },
+                            rooms=rooms,
+                        )
+                except Exception as exc:
+                    log.warning("No se pudo emitir mensaje entrante con BookAI apagado: %s", exc)
                 log.info(
                     "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
                     clean_sender,
@@ -360,13 +399,6 @@ def register_whatsapp_routes(app, state):
                 )
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
-            context_id = str(memory_id or sender or "").strip()
-            clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
-            rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
-            if property_id is not None:
-                rooms.append(f"property:{property_id}")
-            rooms.append("channel:whatsapp")
-            socket_mgr = getattr(state, "socket_manager", None)
             if socket_mgr and getattr(socket_mgr, "enabled", False):
                 await socket_mgr.emit(
                     "chat.message.created",
