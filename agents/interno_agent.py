@@ -241,7 +241,7 @@ class InternoAgent:
             return "es"
 
         def _needs_action_es(lang: str) -> str:
-            raw = (guest_message or "").strip()
+            raw = (reason or "").strip() or (guest_message or "").strip()
             if not raw:
                 return ""
             text_es = raw

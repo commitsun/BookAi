@@ -149,8 +149,8 @@ def _resolve_guest_lang(guest_chat_id: str, guest_message: str = "") -> str:
     return base
 
 
-def _format_needs_action_es(guest_chat_id: str, guest_message: str) -> str:
-    raw = (guest_message or "").strip()
+def _format_needs_action_es(guest_chat_id: str, escalation_text: str) -> str:
+    raw = (escalation_text or "").strip()
     if not raw:
         return ""
     lang = _resolve_guest_lang(guest_chat_id, raw)
@@ -583,7 +583,10 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     "chat.updated",
                     {
                         "chat_id": clean_chat_id,
-                        "needs_action": _format_needs_action_es(guest_chat_id, merged_guest_message),
+                        "needs_action": _format_needs_action_es(
+                            guest_chat_id,
+                            merged_reason or merged_guest_message,
+                        ),
                         "needs_action_type": merged_type,
                         "needs_action_reason": _format_reason_with_lang(
                             guest_chat_id,

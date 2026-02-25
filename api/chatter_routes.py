@@ -617,16 +617,22 @@ def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: A
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
         latest = _latest_pending(escs) or {}
-        question = (latest.get("guest_message") or "").strip()
-        if not question:
+        action_text = (
+            (latest.get("escalation_reason") or latest.get("reason") or "").strip()
+            or (latest.get("guest_message") or "").strip()
+        )
+        if not action_text:
             continue
         guest_lang = _resolve_guest_lang(latest, memory_manager=memory_manager)
-        question_es = question
+        question_es = action_text
         if guest_lang != "es":
             try:
-                question_es = language_manager.translate_if_needed(question, guest_lang, "es").strip() or question
+                question_es = (
+                    language_manager.translate_if_needed(action_text, guest_lang, "es").strip()
+                    or action_text
+                )
             except Exception:
-                question_es = question
+                question_es = action_text
         result[guest_id] = f"El huésped solicita: {question_es}"
     return result
 
