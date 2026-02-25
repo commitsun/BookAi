@@ -1161,8 +1161,35 @@ def _ensure_guest_language_for_outgoing(state, chat_id: str, text: str, context_
 def register_chatter_routes(app, state) -> None:
     router = APIRouter(prefix="/api/v1/chatter", tags=["chatter"])
 
+    def _chat_room_aliases(chat_id: str) -> list[str]:
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for candidate in _related_memory_ids(state, chat_id):
+            raw = str(candidate or "").strip()
+            if not raw:
+                continue
+            variants = [raw]
+            clean = _clean_chat_id(raw)
+            if clean:
+                variants.append(clean)
+            if ":" in raw:
+                tail = raw.split(":")[-1].strip()
+                if tail:
+                    variants.append(tail)
+                    tail_clean = _clean_chat_id(tail)
+                    if tail_clean:
+                        variants.append(tail_clean)
+            for variant in variants:
+                v = str(variant or "").strip()
+                if not v or v in seen:
+                    continue
+                seen.add(v)
+                aliases.append(v)
+        return aliases
+
     def _rooms(chat_id: str, property_id: Optional[str | int], channel: str) -> list[str]:
-        rooms = [f"chat:{chat_id}"]
+        aliases = _chat_room_aliases(chat_id) or [chat_id]
+        rooms = [f"chat:{alias}" for alias in aliases]
         if property_id is not None:
             rooms.append(f"property:{property_id}")
         if channel:

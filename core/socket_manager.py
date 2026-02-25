@@ -81,12 +81,14 @@ class SocketManager:
         @self.sio.event
         async def join(sid, data):
             rooms = (data or {}).get("rooms") or []
+            log.debug("Socket join sid=%s rooms=%s", sid, rooms)
             for room in rooms:
                 await self.sio.enter_room(sid, str(room))
 
         @self.sio.event
         async def room_join(sid, data):
             rooms = (data or {}).get("rooms") or []
+            log.debug("Socket room_join sid=%s rooms=%s", sid, rooms)
             for room in rooms:
                 await self.sio.enter_room(sid, str(room))
 
@@ -105,6 +107,7 @@ class SocketManager:
     async def emit(self, event: str, data: dict[str, Any], rooms: str | Iterable[str] | None = None) -> None:
         if not self.enabled or not self.sio:
             return
+        log.debug("Socket emit event=%s rooms=%s", event, rooms)
         if rooms is None:
             await self.sio.emit(event, data)
             return
