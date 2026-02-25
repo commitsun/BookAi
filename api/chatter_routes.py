@@ -1799,7 +1799,12 @@ def register_chatter_routes(app, state) -> None:
             log.warning("No se pudo auto-resolver escalaciones para %s: %s", chat_id, exc)
 
         now_iso = datetime.now(timezone.utc).isoformat()
-        sender_for_ui = _map_sender(role)
+        if role == "user":
+            sender_for_ui = "user"
+        elif role == "guest":
+            sender_for_ui = "guest"
+        else:
+            sender_for_ui = "bookai"
         await _emit(
             "chat.message.created",
             {
