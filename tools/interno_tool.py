@@ -440,13 +440,15 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
         normalized_guest_chat_id = _normalize_guest_chat_id(guest_chat_id) or str(guest_chat_id or "").strip()
-        # Evita notificaciones duplicadas cuando la misma escalación se dispara más de una vez.
-        if escalation_id in NOTIFIED_ESCALATIONS:
-            log.info("🔁 Escalación %s ya notificada; se omite reenvío.", escalation_id)
-            return f"ℹ️ Escalación {escalation_id} ya fue notificada al encargado."
+        already_notified = escalation_id in NOTIFIED_ESCALATIONS and NOTIFIED_ESCALATIONS.get(escalation_id) not in {
+            "",
+            "pending",
+            None,
+        }
 
         # Marcamos como pendiente para prevenir carreras; se limpia en caso de fallo.
-        NOTIFIED_ESCALATIONS[escalation_id] = "pending"
+        if escalation_id not in NOTIFIED_ESCALATIONS:
+            NOTIFIED_ESCALATIONS[escalation_id] = "pending"
 
         clean_reason = (reason or "").strip()
         clean_context = (context or "").strip()
@@ -469,8 +471,12 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
         context_l = f"{clean_reason}\n{clean_context}".lower()
         is_followup = any(token in context_l for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso"))
         same_type = (existing_type or "").strip().lower() == (escalation_type or "").strip().lower()
-        can_reuse_existing = bool(existing_id and existing_id != escalation_id and (is_followup or same_type))
+        can_reuse_existing = bool(existing_id and (is_followup or same_type or existing_id == escalation_id))
         if can_reuse_existing:
+            existing_already_notified = (
+                existing_id in NOTIFIED_ESCALATIONS
+                and NOTIFIED_ESCALATIONS.get(existing_id) not in {"", "pending", None}
+            )
             merged_type = _pick_escalation_type(existing_type, escalation_type)
             merged_guest_message = _synthesize_escalation_query(
                 str(existing_pending.get("guest_message") or ""),
@@ -484,6 +490,17 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 str(existing_pending.get("context") or ""),
                 context_to_store,
             )
+            unchanged = (
+                str(existing_pending.get("guest_message") or "").strip() == merged_guest_message.strip()
+                and str(existing_pending.get("escalation_reason") or existing_pending.get("reason") or "").strip()
+                == merged_reason.strip()
+                and str(existing_pending.get("context") or "").strip() == merged_context.strip()
+                and (existing_type or "").strip().lower() == (merged_type or "").strip().lower()
+            )
+            if unchanged and (already_notified or existing_already_notified):
+                log.info("🔁 Escalación %s ya notificada y sin cambios; omitiendo duplicado.", existing_id)
+                return f"ℹ️ Escalación {existing_id} ya notificada; sin cambios."
+
             update_escalation(
                 existing_id,
                 {
@@ -522,6 +539,9 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                         json={"chat_id": str(C.TELEGRAM_CHAT_ID), "text": update_msg, "parse_mode": "HTML"},
                         timeout=10,
                     )
+                    # Conserva el estado de notificación para ese ID reutilizado.
+                    if existing_id not in NOTIFIED_ESCALATIONS or NOTIFIED_ESCALATIONS.get(existing_id) == "pending":
+                        NOTIFIED_ESCALATIONS[existing_id] = "sent"
                 except Exception:
                     log.debug("No se pudo enviar actualización de escalación %s por Telegram", existing_id)
             try:

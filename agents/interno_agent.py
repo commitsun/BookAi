@@ -15,7 +15,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
-from core.escalation_db import save_escalation
+from core.escalation_db import get_latest_pending_escalation, save_escalation, update_escalation
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
@@ -289,30 +289,97 @@ class InternoAgent:
             return aliases
 
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
-        escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
+        resolved_prop_id = property_id
+        if self.memory_manager and resolved_prop_id is None:
+            try:
+                resolved_prop_id = self.memory_manager.get_flag(guest_chat_id, "property_id")
+                if resolved_prop_id is None:
+                    last_mem = self.memory_manager.get_flag(guest_chat_id, "last_memory_id")
+                    if isinstance(last_mem, str):
+                        resolved_prop_id = self.memory_manager.get_flag(last_mem, "property_id")
+            except Exception:
+                resolved_prop_id = property_id
+
+        existing_pending = None
+        try:
+            existing_pending = get_latest_pending_escalation(
+                guest_chat_id,
+                property_id=resolved_prop_id,
+            )
+        except Exception:
+            existing_pending = None
+
+        existing_id = str((existing_pending or {}).get("escalation_id") or "").strip()
+        escalation_id = existing_id or f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         guest_lang = _guest_lang()
         # Persistimos la escalación antes de emitir eventos para evitar
         # parpadeos en Chatter por carreras entre socket y lectura REST.
         try:
-            esc_record = Escalation(
-                escalation_id=escalation_id,
-                guest_chat_id=str(guest_chat_id or "").strip(),
-                guest_message=guest_message,
-                escalation_type=escalation_type,
-                escalation_reason=reason,
-                context=context,
-                timestamp=datetime.utcnow().isoformat(),
-                property_id=property_id,
-            )
-            self.escalations[escalation_id] = esc_record
-            save_escalation(vars(esc_record))
+            now_iso = datetime.utcnow().isoformat()
+            if existing_id:
+                prev_msg = str((existing_pending or {}).get("guest_message") or "").strip()
+                prev_reason = str(
+                    (existing_pending or {}).get("escalation_reason")
+                    or (existing_pending or {}).get("reason")
+                    or ""
+                ).strip()
+                prev_context = str((existing_pending or {}).get("context") or "").strip()
+
+                def _merge_lines(base: str, extra: str) -> str:
+                    b = str(base or "").strip()
+                    e = str(extra or "").strip()
+                    if not b:
+                        return e
+                    if not e:
+                        return b
+                    if e.lower() in b.lower():
+                        return b
+                    return f"{b}\n{e}".strip()
+
+                merged_message = _merge_lines(prev_msg, guest_message)
+                merged_reason = _merge_lines(prev_reason, reason)
+                merged_context = _merge_lines(prev_context, context)
+                update_payload = {
+                    "guest_message": merged_message,
+                    "escalation_type": escalation_type or (existing_pending or {}).get("escalation_type"),
+                    "escalation_reason": merged_reason,
+                    "context": merged_context,
+                    "timestamp": now_iso,
+                }
+                if resolved_prop_id is not None:
+                    update_payload["property_id"] = resolved_prop_id
+                update_escalation(escalation_id, update_payload)
+                esc_record = Escalation(
+                    escalation_id=escalation_id,
+                    guest_chat_id=str(guest_chat_id or "").strip(),
+                    guest_message=merged_message,
+                    escalation_type=str(update_payload.get("escalation_type") or escalation_type),
+                    escalation_reason=merged_reason,
+                    context=merged_context,
+                    timestamp=now_iso,
+                    property_id=update_payload.get("property_id"),
+                )
+                self.escalations[escalation_id] = esc_record
+            else:
+                esc_record = Escalation(
+                    escalation_id=escalation_id,
+                    guest_chat_id=str(guest_chat_id or "").strip(),
+                    guest_message=guest_message,
+                    escalation_type=escalation_type,
+                    escalation_reason=reason,
+                    context=context,
+                    timestamp=now_iso,
+                    property_id=resolved_prop_id,
+                )
+                self.escalations[escalation_id] = esc_record
+                save_escalation(vars(esc_record))
         except Exception as exc:
             log.warning("No se pudo pre-persistir escalación %s: %s", escalation_id, exc)
-        if self.memory_manager and property_id is not None:
+        if self.memory_manager and resolved_prop_id is not None:
             try:
                 for key in [str(guest_chat_id or "").strip(), str(clean_chat_id or "").strip()]:
                     if key:
-                        self.memory_manager.set_flag(key, "property_id", property_id)
+                        self.memory_manager.set_flag(key, "property_id", resolved_prop_id)
             except Exception:
                 pass
         # Emitir escalation.created en tiempo real (fallback seguro).
@@ -329,14 +396,15 @@ class InternoAgent:
                         prop_id = self.memory_manager.get_last_property_id_hint(guest_chat_id)
                 except Exception:
                     prop_id = None
-            if prop_id is None and property_id is not None:
-                prop_id = property_id
+            if prop_id is None and resolved_prop_id is not None:
+                prop_id = resolved_prop_id
             rooms = [f"chat:{alias}" for alias in _chat_aliases(guest_chat_id, clean_chat_id)]
             rooms.append("channel:whatsapp")
             if prop_id is not None:
                 rooms.append(f"property:{prop_id}")
+            creation_event = "escalation.updated" if existing_id else "escalation.created"
             await emit_event(
-                "escalation.created",
+                creation_event,
                 {
                     "chat_id": clean_chat_id,
                     "escalation_id": escalation_id,
@@ -380,7 +448,8 @@ class InternoAgent:
             pass
 
         prompt = (
-            "Nueva escalación:\n"
+            ("Actualización de escalación existente:\n" if existing_id else "Nueva escalación:\n")
+            +
             f"- ID: {escalation_id}\n"
             f"- Chat ID: {guest_chat_id}\n"
             f"- Tipo: {escalation_type}\n"
