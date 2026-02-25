@@ -17,6 +17,33 @@ from core.pipeline import process_user_message, _resolve_bookai_enabled
 log = logging.getLogger("WhatsAppWebhook")
 
 
+def _chat_room_aliases(*values: str) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        raw = str(raw_value or "").strip()
+        if not raw:
+            continue
+        candidates = [raw]
+        if ":" in raw:
+            tail = raw.split(":")[-1].strip()
+            if tail:
+                candidates.append(tail)
+                tail_clean = re.sub(r"\D", "", tail).strip()
+                if tail_clean:
+                    candidates.append(tail_clean)
+        clean = re.sub(r"\D", "", raw).strip()
+        if clean:
+            candidates.append(clean)
+        for candidate in candidates:
+            c = str(candidate or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            aliases.append(c)
+    return aliases
+
+
 def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | None = None):
     """Envía el status 'read' para reflejar doble check azul en el cliente."""
     phone_id = phone_id or os.getenv("WHATSAPP_PHONE_ID")
@@ -333,8 +360,9 @@ def register_whatsapp_routes(app, state):
                 )
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
-            target_chat_room = memory_id or sender
-            rooms = [f"chat:{target_chat_room}"]
+            context_id = str(memory_id or sender or "").strip()
+            clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
             if property_id is not None:
                 rooms.append(f"property:{property_id}")
             rooms.append("channel:whatsapp")
@@ -343,9 +371,9 @@ def register_whatsapp_routes(app, state):
                 await socket_mgr.emit(
                     "chat.message.created",
                     {
-                        "chat_id": memory_id or sender,
-                        "guest_chat_id": sender,
-                        "context_id": memory_id or sender,
+                        "chat_id": clean_chat_id,
+                        "guest_chat_id": clean_chat_id,
+                        "context_id": context_id,
                         "property_id": property_id,
                         "channel": "whatsapp",
                         "sender": "guest",
@@ -357,9 +385,9 @@ def register_whatsapp_routes(app, state):
                 await socket_mgr.emit(
                     "chat.updated",
                     {
-                        "chat_id": memory_id or sender,
-                        "guest_chat_id": sender,
-                        "context_id": memory_id or sender,
+                        "chat_id": clean_chat_id,
+                        "guest_chat_id": clean_chat_id,
+                        "context_id": context_id,
                         "property_id": property_id,
                         "channel": "whatsapp",
                         "last_message": text,

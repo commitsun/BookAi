@@ -262,6 +262,32 @@ class InternoAgent:
                 raw = raw.split(":")[-1].strip()
             return re.sub(r"\D", "", raw).strip() or raw
 
+        def _chat_aliases(*values: str) -> list[str]:
+            aliases: list[str] = []
+            seen: set[str] = set()
+            for raw_value in values:
+                raw = str(raw_value or "").strip()
+                if not raw:
+                    continue
+                candidates = [raw]
+                if ":" in raw:
+                    tail = raw.split(":")[-1].strip()
+                    if tail:
+                        candidates.append(tail)
+                        tail_clean = re.sub(r"\D", "", tail).strip()
+                        if tail_clean:
+                            candidates.append(tail_clean)
+                clean = re.sub(r"\D", "", raw).strip()
+                if clean:
+                    candidates.append(clean)
+                for candidate in candidates:
+                    c = str(candidate or "").strip()
+                    if not c or c in seen:
+                        continue
+                    seen.add(c)
+                    aliases.append(c)
+            return aliases
+
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         escalation_id = f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         guest_lang = _guest_lang()
@@ -305,7 +331,8 @@ class InternoAgent:
                     prop_id = None
             if prop_id is None and property_id is not None:
                 prop_id = property_id
-            rooms = [f"chat:{clean_chat_id}", "channel:whatsapp"]
+            rooms = [f"chat:{alias}" for alias in _chat_aliases(guest_chat_id, clean_chat_id)]
+            rooms.append("channel:whatsapp")
             if prop_id is not None:
                 rooms.append(f"property:{prop_id}")
             await emit_event(

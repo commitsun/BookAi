@@ -19,6 +19,37 @@ SUPER_OFFER_FLAG = "super_offer_pending"
 _HUMAN_ESCALATION_COOLDOWN_MIN = 15
 
 
+def _clean_chat_id(value: str) -> str:
+    return re.sub(r"\D", "", str(value or "")).strip()
+
+
+def _chat_room_aliases(*values: str) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+    for raw_value in values:
+        raw = str(raw_value or "").strip()
+        if not raw:
+            continue
+        candidates = [raw]
+        if ":" in raw:
+            tail = raw.split(":")[-1].strip()
+            if tail:
+                candidates.append(tail)
+                tail_clean = _clean_chat_id(tail)
+                if tail_clean:
+                    candidates.append(tail_clean)
+        clean = _clean_chat_id(raw)
+        if clean:
+            candidates.append(clean)
+        for candidate in candidates:
+            c = str(candidate or "").strip()
+            if not c or c in seen:
+                continue
+            seen.add(c)
+            aliases.append(c)
+    return aliases
+
+
 def _message_requests_human_intervention(text: str) -> bool:
     raw = (text or "").strip().lower()
     if not raw:
@@ -844,8 +875,11 @@ async def process_user_message(
                         prop_id = state.memory_manager.get_flag(mem_id, "property_id")
                     except Exception:
                         prop_id = None
-                target_chat_room = mem_id or chat_id
-                rooms = [f"chat:{target_chat_room}"]
+                context_id = str(mem_id or chat_id or "").strip()
+                guest_chat_id = str(chat_id or "").strip()
+                clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id or context_id
+                chat_aliases = _chat_room_aliases(context_id, guest_chat_id)
+                rooms = [f"chat:{alias}" for alias in chat_aliases]
                 if prop_id is not None:
                     rooms.append(f"property:{prop_id}")
                 if channel:
@@ -855,9 +889,9 @@ async def process_user_message(
                     "chat.message.created",
                     {
                         "rooms": rooms,
-                        "chat_id": str(mem_id or chat_id),
-                        "guest_chat_id": str(chat_id),
-                        "context_id": str(mem_id or chat_id),
+                        "chat_id": clean_chat_id,
+                        "guest_chat_id": clean_chat_id,
+                        "context_id": context_id,
                         "property_id": prop_id,
                         "channel": channel,
                         "sender": "bookai",
@@ -870,9 +904,9 @@ async def process_user_message(
                     "chat.updated",
                     {
                         "rooms": rooms,
-                        "chat_id": str(mem_id or chat_id),
-                        "guest_chat_id": str(chat_id),
-                        "context_id": str(mem_id or chat_id),
+                        "chat_id": clean_chat_id,
+                        "guest_chat_id": clean_chat_id,
+                        "context_id": context_id,
                         "property_id": prop_id,
                         "channel": channel,
                         "last_message": response_raw,
