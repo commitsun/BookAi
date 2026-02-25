@@ -2,8 +2,11 @@
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any, Iterable
+
+from core.config import Settings
 
 log = logging.getLogger("SocketManager")
 _GLOBAL_SOCKET_MANAGER = None
@@ -16,6 +19,7 @@ class SocketManager:
         self.enabled = False
         self.sio = None
         self._bearer_token = (bearer_token or "").strip()
+        self._valid_tokens = self._parse_valid_tokens(self._bearer_token)
 
         try:
             import socketio  # type: ignore
@@ -33,7 +37,49 @@ class SocketManager:
         # Acepta conexiones en /ws (sin /socket.io) para alinearse con el frontend.
         app.mount("/ws", socketio.ASGIApp(self.sio, socketio_path=""))
         self.enabled = True
-        log.info("Socket.IO montado en /ws")
+        log.info("Socket.IO montado en /ws (tokens_validos=%s)", len(self._valid_tokens))
+
+    @staticmethod
+    def _parse_valid_tokens(primary_token: str) -> set[str]:
+        tokens: set[str] = set()
+        if primary_token:
+            tokens.add(primary_token.strip())
+
+        # Compatibilidad con los dos tokens legacy (test/alda).
+        for value in (
+            Settings.ROOMDOO_BOOKAI_TOKEN_TEST,
+            Settings.ROOMDOO_BOOKAI_TOKEN_ALDA,
+        ):
+            token = str(value or "").strip()
+            if token:
+                tokens.add(token)
+
+        raw_map = str(Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
+        if not raw_map:
+            return tokens
+
+        if raw_map.startswith("{"):
+            try:
+                payload = json.loads(raw_map)
+                if isinstance(payload, dict):
+                    for token in payload.keys():
+                        token_text = str(token or "").strip()
+                        if token_text:
+                            tokens.add(token_text)
+            except Exception:
+                log.warning("ROOMDOO_TOKEN_INSTANCE_MAP inválido para socket auth (JSON).")
+            return tokens
+
+        # Formato CSV "instA=tokenA,instB=tokenB"
+        for chunk in raw_map.split(","):
+            part = str(chunk or "").strip()
+            if not part or "=" not in part:
+                continue
+            _, token = part.split("=", 1)
+            token_text = str(token or "").strip()
+            if token_text:
+                tokens.add(token_text)
+        return tokens
 
     def _extract_auth_token(self, environ: dict, auth: Any | None) -> str | None:
         if isinstance(auth, dict):
@@ -52,14 +98,14 @@ class SocketManager:
         return None
 
     def _is_token_valid(self, token: str | None) -> bool:
-        if not self._bearer_token:
+        if not self._valid_tokens:
             return False
         if not token:
             return False
         raw = str(token).strip()
         if raw.lower().startswith("bearer "):
             raw = raw.split(" ", 1)[1].strip()
-        return raw == self._bearer_token
+        return raw in self._valid_tokens
 
     def _register_handlers(self) -> None:
         if not self.sio:
