@@ -1996,8 +1996,8 @@ def register_chatter_routes(app, state) -> None:
         if not pending_escalations:
             raise HTTPException(status_code=404, detail="No hay escalación pendiente")
 
-        # Trabajamos sobre la más reciente para el hilo de chat interno,
-        # pero usamos TODAS las pendientes para contexto y borradores.
+        # Trabajamos solo sobre la pendiente más reciente para evitar
+        # emitir múltiples borradores intermedios en cascada.
         esc = pending_escalations[-1]
         escalation_id = str(esc.get("escalation_id") or "").strip()
         if not escalation_id:
@@ -2011,10 +2011,8 @@ def register_chatter_routes(app, state) -> None:
             timestamp=operator_ts,
         )
 
-        draft_response = (esc.get("draft_response") or "").strip()
-
         log.info(
-            "Escalation-chat draft-only mode chat_id=%s escalation_id=%s pending_count=%s message=%s",
+            "Escalation-chat single-draft mode chat_id=%s escalation_id=%s pending_count=%s message=%s",
             clean_id,
             escalation_id,
             len(pending_escalations),
@@ -2023,54 +2021,47 @@ def register_chatter_routes(app, state) -> None:
         from tools.interno_tool import ESCALATIONS_STORE, Escalation, generar_borrador
         from core.message_utils import extract_clean_draft
 
-        draft_sections: List[str] = []
-        for idx, pending in enumerate(pending_escalations, start=1):
-            pending_id = str(pending.get("escalation_id") or "").strip()
-            if not pending_id:
-                continue
-            pending_guest_message = (pending.get("guest_message") or "").strip()
-            pending_type = (pending.get("escalation_type") or pending.get("type") or "").strip()
-            pending_reason = (pending.get("escalation_reason") or pending.get("reason") or "").strip()
-            pending_context = (pending.get("context") or "").strip()
-            pending_draft = (pending.get("draft_response") or "").strip()
+        pending_guest_message = (esc.get("guest_message") or "").strip()
+        pending_type = (esc.get("escalation_type") or esc.get("type") or "").strip()
+        pending_reason = (esc.get("escalation_reason") or esc.get("reason") or "").strip()
+        pending_context = (esc.get("context") or "").strip()
+        pending_draft = (esc.get("draft_response") or "").strip()
 
-            if pending_id not in ESCALATIONS_STORE:
-                ESCALATIONS_STORE[pending_id] = Escalation(
-                    escalation_id=pending_id,
-                    guest_chat_id=clean_id,
-                    guest_message=pending_guest_message,
-                    escalation_type=pending_type or "manual",
-                    escalation_reason=pending_reason,
-                    context=pending_context,
-                    timestamp=str(pending.get("timestamp") or ""),
-                    draft_response=pending_draft or None,
-                    manager_confirmed=bool(pending.get("manager_confirmed") or False),
-                    final_response=(pending.get("final_response") or None),
-                    sent_to_guest=bool(pending.get("sent_to_guest") or False),
-                    property_id=pending.get("property_id"),
-                )
+        if escalation_id not in ESCALATIONS_STORE:
+            ESCALATIONS_STORE[escalation_id] = Escalation(
+                escalation_id=escalation_id,
+                guest_chat_id=clean_id,
+                guest_message=pending_guest_message,
+                escalation_type=pending_type or "manual",
+                escalation_reason=pending_reason,
+                context=pending_context,
+                timestamp=str(esc.get("timestamp") or ""),
+                draft_response=pending_draft or None,
+                manager_confirmed=bool(esc.get("manager_confirmed") or False),
+                final_response=(esc.get("final_response") or None),
+                sent_to_guest=bool(esc.get("sent_to_guest") or False),
+                property_id=esc.get("property_id"),
+            )
 
-            base_response = pending_draft or pending_guest_message or ""
-            if base_response:
-                ESCALATIONS_STORE[pending_id].draft_response = base_response
+        base_response = pending_draft or pending_guest_message or ""
+        if base_response:
+            ESCALATIONS_STORE[escalation_id].draft_response = base_response
 
-            raw_borrador = (
-                generar_borrador(
-                    escalation_id=pending_id,
-                    manager_response=base_response,
-                    adjustment=message,
-                )
-                or ""
-            ).strip()
-            clean_draft = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
-            clean_draft = _strip_draft_instruction_block(clean_draft)
-            clean_draft = _compact_ai_draft(clean_draft)
-            if not clean_draft:
-                clean_draft = "No tengo suficiente información para generar un borrador."
+        raw_borrador = (
+            generar_borrador(
+                escalation_id=escalation_id,
+                manager_response=base_response,
+                adjustment=message,
+            )
+            or ""
+        ).strip()
+        draft_response = extract_clean_draft(raw_borrador or "").strip() or raw_borrador
+        draft_response = _strip_draft_instruction_block(draft_response)
+        draft_response = _compact_ai_draft(draft_response)
+        if not draft_response:
+            draft_response = "No tengo suficiente información para generar un borrador."
 
-            draft_sections.append(f"{idx}. {clean_draft}")
-
-        draft_response = "\n\n".join(draft_sections).strip()
+        update_escalation(escalation_id, {"draft_response": draft_response})
         ai_message = None
 
         await _emit(
@@ -2184,21 +2175,15 @@ def register_chatter_routes(app, state) -> None:
             }
 
         merged_messages: List[Dict[str, Any]] = []
-        draft_parts: List[str] = []
-        for idx, esc in enumerate(pending_escalations, start=1):
-            esc_id = str(esc.get("escalation_id") or "").strip()
-            for msg in esc.get("messages") or []:
-                if not isinstance(msg, dict):
-                    continue
-                enriched = dict(msg)
-                if esc_id:
-                    enriched["escalation_id"] = esc_id
-                merged_messages.append(enriched)
-            draft = (esc.get("draft_response") or "").strip()
-            if draft:
-                draft_parts.append(f"{idx}. {_compact_ai_draft(draft)}")
+        for msg in active_escalation.get("messages") or []:
+            if not isinstance(msg, dict):
+                continue
+            enriched = dict(msg)
+            if active_id:
+                enriched["escalation_id"] = active_id
+            merged_messages.append(enriched)
         merged_messages = sorted(merged_messages, key=lambda m: _parse_ts(m.get("timestamp")) or datetime.min)
-        merged_draft = "\n\n".join(draft_parts).strip()
+        merged_draft = _compact_ai_draft((active_escalation.get("draft_response") or "").strip())
 
         return {
             "chat_id": clean_id,
