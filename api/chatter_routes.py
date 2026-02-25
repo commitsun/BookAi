@@ -1438,7 +1438,7 @@ def register_chatter_routes(app, state) -> None:
     async def list_messages(
         chat_id: str,
         page: int = Query(default=1, ge=1),
-        page_size: int = Query(default=20, ge=1, le=100),
+        page_size: int = Query(default=100, ge=1, le=500),
         property_id: Optional[str] = Query(default=None),
         auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
