@@ -443,6 +443,8 @@ async def process_user_message(
     try:
         mem_id = memory_id or chat_id
         escalation_chat_id = mem_id or chat_id
+        guest_message_persisted = False
+        main_agent_invoked = False
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
         if state.memory_manager:
@@ -472,6 +474,22 @@ async def process_user_message(
             except Exception:
                 return text
 
+        def _persist_guest_message() -> None:
+            nonlocal guest_message_persisted
+            if guest_message_persisted:
+                return
+            try:
+                state.memory_manager.save(
+                    mem_id,
+                    role="user",
+                    content=user_message,
+                    channel=channel,
+                    original_chat_id=mem_id,
+                )
+                guest_message_persisted = True
+            except Exception as exc:
+                log.warning("No se pudo persistir mensaje del huésped en pipeline: %s", exc)
+
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_enabled = _resolve_bookai_enabled(
             state,
@@ -483,6 +501,7 @@ async def process_user_message(
         if bookai_enabled is False:
             try:
                 state.memory_manager.save(mem_id, "user", user_message)
+                guest_message_persisted = True
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje con BookAI apagado: %s", exc)
             log.info("🤫 BookAI desactivado para %s; se omite respuesta automática.", clean_id)
@@ -493,6 +512,7 @@ async def process_user_message(
         motivo_in = input_validation.get("motivo", "")
 
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
+            _persist_guest_message()
             log.warning("🚨 Mensaje rechazado por Supervisor Input: %s", motivo_in)
             await state.interno_agent.escalate(
                 guest_chat_id=escalation_chat_id,
@@ -692,6 +712,7 @@ async def process_user_message(
                 send_callback=send_inciso_callback,
                 interno_agent=state.interno_agent,
             )
+            main_agent_invoked = True
 
             response_raw = await main_agent.ainvoke(
                 user_input=user_message,
@@ -713,6 +734,9 @@ async def process_user_message(
                 property_id=property_id,
             )
             return None
+
+        if not main_agent_invoked:
+            _persist_guest_message()
 
         response_raw = _sanitize_guest_facing_response(response_raw.strip())
         # Fuerza el idioma final de salida al idioma detectado del último mensaje del huésped.
