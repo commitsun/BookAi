@@ -340,6 +340,7 @@ class MemoryManager:
         channel: Optional[str] = None,
         original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
+        skip_recent_duplicate_guard: bool = False,
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
@@ -367,11 +368,15 @@ class MemoryManager:
             client_name = self.get_flag(cid, "client_name")
 
         # Guardrail: evita doble guardado consecutivo del mismo mensaje del huésped.
-        if normalized_role in {"guest", "user"} and self._is_recent_runtime_duplicate(
+        if (
+            not skip_recent_duplicate_guard
+            and normalized_role in {"guest", "user"}
+            and self._is_recent_runtime_duplicate(
             conversation_id=conversation_id,
             role=normalized_role,
             content=content,
             channel=channel_to_store,
+            )
         ):
             log.info("↩️ Duplicado reciente ignorado chat_id=%s role=%s", cid, normalized_role)
             return

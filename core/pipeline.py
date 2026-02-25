@@ -485,6 +485,7 @@ async def process_user_message(
                     content=user_message,
                     channel=channel,
                     original_chat_id=mem_id,
+                    skip_recent_duplicate_guard=True,
                 )
                 guest_message_persisted = True
             except Exception as exc:
@@ -565,6 +566,7 @@ async def process_user_message(
             if recent_summary and confirmation:
                 response_raw = _ensure_guest_language("¡Perfecto! Queda confirmada. Si necesitas algo más, dímelo.")
                 try:
+                    _persist_guest_message()
                     state.memory_manager.save(
                         mem_id,
                         role="assistant",
@@ -615,6 +617,7 @@ async def process_user_message(
         if not response_raw and asks_localizador and localizador and not wants_details:
             response_raw = _ensure_guest_language(f"El localizador de tu reserva es {localizador}.")
             try:
+                _persist_guest_message()
                 state.memory_manager.save(
                     mem_id,
                     role="assistant",
@@ -684,6 +687,7 @@ async def process_user_message(
                 )
                 forced_offer_escalation = True
                 try:
+                    _persist_guest_message()
                     state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
                 except Exception as exc:
                     log.warning("No se pudo guardar respuesta de escalación por oferta pendiente: %s", exc)
@@ -702,6 +706,7 @@ async def process_user_message(
                 "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
             )
             try:
+                _persist_guest_message()
                 state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
             except Exception as exc:
                 log.warning("No se pudo guardar respuesta de escalación forzada: %s", exc)
