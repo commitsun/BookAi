@@ -25,7 +25,7 @@ class MessageBufferManager:
       ✅ Llama al callback tras inactividad de `idle_seconds`
     """
 
-    def __init__(self, idle_seconds: float = 8.0):
+    def __init__(self, idle_seconds: float = 15.0):
         self.idle_seconds = float(idle_seconds)
         self._convs: Dict[str, ConversationState] = {}
 
