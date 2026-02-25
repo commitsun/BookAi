@@ -297,7 +297,7 @@ def _map_sender(role: str) -> str:
     if role in {"guest", "bookai", "system", "tool"}:
         return role
     if role in {"user", "hotel", "staff"}:
-        return "bookai"
+        return "user"
     if role in {"assistant", "ai"}:
         return "bookai"
     return "bookai"
@@ -1478,7 +1478,7 @@ def register_chatter_routes(app, state) -> None:
         offset = (page - 1) * page_size
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
-        base_fields = "role, content, created_at, read_status, original_chat_id, property_id"
+        base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
         extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
         try:
             query = supabase.table("chat_history").select(extended_fields)
