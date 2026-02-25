@@ -439,6 +439,24 @@ class ConfirmarYEnviarInput(BaseModel):
 def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_type, reason, context) -> str:
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
+        def _text_tokens(value: str) -> set[str]:
+            words = re.findall(r"[a-z0-9áéíóúñü]{3,}", str(value or "").lower())
+            return set(words)
+
+        def _looks_like_followup(prev_message: str, new_message: str, reason_text: str, context_text: str) -> bool:
+            ctx = f"{reason_text}\n{context_text}".lower()
+            if any(token in ctx for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso", "follow-up", "seguimiento")):
+                return True
+            prev_tokens = _text_tokens(prev_message)
+            new_tokens = _text_tokens(new_message)
+            if not prev_tokens or not new_tokens:
+                return False
+            inter = len(prev_tokens & new_tokens)
+            union = len(prev_tokens | new_tokens)
+            if union == 0:
+                return False
+            return (inter / union) >= 0.7
+
         normalized_guest_chat_id = _normalize_guest_chat_id(guest_chat_id) or str(guest_chat_id or "").strip()
         already_notified = escalation_id in NOTIFIED_ESCALATIONS and NOTIFIED_ESCALATIONS.get(escalation_id) not in {
             "",
@@ -468,10 +486,9 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             if existing_pending
             else ""
         )
-        context_l = f"{clean_reason}\n{clean_context}".lower()
-        is_followup = any(token in context_l for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso"))
-        same_type = (existing_type or "").strip().lower() == (escalation_type or "").strip().lower()
-        can_reuse_existing = bool(existing_id and (is_followup or same_type or existing_id == escalation_id))
+        prev_pending_msg = str(existing_pending.get("guest_message") or "").strip() if existing_pending else ""
+        is_followup = _looks_like_followup(prev_pending_msg, guest_message, clean_reason, clean_context)
+        can_reuse_existing = bool(existing_id and (is_followup or existing_id == escalation_id))
         if can_reuse_existing:
             existing_already_notified = (
                 existing_id in NOTIFIED_ESCALATIONS

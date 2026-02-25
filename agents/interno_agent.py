@@ -288,6 +288,25 @@ class InternoAgent:
                     aliases.append(c)
             return aliases
 
+        def _text_tokens(value: str) -> set[str]:
+            words = re.findall(r"[a-z0-9áéíóúñü]{3,}", str(value or "").lower())
+            return set(words)
+
+        def _looks_like_followup(prev_message: str, new_message: str, reason_text: str, context_text: str) -> bool:
+            ctx = f"{reason_text}\n{context_text}".lower()
+            if any(token in ctx for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso", "follow-up", "seguimiento")):
+                return True
+            prev_tokens = _text_tokens(prev_message)
+            new_tokens = _text_tokens(new_message)
+            if not prev_tokens or not new_tokens:
+                return False
+            inter = len(prev_tokens & new_tokens)
+            union = len(prev_tokens | new_tokens)
+            if union == 0:
+                return False
+            # Alta similitud léxica => misma consulta con reformulación.
+            return (inter / union) >= 0.7
+
         clean_chat_id = _clean_chat_id(guest_chat_id) or guest_chat_id
         resolved_prop_id = property_id
         if self.memory_manager and resolved_prop_id is None:
@@ -310,13 +329,22 @@ class InternoAgent:
             existing_pending = None
 
         existing_id = str((existing_pending or {}).get("escalation_id") or "").strip()
-        escalation_id = existing_id or f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
+        prev_pending_msg = str((existing_pending or {}).get("guest_message") or "").strip()
+        reuse_existing = bool(
+            existing_id
+            and _looks_like_followup(prev_pending_msg, guest_message, reason, context)
+        )
+        escalation_id = (
+            existing_id
+            if reuse_existing
+            else f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
+        )
         guest_lang = _guest_lang()
         # Persistimos la escalación antes de emitir eventos para evitar
         # parpadeos en Chatter por carreras entre socket y lectura REST.
         try:
             now_iso = datetime.utcnow().isoformat()
-            if existing_id:
+            if reuse_existing:
                 prev_msg = str((existing_pending or {}).get("guest_message") or "").strip()
                 prev_reason = str(
                     (existing_pending or {}).get("escalation_reason")
@@ -402,7 +430,7 @@ class InternoAgent:
             rooms.append("channel:whatsapp")
             if prop_id is not None:
                 rooms.append(f"property:{prop_id}")
-            creation_event = "escalation.updated" if existing_id else "escalation.created"
+            creation_event = "escalation.updated" if reuse_existing else "escalation.created"
             await emit_event(
                 creation_event,
                 {
@@ -448,7 +476,7 @@ class InternoAgent:
             pass
 
         prompt = (
-            ("Actualización de escalación existente:\n" if existing_id else "Nueva escalación:\n")
+            ("Actualización de escalación existente:\n" if reuse_existing else "Nueva escalación:\n")
             +
             f"- ID: {escalation_id}\n"
             f"- Chat ID: {guest_chat_id}\n"
