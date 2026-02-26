@@ -507,6 +507,10 @@ def _should_persist_alt_internal_markers(alt_key: Optional[str], property_id: Op
     prop = str(property_id or "").strip()
     if not alt:
         return False
+    # Para claves compuestas (owner:property) no persistimos en DB:
+    # MemoryManager normaliza ids con ':' usando la parte final, creando pseudo-conversaciones.
+    if ":" in alt:
+        return False
     if prop and alt == prop:
         return False
     return True
