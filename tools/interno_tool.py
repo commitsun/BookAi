@@ -486,16 +486,23 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
             if existing_pending
             else ""
         )
+        existing_already_notified = (
+            existing_id in NOTIFIED_ESCALATIONS
+            and NOTIFIED_ESCALATIONS.get(existing_id) not in {"", "pending", None}
+        )
         prev_pending_msg = str(existing_pending.get("guest_message") or "").strip() if existing_pending else ""
         is_followup = _looks_like_followup(prev_pending_msg, guest_message, clean_reason, clean_context)
-        # Solo consideramos "actualización" cuando existe otra pendiente distinta a la actual
-        # y el nuevo mensaje parece ampliación de la misma consulta.
-        can_reuse_existing = bool(existing_id and existing_id != escalation_id and is_followup)
-        if can_reuse_existing:
-            existing_already_notified = (
-                existing_id in NOTIFIED_ESCALATIONS
-                and NOTIFIED_ESCALATIONS.get(existing_id) not in {"", "pending", None}
+        # Actualiza una pendiente existente cuando:
+        # - llega una nueva escalación distinta y parece follow-up, o
+        # - llega el mismo escalation_id ya notificado (caso fusión forzada en InternoAgent).
+        can_reuse_existing = bool(
+            existing_id
+            and (
+                (existing_id != escalation_id and is_followup)
+                or (existing_id == escalation_id and (already_notified or existing_already_notified))
             )
+        )
+        if can_reuse_existing:
             merged_type = _pick_escalation_type(existing_type, escalation_type)
             merged_guest_message = _synthesize_escalation_query(
                 str(existing_pending.get("guest_message") or ""),
@@ -609,11 +616,6 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 property_id,
             )
             return f"Escalación {existing_id} ya pendiente; actualizada con el último contexto."
-
-        # Si la escalación ya existe con el mismo ID y ya fue notificada, evita reenvío duplicado.
-        if existing_id and existing_id == escalation_id and already_notified:
-            log.info("🔁 Escalación %s ya notificada; omitiendo reenvío.", escalation_id)
-            return f"ℹ️ Escalación {escalation_id} ya fue notificada al encargado."
 
         esc = Escalation(
             escalation_id=escalation_id,

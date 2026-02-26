@@ -193,7 +193,6 @@ class InternoAgent:
                 reason=reason,
                 context=context,
             )
-            self._schedule_flag_cleanup(chat_id)
             return response
 
         except Exception:
@@ -349,10 +348,9 @@ class InternoAgent:
 
         existing_id = str((existing_pending or {}).get("escalation_id") or "").strip()
         prev_pending_msg = str((existing_pending or {}).get("guest_message") or "").strip()
-        reuse_existing = bool(
-            existing_id
-            and _looks_like_followup(prev_pending_msg, guest_message, reason, context)
-        )
+        # Regla operativa: si existe una escalación pendiente para este chat/property,
+        # siempre se fusiona la nueva consulta en la misma escalación activa.
+        reuse_existing = bool(existing_id)
         escalation_id = (
             existing_id
             if reuse_existing
