@@ -1582,7 +1582,11 @@ def register_chatter_routes(app, state) -> None:
         }
 
     @router.post("/messages")
-    async def send_message(payload: SendMessageRequest, _: None = Depends(_verify_bearer)):
+    @router.post("/messages/send")
+    async def send_message(
+        payload: SendMessageRequest,
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
         property_id = _normalize_property_id(payload.property_id)
         user_id = _normalize_user_id(payload.user_id)
@@ -1603,6 +1607,22 @@ def register_chatter_routes(app, state) -> None:
                 )
             except Exception:
                 instance_id = None
+        token_instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        if token_instance_id:
+            if instance_id and str(instance_id).strip() != token_instance_id:
+                log.warning(
+                    "instance_id en memoria (%s) no coincide con token (%s) para chat_id=%s; se prioriza token.",
+                    instance_id,
+                    token_instance_id,
+                    chat_id,
+                )
+            instance_id = token_instance_id
+            if state.memory_manager:
+                try:
+                    state.memory_manager.set_flag(chat_id, "instance_id", token_instance_id)
+                    state.memory_manager.set_flag(chat_id, "instance_hotel_code", token_instance_id)
+                except Exception:
+                    pass
 
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
@@ -1630,7 +1650,9 @@ def register_chatter_routes(app, state) -> None:
                     property_id = state.memory_manager.get_flag(chat_id, "property_id")
                 except Exception:
                     property_id = None
-            if property_id is None:
+            # Si conocemos la instancia (por token o memoria), no bloquear envío manual.
+            # En ese caso, el context_id ya enruta correctamente por instancia.
+            if property_id is None and not instance_id:
                 raise HTTPException(
                     status_code=422,
                     detail="property_id requerido para enviar mensajes en WhatsApp multi-instancia",
