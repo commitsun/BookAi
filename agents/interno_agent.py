@@ -288,6 +288,25 @@ class InternoAgent:
                     aliases.append(c)
             return aliases
 
+        escalation_flag_targets: list[str] = []
+        if self.memory_manager:
+            try:
+                aliases = _chat_aliases(guest_chat_id)
+                for alias in aliases:
+                    if alias not in escalation_flag_targets:
+                        escalation_flag_targets.append(alias)
+                try:
+                    last_mem = self.memory_manager.get_flag(guest_chat_id, "last_memory_id")
+                except Exception:
+                    last_mem = None
+                if isinstance(last_mem, str) and last_mem.strip() and last_mem.strip() not in escalation_flag_targets:
+                    escalation_flag_targets.append(last_mem.strip())
+                for target in escalation_flag_targets:
+                    self.memory_manager.set_flag(target, "escalation_in_progress", True)
+                    self.memory_manager.clear_flag(target, "last_escalation_followup_message")
+            except Exception:
+                escalation_flag_targets = []
+
         def _text_tokens(value: str) -> set[str]:
             words = re.findall(r"[a-z0-9áéíóúñü]{3,}", str(value or "").lower())
             return set(words)
@@ -487,14 +506,23 @@ class InternoAgent:
             "Usa la tool 'notificar_encargado' con estos datos."
         )
 
-        return await self.ainvoke(
-            user_input=prompt,
-            chat_id=guest_chat_id,
-            escalation_id=escalation_id,
-            escalation_context=f"MAIN_AUTO_{escalation_type.upper()}",
-            context_window=0,
-            chat_history=[],
-        )
+        try:
+            return await self.ainvoke(
+                user_input=prompt,
+                chat_id=guest_chat_id,
+                escalation_id=escalation_id,
+                escalation_context=f"MAIN_AUTO_{escalation_type.upper()}",
+                context_window=0,
+                chat_history=[],
+            )
+        except Exception:
+            if self.memory_manager:
+                try:
+                    for target in escalation_flag_targets:
+                        self.memory_manager.clear_flag(target, "escalation_in_progress")
+                except Exception:
+                    pass
+            raise
 
     async def process_manager_reply(
         self,

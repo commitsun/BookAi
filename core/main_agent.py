@@ -1667,6 +1667,24 @@ class MainAgent:
                 )
 
                 await self.interno_agent.ainvoke(user_input=query, chat_id=chat_id)
+                if self.memory_manager:
+                    # Marca hilo activo para anidar nuevas consultas del huésped
+                    # en la escalación pendiente del mismo chat.
+                    targets = {str(chat_id or "").strip()}
+                    raw_chat = str(chat_id or "").strip()
+                    if ":" in raw_chat:
+                        tail = raw_chat.split(":")[-1].strip()
+                        if tail:
+                            targets.add(tail)
+                    try:
+                        last_mem = self.memory_manager.get_flag(chat_id, "last_memory_id")
+                        if isinstance(last_mem, str) and last_mem.strip():
+                            targets.add(last_mem.strip())
+                    except Exception:
+                        pass
+                    for target in [t for t in targets if t]:
+                        self.memory_manager.set_flag(target, "escalation_in_progress", True)
+                        self.memory_manager.clear_flag(target, "last_escalation_followup_message")
 
             except Exception as exc:
                 log.error(f"❌ Error delegando escalación a InternoAgent: {exc}", exc_info=True)

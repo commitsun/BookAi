@@ -523,7 +523,10 @@ def register_template_routes(app, state) -> None:
             language = (payload.template.language or "es").lower()
             template_code = payload.template.code
             idempotency_key = (payload.meta.idempotency_key if payload.meta else "") or ""
-            property_id = payload.meta.property_id if payload.meta else None
+            property_id = (
+                (payload.meta.property_id if payload.meta else None)
+                or payload.source.hotel.id
+            )
             template_params = dict(payload.template.parameters or {})
             folio_details_url_raw = _extract_folio_details_url(template_params)
             folio_base_url_raw = _extract_folio_base_url(template_params)
@@ -599,6 +602,7 @@ def register_template_routes(app, state) -> None:
             if property_id is not None:
                 try:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
+                    state.memory_manager.set_flag(chat_id, "wa_context_property_id", property_id)
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
 

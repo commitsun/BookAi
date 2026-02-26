@@ -1706,6 +1706,7 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.set_flag(mem_id, "default_channel", payload.channel.lower())
                 # Al responder manualmente, limpiamos posibles pendientes antiguos.
                 state.memory_manager.clear_flag(mem_id, "escalation_in_progress")
+                state.memory_manager.clear_flag(mem_id, "last_escalation_followup_message")
                 state.memory_manager.clear_flag(mem_id, "escalation_confirmation_pending")
                 state.memory_manager.clear_flag(mem_id, "consulta_base_realizada")
                 state.memory_manager.clear_flag(mem_id, "inciso_enviado")

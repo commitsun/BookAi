@@ -498,6 +498,20 @@ def _resolve_owner_key(payload: SuperintendenteContext) -> tuple[str, str, Optio
     return f"{owner_id}:{property_id}", owner_id, property_id
 
 
+def _should_persist_alt_internal_markers(alt_key: Optional[str], property_id: Optional[str]) -> bool:
+    """
+    Evita pseudo-sesiones internas cuando alt_key coincide con property_id
+    (ej. conversation_id='38' con [CTX]/[WA_DRAFT]).
+    """
+    alt = str(alt_key or "").strip()
+    prop = str(property_id or "").strip()
+    if not alt:
+        return False
+    if prop and alt == prop:
+        return False
+    return True
+
+
 def _normalize_guest_id(guest_id: str | None) -> str:
     return str(guest_id or "").replace("+", "").strip()
 
@@ -1645,6 +1659,7 @@ def register_superintendente_routes(app, state) -> None:
         owner_key, owner_id, property_id = _resolve_owner_key(payload)
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
+        alt_internal_key = alt_key if _should_persist_alt_internal_markers(alt_key, property_id) else None
         message = (payload.message or "").strip()
         original_message = message
 
@@ -1714,9 +1729,9 @@ def register_superintendente_routes(app, state) -> None:
                         content=f"[CTX] property_id={property_id}",
                         channel="superintendente",
                     )
-                    if alt_key:
+                    if alt_internal_key:
                         state.memory_manager.save(
-                            conversation_id=alt_key,
+                            conversation_id=alt_internal_key,
                             role="system",
                             content=f"[CTX] property_id={property_id}",
                             channel="superintendente",
@@ -2128,9 +2143,9 @@ def register_superintendente_routes(app, state) -> None:
                                     content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                                     channel="superintendente",
                                 )
-                                if alt_key:
+                                if alt_internal_key:
                                     state.memory_manager.save(
-                                        conversation_id=alt_key,
+                                        conversation_id=alt_internal_key,
                                         role="system",
                                         content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                                         channel="superintendente",
@@ -2217,9 +2232,9 @@ def register_superintendente_routes(app, state) -> None:
                                 content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                                 channel="superintendente",
                             )
-                            if alt_key:
+                            if alt_internal_key:
                                 state.memory_manager.save(
-                                    conversation_id=alt_key,
+                                    conversation_id=alt_internal_key,
                                     role="system",
                                     content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                                     channel="superintendente",
@@ -2341,9 +2356,9 @@ def register_superintendente_routes(app, state) -> None:
                         content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                         channel="superintendente",
                     )
-                    if alt_key:
+                    if alt_internal_key:
                         state.memory_manager.save(
-                            conversation_id=alt_key,
+                            conversation_id=alt_internal_key,
                             role="system",
                             content=f"[WA_DRAFT]|{draft.get('guest_id')}|{draft.get('message')}",
                             channel="superintendente",

@@ -846,6 +846,23 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                 "manager_confirmed": True,
                 "sent_to_guest": True,
             })
+            if _MEMORY_MANAGER:
+                try:
+                    targets = {
+                        str(esc.guest_chat_id or "").strip(),
+                        _clean_chat_id(str(esc.guest_chat_id or "").strip()),
+                    }
+                    raw_guest = str(esc.guest_chat_id or "").strip()
+                    if ":" in raw_guest:
+                        tail = raw_guest.split(":")[-1].strip()
+                        if tail:
+                            targets.add(tail)
+                    for target in [t for t in targets if t]:
+                        _MEMORY_MANAGER.clear_flag(target, "escalation_in_progress")
+                        _MEMORY_MANAGER.clear_flag(target, "last_escalation_followup_message")
+                        _MEMORY_MANAGER.clear_flag(target, "escalation_confirmation_pending")
+                except Exception as clear_exc:
+                    log.debug("No se pudo limpiar flags de escalación tras envío final: %s", clear_exc)
 
             clean_chat_id = _chat_room_id(esc.guest_chat_id) or esc.guest_chat_id
             rooms = _rooms_for_escalation(esc.guest_chat_id)
