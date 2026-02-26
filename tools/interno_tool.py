@@ -195,24 +195,47 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
         return add
     if not add:
         return prev
-    if add.lower() in prev.lower():
-        return prev
+
+    # Dedupe simple por líneas idénticas o contenidas.
+    def _dedupe_lines(text: str) -> list[str]:
+        lines: list[str] = []
+        for raw in str(text or "").splitlines():
+            line = re.sub(r"\s+", " ", raw).strip(" .")
+            if not line:
+                continue
+            lower = line.lower()
+            if any(lower == existing.lower() for existing in lines):
+                continue
+            if any(lower in existing.lower() for existing in lines):
+                continue
+            lines = [existing for existing in lines if existing.lower() not in lower]
+            lines.append(line)
+        return lines
+
+    combined_lines = _dedupe_lines(f"{prev}\n{add}")
+    if len(combined_lines) == 1:
+        return combined_lines[0]
+
     try:
         llm = ModelConfig.get_llm(ModelTier.INTERNAL)
         system_prompt = (
-            "Eres asistente interno hotelero. Fusiona las consultas del huésped en UNA sola frase breve y clara, "
-            "sin perder información relevante.\n"
+            "Eres asistente interno hotelero. Reescribe la consulta acumulada del huésped en UNA sola frase breve, "
+            "clara y no redundante.\n"
             "Reglas:\n"
             "- Devuelve SOLO la frase final.\n"
             "- No uses listas ni numeración.\n"
             "- Mantén el idioma original del huésped. No traduzcas.\n"
-            "- Máximo 35 palabras."
+            "- Elimina repeticiones literales o semánticas (no dupliques la misma idea).\n"
+            "- Si la ampliación ya incluye la consulta previa, no repitas la parte previa.\n"
+            "- Máximo 28 palabras."
         )
+        previous_clean = " ".join(_dedupe_lines(prev))
+        addition_clean = " ".join(_dedupe_lines(add))
         user_prompt = (
             "Consulta previa:\n"
-            f"{prev}\n\n"
+            f"{previous_clean}\n\n"
             "Nueva ampliación:\n"
-            f"{add}\n\n"
+            f"{addition_clean}\n\n"
             "Consulta sintetizada:"
         )
         raw = llm.invoke(
@@ -227,7 +250,13 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
             return text
     except Exception:
         pass
-    return _merge_escalation_text(prev, add)
+
+    # Fallback determinista sin LLM.
+    if prev.lower() in add.lower():
+        return add
+    if add.lower() in prev.lower():
+        return prev
+    return " ".join(combined_lines).strip()
 
 
 def _escalation_priority(escalation_type: str) -> int:
