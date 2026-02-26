@@ -1679,14 +1679,14 @@ def register_superintendente_routes(app, state) -> None:
                         conversation_id=session_key,
                         role="user",
                         content=original_message,
-                        channel="telegram",
+                        channel="superintendente",
                         original_chat_id=owner_id,
                     )
                 state.memory_manager.save(
                     conversation_id=session_key,
                     role="assistant",
                     content=text,
-                    channel="telegram",
+                    channel="superintendente",
                     original_chat_id=owner_id,
                 )
             except Exception:
@@ -2502,7 +2502,7 @@ def register_superintendente_routes(app, state) -> None:
                     conversation_id=session_id,
                     role="system",
                     content=marker,
-                    channel="telegram",
+                    channel="superintendente",
                     original_chat_id=owner_key,
                 )
             except Exception as exc:
