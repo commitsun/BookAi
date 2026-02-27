@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
@@ -30,6 +31,11 @@ from core.db import upsert_chat_reservation, get_active_chat_reservation
 log = logging.getLogger("ChatterRoutes")
 _INSTANCE_CHAT_SETS_TTL_SECONDS = 5
 _instance_chat_sets_cache: Dict[str, Tuple[float, set[str], set[str]]] = {}
+_NO_CACHE_HEADERS = {
+    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+    "Pragma": "no-cache",
+    "Expires": "0",
+}
 
 
 # ---------------------------------------------------------------------------
@@ -1396,7 +1402,10 @@ def register_chatter_routes(app, state) -> None:
             allowed_chat_ids = chat_ids
             allowed_original_chat_ids = original_chat_ids
             if not allowed_chat_ids and not allowed_original_chat_ids:
-                return {"page": page, "page_size": page_size, "items": []}
+                return JSONResponse(
+                    {"page": page, "page_size": page_size, "items": []},
+                    headers=_NO_CACHE_HEADERS,
+                )
         instance_whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
@@ -1562,25 +1571,6 @@ def register_chatter_routes(app, state) -> None:
                 pending_prop = _pending_property_for_guest(pending_grouped, cid)
                 if pending_prop is not None:
                     prop_id = pending_prop
-            bookai_resolution = _bookai_flag_resolution(
-                _bookai_settings(state),
-                aliases=_related_memory_ids(state, cid) or [],
-                chat_id=cid,
-                property_id=prop_id,
-                instance_id=instance_id,
-                default=True,
-            )
-            log.info(
-                "[BOOKAI_LIST] chat_id=%s property_id=%s instance_id=%s value=%s source=%s matched_key=%s aliases=%s",
-                cid,
-                prop_id,
-                instance_id,
-                bookai_resolution.get("value"),
-                bookai_resolution.get("source"),
-                bookai_resolution.get("matched_key"),
-                ",".join(bookai_resolution.get("aliases") or []),
-            )
-
             items.append(
                 {
                     "chat_id": cid,
@@ -1598,7 +1588,6 @@ def register_chatter_routes(app, state) -> None:
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
                     "whatsapp_phone_number": instance_whatsapp_phone_number,
-                    "bookai_enabled": bool(bookai_resolution.get("value")),
                     "unread_count": 0,
                     "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
                     "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
@@ -1610,11 +1599,14 @@ def register_chatter_routes(app, state) -> None:
                 }
             )
 
-        return {
-            "page": page,
-            "page_size": page_size,
-            "items": items,
-        }
+        return JSONResponse(
+            {
+                "page": page,
+                "page_size": page_size,
+                "items": items,
+            },
+            headers=_NO_CACHE_HEADERS,
+        )
 
     @router.get("/chats/{chat_id}/messages")
     async def list_messages(
