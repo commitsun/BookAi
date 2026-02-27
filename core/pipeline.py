@@ -958,21 +958,6 @@ async def process_user_message(
                     },
                     rooms=rooms,
                 )
-                await socket_mgr.emit(
-                    "chat.updated",
-                    {
-                        "rooms": rooms,
-                        "chat_id": clean_chat_id,
-                        "guest_chat_id": clean_chat_id,
-                        "context_id": context_id,
-                        "property_id": prop_id,
-                        "channel": channel,
-                        "bookai_enabled": True,
-                        "last_message": response_raw,
-                        "last_message_at": now_iso,
-                    },
-                    rooms=rooms,
-                )
         except Exception as exc:
             log.warning("No se pudo emitir respuesta IA por socket: %s", exc)
 

@@ -481,12 +481,6 @@ class InternoAgent:
                 "chat.updated",
                 {
                     "chat_id": clean_chat_id,
-                    "bookai_enabled": _resolve_bookai_enabled_flag(
-                        self.memory_manager,
-                        guest_chat_id,
-                        clean_chat_id,
-                        self.memory_manager.get_flag(guest_chat_id, "last_memory_id") if self.memory_manager else None,
-                    ),
                     "needs_action": _needs_action_es(guest_lang),
                     "needs_action_type": escalation_type,
                     "needs_action_reason": (
