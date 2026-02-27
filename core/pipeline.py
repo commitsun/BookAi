@@ -231,6 +231,7 @@ def _resolve_bookai_enabled(
         return None
 
     memory = getattr(state, "memory_manager", None)
+    instance_candidates: list[str] = []
     property_candidates: list[str] = []
     if property_id is not None and str(property_id).strip():
         property_candidates.append(str(property_id).strip())
@@ -244,6 +245,12 @@ def _resolve_bookai_enabled(
                 prop = None
             if prop is not None and str(prop).strip():
                 property_candidates.append(str(prop).strip())
+            try:
+                inst = memory.get_flag(key, "instance_id") or memory.get_flag(key, "instance_hotel_code")
+            except Exception:
+                inst = None
+            if inst is not None and str(inst).strip():
+                instance_candidates.append(str(inst).strip())
         try:
             for hint_key in (mem_id, chat_id, clean_id):
                 if not hint_key:
@@ -254,12 +261,29 @@ def _resolve_bookai_enabled(
         except Exception:
             pass
 
+    seen_instances = set()
+    normalized_instances: list[str] = []
+    for inst in instance_candidates:
+        if inst in seen_instances:
+            continue
+        seen_instances.add(inst)
+        normalized_instances.append(inst)
+
     seen_props = set()
     for prop in property_candidates:
         if prop in seen_props:
             continue
         seen_props.add(prop)
+        for inst in normalized_instances:
+            candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}:{prop}"))
+            if candidate_value is not None:
+                return candidate_value
         candidate_value = _as_bool_or_none(bookai_flags.get(f"{clean_id}:{prop}"))
+        if candidate_value is not None:
+            return candidate_value
+
+    for inst in normalized_instances:
+        candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}"))
         if candidate_value is not None:
             return candidate_value
 

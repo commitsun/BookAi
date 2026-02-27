@@ -926,6 +926,37 @@ def _bookai_settings(state) -> Dict[str, bool]:
     return settings
 
 
+def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Optional[str] = None) -> list[str]:
+    clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+    prop = _normalize_property_id(property_id)
+    inst = str(instance_id or "").strip()
+    keys: list[str] = []
+    if inst and clean_id and prop is not None:
+        keys.append(f"{inst}|{clean_id}:{prop}")
+    if inst and clean_id:
+        keys.append(f"{inst}|{clean_id}")
+    if clean_id and prop is not None:
+        keys.append(f"{clean_id}:{prop}")
+    if clean_id:
+        keys.append(clean_id)
+    return keys
+
+
+def _bookai_flag_value(
+    state,
+    *,
+    chat_id: str,
+    property_id: Any = None,
+    instance_id: Optional[str] = None,
+    default: bool = True,
+) -> bool:
+    settings = _bookai_settings(state)
+    for key in _bookai_flag_keys(chat_id, property_id=property_id, instance_id=instance_id):
+        if key in settings:
+            return bool(settings.get(key))
+    return default
+
+
 def _template_registry(state) -> Optional[TemplateRegistry]:
     registry = getattr(state, "template_registry", None)
     if registry and isinstance(registry, TemplateRegistry):
@@ -1438,8 +1469,12 @@ def register_chatter_routes(app, state) -> None:
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
                     "whatsapp_phone_number": instance_whatsapp_phone_number,
-                    "bookai_enabled": bool(
-                        bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))
+                    "bookai_enabled": _bookai_flag_value(
+                        state,
+                        chat_id=cid,
+                        property_id=prop_id,
+                        instance_id=instance_id,
+                        default=True,
                     ),
                     "unread_count": 0,
                     "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
@@ -1647,6 +1682,14 @@ def register_chatter_routes(app, state) -> None:
                     state.memory_manager.set_flag(chat_id, "instance_hotel_code", token_instance_id)
                 except Exception:
                     pass
+                try:
+                    instance_payload = fetch_instance_by_code(token_instance_id) or {}
+                    for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                        val = instance_payload.get(key)
+                        if val:
+                            state.memory_manager.set_flag(chat_id, key, val)
+                except Exception as exc:
+                    log.warning("No se pudieron precargar credenciales WA para instance_id=%s: %s", token_instance_id, exc)
 
         if token_instance_id:
             context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
@@ -2272,9 +2315,8 @@ def register_chatter_routes(app, state) -> None:
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
-        bookai_flags[f"{clean_id}:{property_id}"] = payload.bookai_enabled
-        # Refuerzo por chat: evita reactivación accidental cuando aún no se resolvió property_id.
-        bookai_flags[clean_id] = payload.bookai_enabled
+        for key in _bookai_flag_keys(clean_id, property_id=property_id, instance_id=instance_id):
+            bookai_flags[key] = payload.bookai_enabled
         state.save_tracking()
 
         if payload.bookai_enabled is False:
@@ -2290,6 +2332,15 @@ def register_chatter_routes(app, state) -> None:
                         continue
                     if memory_mgr:
                         try:
+                            cid_instance = (
+                                memory_mgr.get_flag(cid, "instance_id")
+                                or memory_mgr.get_flag(cid, "instance_hotel_code")
+                            )
+                        except Exception:
+                            cid_instance = None
+                        if instance_id and cid_instance and str(cid_instance).strip() != str(instance_id).strip():
+                            continue
+                        try:
                             cid_prop = memory_mgr.get_flag(cid, "property_id")
                         except Exception:
                             cid_prop = None
@@ -2297,7 +2348,7 @@ def register_chatter_routes(app, state) -> None:
                             continue
                     target_keys.append(cid)
                 for cid in target_keys:
-                    await buffer_mgr.discard_conversation(cid)
+                    await buffer_mgr.discard_conversation(cid, cancel_processing=True)
             except Exception as exc:
                 log.warning("No se pudo purgar buffer al desactivar BookAI: %s", exc)
 
