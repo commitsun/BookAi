@@ -107,7 +107,7 @@ def _parse_token_instance_map() -> Dict[str, str]:
     return parsed
 
 
-def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> None:
+def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
     """Verifica Bearer Token usando mapa multi-instancia o token único."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Autenticación Bearer requerida")
@@ -117,7 +117,7 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
     if token_map:
         if token not in token_map:
             raise HTTPException(status_code=403, detail="Token inválido")
-        return
+        return {"token": token, "instance_id": token_map.get(token)}
 
     expected = (Settings.ROOMDOO_BEARER_TOKEN or "").strip()
     if not expected:
@@ -125,6 +125,7 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
         raise HTTPException(status_code=401, detail="Token de integración no configurado")
     if token != expected:
         raise HTTPException(status_code=403, detail="Token inválido")
+    return {"token": token, "instance_id": None}
 
 
 def _tracking_sessions(state) -> dict[str, dict[str, dict[str, Any]]]:
@@ -1748,12 +1749,16 @@ def register_superintendente_routes(app, state) -> None:
     router = APIRouter(prefix="/api/v1/superintendente", tags=["superintendente"])
 
     @router.post("/ask")
-    async def ask_superintendente(payload: AskSuperintendenteRequest, _: None = Depends(_verify_bearer)):
+    async def ask_superintendente(
+        payload: AskSuperintendenteRequest,
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
         agent = getattr(state, "superintendente_agent", None)
         if not agent:
             raise HTTPException(status_code=500, detail="Superintendente no disponible")
 
         owner_key, owner_id, property_id = _resolve_owner_key(payload)
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         session_key = payload.session_id or owner_key
         alt_key = owner_key if payload.session_id else None
         alt_internal_key = alt_key if _should_persist_alt_internal_markers(alt_key, property_id) else None
