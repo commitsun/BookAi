@@ -1412,9 +1412,11 @@ def register_chatter_routes(app, state) -> None:
         ordered_keys: List[str] = []
         summaries: Dict[str, Dict[str, Any]] = {}
 
+
         while len(ordered_keys) < target:
+            page_size=20 
             query = (
-                supabase.table("chat_history")
+                supabase.table("chat_last_message")
                 .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
             )
@@ -1423,8 +1425,7 @@ def register_chatter_routes(app, state) -> None:
             if property_id is not None and not instance_id:
                 query = query.eq("property_id", property_id)
             resp = query.order("created_at", desc=True).range(
-                offset,
-                offset + batch_size - 1,
+                (page-1)*page_size, page*page_size - 1 
             ).execute()
             rows = resp.data or []
             if not rows:
