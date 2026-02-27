@@ -350,9 +350,65 @@ def _bookai_flag_value(
     default: bool = True,
 ) -> bool:
     settings = _bookai_settings(state)
-    for key in _bookai_flag_keys(chat_id, property_id=property_id, instance_id=instance_id):
-        if key in settings:
-            return bool(settings.get(key))
+    def _parse_bool(raw: Any) -> Optional[bool]:
+        if isinstance(raw, bool):
+            return raw
+        if raw is None:
+            return None
+        text = str(raw).strip().lower()
+        if text in {"true", "1", "yes", "on"}:
+            return True
+        if text in {"false", "0", "no", "off"}:
+            return False
+        return None
+
+    raw_chat_id = str(chat_id or "").strip()
+    clean_chat_id = _clean_chat_id(raw_chat_id)
+    alias_ids: list[str] = []
+    for alias in (raw_chat_id, clean_chat_id):
+        normalized = str(alias or "").strip()
+        if normalized and normalized not in alias_ids:
+            alias_ids.append(normalized)
+
+    for alias in alias_ids:
+        for key in _bookai_flag_keys(alias, property_id=property_id, instance_id=instance_id):
+            if key in settings:
+                parsed = _parse_bool(settings.get(key))
+                if parsed is not None:
+                    return parsed
+
+    inst = str(instance_id or "").strip()
+    prop = None if property_id is None else str(property_id).strip()
+    false_found = False
+    true_found = False
+    for alias in alias_ids:
+        clean_alias = _clean_chat_id(alias) or alias
+        if not clean_alias:
+            continue
+        prefixes: list[str] = []
+        if inst and prop:
+            prefixes.append(f"{inst}|{clean_alias}:{prop}")
+        if inst:
+            prefixes.append(f"{inst}|{clean_alias}")
+        if not inst and prop:
+            prefixes.append(f"{clean_alias}:{prop}")
+        if not inst:
+            prefixes.append(clean_alias)
+        for prefix in prefixes:
+            for key, value in settings.items():
+                if not str(key).startswith(prefix):
+                    continue
+                parsed = _parse_bool(value)
+                if parsed is None:
+                    continue
+                if parsed is False:
+                    false_found = True
+                else:
+                    true_found = True
+    if false_found:
+        return False
+    if true_found:
+        return True
     return default
 
 
