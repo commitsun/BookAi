@@ -31,6 +31,21 @@ from tools.interno_tool import (
 log = logging.getLogger("InternoAgent")
 
 
+def _resolve_bookai_enabled_flag(memory_manager: Any, *keys: str) -> Optional[bool]:
+    if not memory_manager:
+        return None
+    for key in keys:
+        if not key:
+            continue
+        try:
+            val = memory_manager.get_flag(key, "bookai_enabled")
+        except Exception:
+            val = None
+        if isinstance(val, bool):
+            return val
+    return None
+
+
 class InternoAgent:
     """Agente interno independiente con creación de executor por invocación."""
 
@@ -466,6 +481,12 @@ class InternoAgent:
                 "chat.updated",
                 {
                     "chat_id": clean_chat_id,
+                    "bookai_enabled": _resolve_bookai_enabled_flag(
+                        self.memory_manager,
+                        guest_chat_id,
+                        clean_chat_id,
+                        self.memory_manager.get_flag(guest_chat_id, "last_memory_id") if self.memory_manager else None,
+                    ),
                     "needs_action": _needs_action_es(guest_lang),
                     "needs_action_type": escalation_type,
                     "needs_action_reason": (

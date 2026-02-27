@@ -2369,6 +2369,27 @@ def register_chatter_routes(app, state) -> None:
         bookai_flags = _bookai_settings(state)
         for key in _bookai_flag_keys(clean_id, property_id=property_id, instance_id=instance_id):
             bookai_flags[key] = payload.bookai_enabled
+        memory_mgr = getattr(state, "memory_manager", None)
+        if memory_mgr:
+            try:
+                related_ids = _related_memory_ids(state, clean_id)
+                if clean_id not in related_ids:
+                    related_ids.append(clean_id)
+                for mem_id in related_ids:
+                    if not mem_id:
+                        continue
+                    try:
+                        mem_instance = (
+                            memory_mgr.get_flag(mem_id, "instance_id")
+                            or memory_mgr.get_flag(mem_id, "instance_hotel_code")
+                        )
+                    except Exception:
+                        mem_instance = None
+                    if instance_id and mem_instance and str(mem_instance).strip() != str(instance_id).strip():
+                        continue
+                    memory_mgr.set_flag(mem_id, "bookai_enabled", bool(payload.bookai_enabled))
+            except Exception as exc:
+                log.warning("No se pudo sincronizar flag bookai_enabled en memoria: %s", exc)
         state.save_tracking()
 
         if payload.bookai_enabled is False:
@@ -2376,7 +2397,6 @@ def register_chatter_routes(app, state) -> None:
             # se procesen luego al reactivar.
             try:
                 buffer_mgr = getattr(state, "buffer_manager", None)
-                memory_mgr = getattr(state, "memory_manager", None)
                 convs = list(getattr(buffer_mgr, "_convs", {}).keys()) if buffer_mgr else []
                 target_keys = []
                 for cid in convs:
