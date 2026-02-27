@@ -351,18 +351,37 @@ def _bookai_flag_value(
     default: bool = True,
 ) -> bool:
     settings = _bookai_settings(state)
-    def _parse_bool(raw: Any) -> Optional[bool]:
-        if isinstance(raw, bool):
-            return raw
-        if raw is None:
-            return None
-        text = str(raw).strip().lower()
-        if text in {"true", "1", "yes", "on"}:
-            return True
-        if text in {"false", "0", "no", "off"}:
-            return False
-        return None
+    resolution = _bookai_flag_resolution(
+        settings,
+        chat_id=chat_id,
+        property_id=property_id,
+        instance_id=instance_id,
+        default=default,
+    )
+    return bool(resolution["value"])
 
+
+def _parse_bookai_flag(raw: Any) -> Optional[bool]:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _bookai_flag_resolution(
+    settings: Dict[str, Any],
+    *,
+    chat_id: str,
+    property_id: Any = None,
+    instance_id: Optional[str] = None,
+    default: bool = True,
+) -> Dict[str, Any]:
     raw_chat_id = str(chat_id or "").strip()
     clean_chat_id = _clean_chat_id(raw_chat_id)
     alias_ids: list[str] = []
@@ -371,17 +390,24 @@ def _bookai_flag_value(
         if normalized and normalized not in alias_ids:
             alias_ids.append(normalized)
 
+    inst = str(instance_id or "").strip()
+    prop = None if property_id is None else str(property_id).strip()
+
     for alias in alias_ids:
         for key in _bookai_flag_keys(alias, property_id=property_id, instance_id=instance_id):
             if key in settings:
-                parsed = _parse_bool(settings.get(key))
+                parsed = _parse_bookai_flag(settings.get(key))
                 if parsed is not None:
-                    return parsed
+                    return {
+                        "value": parsed,
+                        "source": "exact",
+                        "matched_key": key,
+                        "aliases": alias_ids,
+                    }
 
-    inst = str(instance_id or "").strip()
-    prop = None if property_id is None else str(property_id).strip()
     false_found = False
     true_found = False
+    matched_prefixes: list[str] = []
     for alias in alias_ids:
         clean_alias = _clean_chat_id(alias) or alias
         if not clean_alias:
@@ -399,18 +425,36 @@ def _bookai_flag_value(
             for key, value in settings.items():
                 if not str(key).startswith(prefix):
                     continue
-                parsed = _parse_bool(value)
+                parsed = _parse_bookai_flag(value)
                 if parsed is None:
                     continue
+                matched_prefixes.append(str(key))
                 if parsed is False:
                     false_found = True
                 else:
                     true_found = True
     if false_found:
-        return False
+        return {
+            "value": False,
+            "source": "prefix_false",
+            "matched_key": matched_prefixes[0] if matched_prefixes else None,
+            "aliases": alias_ids,
+            "matched_keys": matched_prefixes,
+        }
     if true_found:
-        return True
-    return default
+        return {
+            "value": True,
+            "source": "prefix_true",
+            "matched_key": matched_prefixes[0] if matched_prefixes else None,
+            "aliases": alias_ids,
+            "matched_keys": matched_prefixes,
+        }
+    return {
+        "value": default,
+        "source": "default",
+        "matched_key": None,
+        "aliases": alias_ids,
+    }
 
 
 def _fetch_global_client_context(
@@ -519,6 +563,24 @@ def _fetch_global_client_context(
             except Exception:
                 pass
 
+            bookai_resolution = _bookai_flag_resolution(
+                _bookai_settings(state),
+                chat_id=cid,
+                property_id=prop_id,
+                instance_id=instance_id,
+                default=True,
+            )
+            log.info(
+                "[BOOKAI_SUPER_LIST] chat_id=%s property_id=%s instance_id=%s value=%s source=%s matched_key=%s aliases=%s",
+                cid,
+                prop_id,
+                instance_id,
+                bookai_resolution.get("value"),
+                bookai_resolution.get("source"),
+                bookai_resolution.get("matched_key"),
+                ",".join(bookai_resolution.get("aliases") or []),
+            )
+
             items.append(
                 {
                     "chat_id": cid,
@@ -528,13 +590,7 @@ def _fetch_global_client_context(
                     "reservation_status": reservation_status,
                     "folio_id": folio_id,
                     "room_number": room_number,
-                    "bookai_enabled": _bookai_flag_value(
-                        state,
-                        chat_id=cid,
-                        property_id=prop_id,
-                        instance_id=instance_id,
-                        default=True,
-                    ),
+                    "bookai_enabled": bool(bookai_resolution.get("value")),
                     "checkin": checkin,
                     "checkout": checkout,
                     "unread_count": 0,

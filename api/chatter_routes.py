@@ -951,25 +951,49 @@ def _bookai_flag_value(
     default: bool = True,
 ) -> bool:
     settings = _bookai_settings(state)
-    def _parse_bool(raw: Any) -> Optional[bool]:
-        if isinstance(raw, bool):
-            return raw
-        if raw is None:
-            return None
-        text = str(raw).strip().lower()
-        if text in {"true", "1", "yes", "on"}:
-            return True
-        if text in {"false", "0", "no", "off"}:
-            return False
-        return None
+    resolution = _bookai_flag_resolution(
+        settings,
+        aliases=_related_memory_ids(state, chat_id) or [],
+        chat_id=chat_id,
+        property_id=property_id,
+        instance_id=instance_id,
+        default=default,
+    )
+    return bool(resolution["value"])
 
-    alias_ids = _related_memory_ids(state, chat_id) or []
+
+def _parse_bookai_flag(raw: Any) -> Optional[bool]:
+    if isinstance(raw, bool):
+        return raw
+    if raw is None:
+        return None
+    text = str(raw).strip().lower()
+    if text in {"true", "1", "yes", "on"}:
+        return True
+    if text in {"false", "0", "no", "off"}:
+        return False
+    return None
+
+
+def _bookai_flag_resolution(
+    settings: Dict[str, Any],
+    *,
+    aliases: list[str],
+    chat_id: str,
+    property_id: Any = None,
+    instance_id: Optional[str] = None,
+    default: bool = True,
+) -> Dict[str, Any]:
     raw_chat_id = str(chat_id or "").strip()
+    alias_ids = list(aliases or [])
     if raw_chat_id:
         alias_ids.append(raw_chat_id)
     clean_chat_id = _clean_chat_id(raw_chat_id)
     if clean_chat_id:
         alias_ids.append(clean_chat_id)
+    prop = _normalize_property_id(property_id)
+    inst = str(instance_id or "").strip()
+
     dedup_aliases: list[str] = []
     seen_aliases: set[str] = set()
     for alias in alias_ids:
@@ -982,12 +1006,18 @@ def _bookai_flag_value(
     for alias in dedup_aliases:
         for key in _bookai_flag_keys(alias, property_id=property_id, instance_id=instance_id):
             if key in settings:
-                return bool(settings.get(key))
+                parsed = _parse_bookai_flag(settings.get(key))
+                if parsed is not None:
+                    return {
+                        "value": parsed,
+                        "source": "exact",
+                        "matched_key": key,
+                        "aliases": dedup_aliases,
+                    }
 
-    inst = str(instance_id or "").strip()
-    prop = _normalize_property_id(property_id)
     false_found = False
     true_found = False
+    matched_prefixes: list[str] = []
     for alias in dedup_aliases:
         clean_alias = _clean_chat_id(alias) or alias
         if not clean_alias:
@@ -1005,18 +1035,36 @@ def _bookai_flag_value(
             for key, value in settings.items():
                 if not str(key).startswith(prefix):
                     continue
-                parsed = _parse_bool(value)
+                parsed = _parse_bookai_flag(value)
                 if parsed is None:
                     continue
+                matched_prefixes.append(str(key))
                 if parsed is False:
                     false_found = True
                 else:
                     true_found = True
     if false_found:
-        return False
+        return {
+            "value": False,
+            "source": "prefix_false",
+            "matched_key": matched_prefixes[0] if matched_prefixes else None,
+            "aliases": dedup_aliases,
+            "matched_keys": matched_prefixes,
+        }
     if true_found:
-        return True
-    return default
+        return {
+            "value": True,
+            "source": "prefix_true",
+            "matched_key": matched_prefixes[0] if matched_prefixes else None,
+            "aliases": dedup_aliases,
+            "matched_keys": matched_prefixes,
+        }
+    return {
+        "value": default,
+        "source": "default",
+        "matched_key": None,
+        "aliases": dedup_aliases,
+    }
 
 
 def _template_registry(state) -> Optional[TemplateRegistry]:
@@ -1514,6 +1562,25 @@ def register_chatter_routes(app, state) -> None:
                 pending_prop = _pending_property_for_guest(pending_grouped, cid)
                 if pending_prop is not None:
                     prop_id = pending_prop
+            bookai_resolution = _bookai_flag_resolution(
+                _bookai_settings(state),
+                aliases=_related_memory_ids(state, cid) or [],
+                chat_id=cid,
+                property_id=prop_id,
+                instance_id=instance_id,
+                default=True,
+            )
+            log.info(
+                "[BOOKAI_LIST] chat_id=%s property_id=%s instance_id=%s value=%s source=%s matched_key=%s aliases=%s",
+                cid,
+                prop_id,
+                instance_id,
+                bookai_resolution.get("value"),
+                bookai_resolution.get("source"),
+                bookai_resolution.get("matched_key"),
+                ",".join(bookai_resolution.get("aliases") or []),
+            )
+
             items.append(
                 {
                     "chat_id": cid,
@@ -1531,13 +1598,7 @@ def register_chatter_routes(app, state) -> None:
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
                     "whatsapp_phone_number": instance_whatsapp_phone_number,
-                    "bookai_enabled": _bookai_flag_value(
-                        state,
-                        chat_id=cid,
-                        property_id=prop_id,
-                        instance_id=instance_id,
-                        default=True,
-                    ),
+                    "bookai_enabled": bool(bookai_resolution.get("value")),
                     "unread_count": 0,
                     "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
                     "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
