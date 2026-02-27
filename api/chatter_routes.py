@@ -2289,7 +2289,6 @@ def register_chatter_routes(app, state) -> None:
                 "rooms": _rooms(clean_id, property_id, "whatsapp"),
                 "chat_id": clean_id,
                 "property_id": property_id,
-                "bookai_enabled": payload.bookai_enabled,
                 **_pending_snapshot_for_chat(
                     clean_id,
                     property_id,
