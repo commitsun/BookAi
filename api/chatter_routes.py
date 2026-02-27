@@ -935,9 +935,9 @@ def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Option
         keys.append(f"{inst}|{clean_id}:{prop}")
     if inst and clean_id:
         keys.append(f"{inst}|{clean_id}")
-    if clean_id and prop is not None:
+    if not inst and clean_id and prop is not None:
         keys.append(f"{clean_id}:{prop}")
-    if clean_id:
+    if not inst and clean_id:
         keys.append(clean_id)
     return keys
 
@@ -2490,14 +2490,27 @@ def register_chatter_routes(app, state) -> None:
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)
-        for key in _bookai_flag_keys(clean_id, property_id=property_id, instance_id=instance_id):
-            bookai_flags[key] = payload.bookai_enabled
+        related_ids = _related_memory_ids(state, clean_id)
+        if clean_id not in related_ids:
+            related_ids.append(clean_id)
+        legacy_keys_to_drop: set[str] = set()
+        scoped_keys_to_set: set[str] = set()
+        for alias in related_ids:
+            alias_clean = _clean_chat_id(alias) or str(alias or "").strip()
+            if not alias_clean:
+                continue
+            scoped_keys_to_set.update(
+                _bookai_flag_keys(alias_clean, property_id=property_id, instance_id=instance_id)
+            )
+            legacy_keys_to_drop.add(alias_clean)
+            legacy_keys_to_drop.add(f"{alias_clean}:{property_id}")
+        for stale_key in legacy_keys_to_drop:
+            bookai_flags.pop(stale_key, None)
+        for key in scoped_keys_to_set:
+            bookai_flags[key] = bool(payload.bookai_enabled)
         memory_mgr = getattr(state, "memory_manager", None)
         if memory_mgr:
             try:
-                related_ids = _related_memory_ids(state, clean_id)
-                if clean_id not in related_ids:
-                    related_ids.append(clean_id)
                 for mem_id in related_ids:
                     if not mem_id:
                         continue
@@ -2510,9 +2523,21 @@ def register_chatter_routes(app, state) -> None:
                         mem_instance = None
                     if instance_id and mem_instance and str(mem_instance).strip() != str(instance_id).strip():
                         continue
-                    memory_mgr.set_flag(mem_id, "bookai_enabled", bool(payload.bookai_enabled))
+                    try:
+                        memory_mgr.clear_flag(mem_id, "bookai_enabled")
+                    except Exception:
+                        pass
             except Exception as exc:
                 log.warning("No se pudo sincronizar flag bookai_enabled en memoria: %s", exc)
+        log.info(
+            "[BOOKAI_TOGGLE] chat_id=%s property_id=%s instance_id=%s value=%s scoped_keys=%s dropped_legacy=%s",
+            clean_id,
+            property_id,
+            instance_id,
+            bool(payload.bookai_enabled),
+            ",".join(sorted(scoped_keys_to_set)),
+            ",".join(sorted(legacy_keys_to_drop)),
+        )
         state.save_tracking()
 
         if payload.bookai_enabled is False:

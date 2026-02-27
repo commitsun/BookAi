@@ -335,9 +335,9 @@ def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Option
         keys.append(f"{inst}|{clean_id}:{prop}")
     if inst and clean_id:
         keys.append(f"{inst}|{clean_id}")
-    if clean_id and prop:
+    if not inst and clean_id and prop:
         keys.append(f"{clean_id}:{prop}")
-    if clean_id:
+    if not inst and clean_id:
         keys.append(clean_id)
     return keys
 
