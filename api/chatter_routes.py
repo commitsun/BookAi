@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
@@ -31,11 +30,6 @@ from core.db import upsert_chat_reservation, get_active_chat_reservation
 log = logging.getLogger("ChatterRoutes")
 _INSTANCE_CHAT_SETS_TTL_SECONDS = 5
 _instance_chat_sets_cache: Dict[str, Tuple[float, set[str], set[str]]] = {}
-_NO_CACHE_HEADERS = {
-    "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
-    "Pragma": "no-cache",
-    "Expires": "0",
-}
 
 
 # ---------------------------------------------------------------------------
@@ -1402,10 +1396,7 @@ def register_chatter_routes(app, state) -> None:
             allowed_chat_ids = chat_ids
             allowed_original_chat_ids = original_chat_ids
             if not allowed_chat_ids and not allowed_original_chat_ids:
-                return JSONResponse(
-                    {"page": page, "page_size": page_size, "items": []},
-                    headers=_NO_CACHE_HEADERS,
-                )
+                return {"page": page, "page_size": page_size, "items": []}
         instance_whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
@@ -1599,14 +1590,11 @@ def register_chatter_routes(app, state) -> None:
                 }
             )
 
-        return JSONResponse(
-            {
-                "page": page,
-                "page_size": page_size,
-                "items": items,
-            },
-            headers=_NO_CACHE_HEADERS,
-        )
+        return {
+            "page": page,
+            "page_size": page_size,
+            "items": items,
+        }
 
     @router.get("/chats/{chat_id}/messages")
     async def list_messages(
