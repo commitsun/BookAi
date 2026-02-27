@@ -1074,9 +1074,33 @@ def _resolve_whatsapp_context_id(
 
     memory_manager = getattr(state, "memory_manager", None)
     clean = _clean_chat_id(chat_id) or str(chat_id).strip()
+
+    def _matches_instance(mem_id: str) -> bool:
+        if not mem_id:
+            return False
+        if not instance_id:
+            return True
+        if not memory_manager:
+            return False
+        try:
+            mem_instance = (
+                memory_manager.get_flag(mem_id, "instance_id")
+                or memory_manager.get_flag(mem_id, "instance_hotel_code")
+            )
+        except Exception:
+            mem_instance = None
+        if mem_instance and str(mem_instance).strip() == str(instance_id).strip():
+            return True
+        if ":" in str(mem_id):
+            prefix = str(mem_id).split(":", 1)[0].strip()
+            built = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+            if built and prefix == str(built).split(":", 1)[0].strip():
+                return True
+        return False
+
     if memory_manager and clean:
         last_mem = memory_manager.get_flag(clean, "last_memory_id")
-        if isinstance(last_mem, str) and last_mem.strip():
+        if isinstance(last_mem, str) and last_mem.strip() and _matches_instance(last_mem.strip()):
             return last_mem.strip()
 
     related = _related_memory_ids(state, chat_id)
@@ -1084,7 +1108,7 @@ def _resolve_whatsapp_context_id(
         if not isinstance(mem_id, str) or ":" not in mem_id:
             continue
         tail = mem_id.split(":")[-1]
-        if _clean_chat_id(tail) == clean or tail.strip() == clean:
+        if (_clean_chat_id(tail) == clean or tail.strip() == clean) and _matches_instance(mem_id.strip()):
             if memory_manager and clean:
                 memory_manager.set_flag(clean, "last_memory_id", mem_id.strip())
             return mem_id.strip()
@@ -1624,7 +1648,10 @@ def register_chatter_routes(app, state) -> None:
                 except Exception:
                     pass
 
-        context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+        if token_instance_id:
+            context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+        else:
+            context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
         if context_id and state.memory_manager:
             try:
@@ -2283,21 +2310,6 @@ def register_chatter_routes(app, state) -> None:
                 "bookai_enabled": payload.bookai_enabled,
             },
         )
-        await _emit(
-            "chat.updated",
-            {
-                "rooms": _rooms(clean_id, property_id, "whatsapp"),
-                "chat_id": clean_id,
-                "property_id": property_id,
-                **_pending_snapshot_for_chat(
-                    clean_id,
-                    property_id,
-                    instance_id=instance_id,
-                    memory_manager=getattr(state, "memory_manager", None),
-                ),
-            },
-        )
-
         return {
             "chat_id": clean_id,
             "property_id": property_id,
