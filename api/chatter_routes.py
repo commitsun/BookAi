@@ -1658,13 +1658,21 @@ def register_chatter_routes(app, state) -> None:
                     detail="property_id requerido para enviar mensajes en WhatsApp multi-instancia",
                 )
         if state.memory_manager and property_id is not None:
-            # Si se especifica property_id, forzar contexto al chat_id para evitar
-            # usar instance:telefono de otra property.
-            for mem_id in [chat_id]:
+            # Si conocemos la instancia del token/memoria, reconstruimos el contexto
+            # compuesto correcto para no degradar el envío al chat_id plano.
+            target_context_id = context_id
+            if instance_id:
+                rebuilt_context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+                if rebuilt_context_id:
+                    target_context_id = rebuilt_context_id
+
+            for mem_id in [chat_id, context_id, target_context_id]:
+                if not mem_id:
+                    continue
                 state.memory_manager.set_flag(mem_id, "property_id", property_id)
-            ensure_instance_credentials(state.memory_manager, chat_id)
-            # Evita usar context_id de otra instancia al enviar manualmente.
-            context_id = None
+
+            ensure_instance_credentials(state.memory_manager, target_context_id or chat_id)
+            context_id = target_context_id
         elif state.memory_manager:
             ensure_instance_credentials(state.memory_manager, context_id or chat_id)
 
