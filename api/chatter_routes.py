@@ -1690,11 +1690,21 @@ def register_chatter_routes(app, state) -> None:
                             state.memory_manager.set_flag(chat_id, key, val)
                 except Exception as exc:
                     log.warning("No se pudieron precargar credenciales WA para instance_id=%s: %s", token_instance_id, exc)
+        if not instance_id:
+            raise HTTPException(
+                status_code=422,
+                detail="instance_id requerido para enviar mensajes en WhatsApp multi-instancia",
+            )
 
         if token_instance_id:
             context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
         else:
             context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+        if not context_id:
+            raise HTTPException(
+                status_code=422,
+                detail="No se pudo resolver el contexto de instancia para el envío de WhatsApp",
+            )
         session_id = context_id or chat_id
         if context_id and state.memory_manager:
             try:
@@ -1749,6 +1759,46 @@ def register_chatter_routes(app, state) -> None:
         # IMPORTANTE: session_id debe resolverse después de cualquier ajuste de context_id.
         # Si no, puede persistirse en el contexto equivocado y no aparecer en chatter.
         session_id = context_id or chat_id
+
+        if token_instance_id and state.memory_manager:
+            try:
+                enforced_payload = fetch_instance_by_code(token_instance_id) or {}
+                for mem_id in [chat_id, context_id, session_id]:
+                    if not mem_id:
+                        continue
+                    state.memory_manager.set_flag(mem_id, "instance_id", token_instance_id)
+                    state.memory_manager.set_flag(mem_id, "instance_hotel_code", token_instance_id)
+                    for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                        val = enforced_payload.get(key)
+                        if val:
+                            state.memory_manager.set_flag(mem_id, key, val)
+            except Exception as exc:
+                log.warning("No se pudieron imponer credenciales WA finales para instance_id=%s: %s", token_instance_id, exc)
+
+        final_phone_id = None
+        final_wa_instance = None
+        if state.memory_manager:
+            try:
+                final_phone_id = state.memory_manager.get_flag(session_id, "whatsapp_phone_id") or state.memory_manager.get_flag(chat_id, "whatsapp_phone_id")
+                final_wa_instance = (
+                    state.memory_manager.get_flag(session_id, "instance_id")
+                    or state.memory_manager.get_flag(session_id, "instance_hotel_code")
+                    or state.memory_manager.get_flag(chat_id, "instance_id")
+                    or state.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                )
+            except Exception:
+                final_phone_id = None
+                final_wa_instance = None
+        log.info(
+            "[WA_ROUTE] chat_id=%s property_id=%s token_instance_id=%s resolved_instance_id=%s context_id=%s session_id=%s phone_id=%s",
+            chat_id,
+            property_id,
+            token_instance_id,
+            final_wa_instance or instance_id,
+            context_id,
+            session_id,
+            final_phone_id or "missing",
+        )
 
         outgoing_message = _ensure_guest_language_for_outgoing(
             state,
@@ -2312,6 +2362,8 @@ def register_chatter_routes(app, state) -> None:
         clean_id = _clean_chat_id(chat_id) or chat_id
         property_id = _normalize_property_id(property_id) or _normalize_property_id(payload.property_id)
         instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        if not instance_id:
+            raise HTTPException(status_code=422, detail="instance_id requerido para toggle de WhatsApp multi-instancia")
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
         bookai_flags = _bookai_settings(state)

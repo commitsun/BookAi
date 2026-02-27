@@ -384,20 +384,48 @@ def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
     return []
 
 
-def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
+def fetch_property_by_id(table: str, property_id: Any, instance_id: Optional[str] = None) -> Dict[str, Any]:
+    def _matches_instance(row: Dict[str, Any], expected_instance: Optional[str]) -> bool:
+        if not expected_instance:
+            return True
+        expected = str(expected_instance or "").strip()
+        candidate = str(row.get("instance_id") or row.get("instance_url") or "").strip()
+        if not candidate:
+            return False
+        if candidate == expected:
+            return True
+        try:
+            expected_host = (urlsplit(expected).hostname or "").strip().lower()
+            candidate_host = (urlsplit(candidate).hostname or "").strip().lower()
+            if expected_host and candidate_host and expected_host == candidate_host:
+                return True
+        except Exception:
+            pass
+        return False
+
     if supabase:
         try:
             resp = (
                 supabase.table(table)
                 .select("*")
                 .eq("property_id", property_id)
-                .limit(1)
+                .limit(20)
                 .execute()
             )
             rows = resp.data or []
             if rows:
-                log.info("✅ Property found in Supabase: table=%s property_id=%s", table, property_id)
-                return rows[0]
+                for row in rows:
+                    if isinstance(row, dict) and _matches_instance(row, instance_id):
+                        log.info(
+                            "✅ Property found in Supabase: table=%s property_id=%s instance_id=%s",
+                            table,
+                            property_id,
+                            instance_id,
+                        )
+                        return row
+                if len(rows) == 1:
+                    log.info("✅ Property found in Supabase: table=%s property_id=%s", table, property_id)
+                    return rows[0]
         except Exception as exc:
             log.warning("Fallback supabase property_by_id fallo: %s", exc)
         try:
@@ -405,13 +433,23 @@ def fetch_property_by_id(table: str, property_id: Any) -> Dict[str, Any]:
                 supabase.table(table)
                 .select("*")
                 .eq("id", property_id)
-                .limit(1)
+                .limit(20)
                 .execute()
             )
             rows = resp.data or []
             if rows:
-                log.info("✅ Property found in Supabase by id: table=%s id=%s", table, property_id)
-                return rows[0]
+                for row in rows:
+                    if isinstance(row, dict) and _matches_instance(row, instance_id):
+                        log.info(
+                            "✅ Property found in Supabase by id: table=%s id=%s instance_id=%s",
+                            table,
+                            property_id,
+                            instance_id,
+                        )
+                        return row
+                if len(rows) == 1:
+                    log.info("✅ Property found in Supabase by id: table=%s id=%s", table, property_id)
+                    return rows[0]
         except Exception:
             pass
     payload = {"tabla": table, "property_id": property_id}
@@ -458,8 +496,18 @@ def ensure_instance_credentials(
             return
 
         if property_id:
-            prop_payload = fetch_property_by_id(property_table, property_id)
-            instance_id = prop_payload.get("instance_id") or instance_id
+            prop_payload = fetch_property_by_id(property_table, property_id, instance_id=instance_id)
+            prop_instance_id = prop_payload.get("instance_id") or prop_payload.get("instance_url")
+            if not instance_id:
+                instance_id = prop_instance_id or instance_id
+            elif prop_instance_id and str(prop_instance_id).strip() != str(instance_id).strip():
+                log.warning(
+                    "🏨 [WA_CTX] property_id=%s apunta a instance_id=%s pero se preserva instance_id=%s para chat_id=%s",
+                    property_id,
+                    prop_instance_id,
+                    instance_id,
+                    chat_id,
+                )
             if not instance_id:
                 instance_id = prop_payload.get("name") or instance_id
 
@@ -666,7 +714,8 @@ def hydrate_dynamic_context(
                 log.info("🔗 instance_url=%s (chat_id=%s)", instance_url, chat_id)
 
     if property_id and property_table and not memory_manager.get_flag(chat_id, "kb"):
-        prop_details = fetch_property_by_id(property_table, property_id)
+        current_instance_id = memory_manager.get_flag(chat_id, "instance_id") or memory_manager.get_flag(chat_id, "instance_hotel_code")
+        prop_details = fetch_property_by_id(property_table, property_id, instance_id=current_instance_id)
         kb_name = _normalize_kb_name(
             prop_details.get("kb") or prop_details.get("kb_name") or prop_details.get("knowledge_base")
         )

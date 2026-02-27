@@ -325,10 +325,42 @@ def _bookai_settings(state: Any) -> dict[str, bool]:
     return settings
 
 
+def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Optional[str] = None) -> list[str]:
+    clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+    prop = None if property_id is None else str(property_id).strip()
+    inst = str(instance_id or "").strip()
+    keys: list[str] = []
+    if inst and clean_id and prop:
+        keys.append(f"{inst}|{clean_id}:{prop}")
+    if inst and clean_id:
+        keys.append(f"{inst}|{clean_id}")
+    if clean_id and prop:
+        keys.append(f"{clean_id}:{prop}")
+    if clean_id:
+        keys.append(clean_id)
+    return keys
+
+
+def _bookai_flag_value(
+    state: Any,
+    *,
+    chat_id: str,
+    property_id: Any = None,
+    instance_id: Optional[str] = None,
+    default: bool = True,
+) -> bool:
+    settings = _bookai_settings(state)
+    for key in _bookai_flag_keys(chat_id, property_id=property_id, instance_id=instance_id):
+        if key in settings:
+            return bool(settings.get(key))
+    return default
+
+
 def _fetch_global_client_context(
     state: Any,
     *,
     property_id: Optional[str],
+    instance_id: Optional[str] = None,
     channel: str = "whatsapp",
     limit: int = 120,
 ) -> list[dict[str, Any]]:
@@ -398,7 +430,6 @@ def _fetch_global_client_context(
 
         items: list[dict[str, Any]] = []
         memory_manager = getattr(state, "memory_manager", None)
-        bookai_flags = _bookai_settings(state)
         for cid in ordered_ids[:limit]:
             row = summaries.get(cid) or {}
             prop_id = row.get("property_id")
@@ -440,7 +471,13 @@ def _fetch_global_client_context(
                     "reservation_status": reservation_status,
                     "folio_id": folio_id,
                     "room_number": room_number,
-                    "bookai_enabled": bool(bookai_flags.get(f"{cid}:{prop_id}", bookai_flags.get(cid, True))),
+                    "bookai_enabled": _bookai_flag_value(
+                        state,
+                        chat_id=cid,
+                        property_id=prop_id,
+                        instance_id=instance_id,
+                        default=True,
+                    ),
                     "checkin": checkin,
                     "checkout": checkout,
                     "unread_count": 0,
@@ -2252,6 +2289,7 @@ def register_superintendente_routes(app, state) -> None:
         global_clients = _fetch_global_client_context(
             state,
             property_id=property_id,
+            instance_id=instance_id,
             channel="whatsapp",
             limit=140,
         )

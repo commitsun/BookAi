@@ -142,6 +142,17 @@ def _sanitize_guest_facing_response(text: str) -> str:
     if not raw:
         return raw
 
+    lowered_raw = raw.lower()
+    internal_fail_markers = (
+        "agent stopped due to max iterations",
+        "agent stopped due to max iteration",
+        "agent stopped due to max",
+        "maximum number of iterations",
+        "maximum number of steps",
+    )
+    if any(marker in lowered_raw for marker in internal_fail_markers):
+        return ""
+
     # Si el modelo devolvió bloque tipo "Response to the user:", usa solo esa parte.
     marker_match = re.search(
         r"(response to the user|respuesta (?:al|para el) (?:hu[eé]sped|usuario)|respuesta final)\s*:\s*",
@@ -176,7 +187,11 @@ def _sanitize_guest_facing_response(text: str) -> str:
         cleaned_lines.append(ln)
 
     if cleaned_lines:
-        return "\n".join(cleaned_lines).strip()
+        cleaned = "\n".join(cleaned_lines).strip()
+        lowered_clean = cleaned.lower()
+        if any(marker in lowered_clean for marker in internal_fail_markers):
+            return ""
+        return cleaned
     return raw
 
 
@@ -269,6 +284,7 @@ def _resolve_bookai_enabled(
         seen_instances.add(inst)
         normalized_instances.append(inst)
 
+    has_instance_scope = bool(normalized_instances)
     seen_props = set()
     for prop in property_candidates:
         if prop in seen_props:
@@ -278,9 +294,10 @@ def _resolve_bookai_enabled(
             candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}:{prop}"))
             if candidate_value is not None:
                 return candidate_value
-        candidate_value = _as_bool_or_none(bookai_flags.get(f"{clean_id}:{prop}"))
-        if candidate_value is not None:
-            return candidate_value
+        if not has_instance_scope:
+            candidate_value = _as_bool_or_none(bookai_flags.get(f"{clean_id}:{prop}"))
+            if candidate_value is not None:
+                return candidate_value
 
     for inst in normalized_instances:
         candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}"))
@@ -289,25 +306,28 @@ def _resolve_bookai_enabled(
 
     # Fallback útil cuando aún no hay property_id en memoria:
     # si existe una única configuración por propiedad para este chat, úsala.
-    prefix = f"{clean_id}:"
-    prefixed_values: list[bool] = []
-    for key, raw_val in bookai_flags.items():
-        if not str(key).startswith(prefix):
-            continue
-        parsed = _as_bool_or_none(raw_val)
-        if parsed is None:
-            continue
-        prefixed_values.append(parsed)
-    if len(prefixed_values) == 1:
-        return prefixed_values[0]
-    if len(prefixed_values) > 1 and all(v == prefixed_values[0] for v in prefixed_values):
-        return prefixed_values[0]
-    if prefixed_values and any(v is False for v in prefixed_values):
-        # Fail-safe: si hay configuraciones por propiedad y al menos una está desactivada,
-        # no reactivar automáticamente cuando aún no se pudo resolver property_id.
-        return False
+    if not has_instance_scope:
+        prefix = f"{clean_id}:"
+        prefixed_values: list[bool] = []
+        for key, raw_val in bookai_flags.items():
+            if not str(key).startswith(prefix):
+                continue
+            parsed = _as_bool_or_none(raw_val)
+            if parsed is None:
+                continue
+            prefixed_values.append(parsed)
+        if len(prefixed_values) == 1:
+            return prefixed_values[0]
+        if len(prefixed_values) > 1 and all(v == prefixed_values[0] for v in prefixed_values):
+            return prefixed_values[0]
+        if prefixed_values and any(v is False for v in prefixed_values):
+            # Fail-safe: si hay configuraciones por propiedad y al menos una está desactivada,
+            # no reactivar automáticamente cuando aún no se pudo resolver property_id.
+            return False
 
-    return _as_bool_or_none(bookai_flags.get(clean_id))
+    if not has_instance_scope:
+        return _as_bool_or_none(bookai_flags.get(clean_id))
+    return None
 
 
 def _humanize_offer_type(value: Any) -> str:
@@ -807,6 +827,16 @@ async def process_user_message(
         # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
         response_raw = _ensure_guest_language(response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
+        if not response_raw:
+            await state.interno_agent.escalate(
+                guest_chat_id=escalation_chat_id,
+                guest_message=user_message,
+                escalation_type="error",
+                reason="Respuesta interna filtrada antes de salir al huésped",
+                context="La salida del agente contenía un mensaje interno/no apto para cliente y fue bloqueada.",
+                property_id=property_id,
+            )
+            return None
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,
@@ -937,6 +967,7 @@ async def process_user_message(
                         "context_id": context_id,
                         "property_id": prop_id,
                         "channel": channel,
+                        "bookai_enabled": True,
                         "last_message": response_raw,
                         "last_message_at": now_iso,
                     },

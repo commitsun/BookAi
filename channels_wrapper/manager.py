@@ -134,17 +134,26 @@ class ChannelManager:
                     lookup_id = context_id or chat_id
                     phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
+                    instance_id = (
+                        self.memory_manager.get_flag(lookup_id, "instance_id")
+                        or self.memory_manager.get_flag(lookup_id, "instance_hotel_code")
+                    )
                     log.info(
-                        "📡 WA creds lookup: chat_id=%s context_id=%s lookup_id=%s phone_id=%s token=%s",
+                        "📡 WA creds lookup: chat_id=%s context_id=%s lookup_id=%s instance_id=%s phone_id=%s token=%s",
                         chat_id,
                         context_id,
                         lookup_id,
+                        instance_id or "missing",
                         phone_id or "missing",
                         "set" if token else "missing",
                     )
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                    elif context_id:
+                        raise RuntimeError(
+                            f"Credenciales dinámicas WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
+                        )
                     else:
                         # Evita que queden credenciales "pegadas" de envíos anteriores.
                         if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
@@ -196,17 +205,26 @@ class ChannelManager:
                     lookup_id = context_id or chat_id
                     phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
+                    instance_id = (
+                        self.memory_manager.get_flag(lookup_id, "instance_id")
+                        or self.memory_manager.get_flag(lookup_id, "instance_hotel_code")
+                    )
                     log.info(
-                        "📡 WA template creds lookup: chat_id=%s context_id=%s lookup_id=%s phone_id=%s token=%s",
+                        "📡 WA template creds lookup: chat_id=%s context_id=%s lookup_id=%s instance_id=%s phone_id=%s token=%s",
                         chat_id,
                         context_id,
                         lookup_id,
+                        instance_id or "missing",
                         phone_id or "missing",
                         "set" if token else "missing",
                     )
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
                         setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                    elif context_id:
+                        raise RuntimeError(
+                            f"Credenciales dinámicas WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
+                        )
                     else:
                         # Evita que queden credenciales "pegadas" de envíos anteriores.
                         if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
