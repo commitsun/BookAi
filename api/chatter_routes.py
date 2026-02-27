@@ -1562,6 +1562,14 @@ def register_chatter_routes(app, state) -> None:
                 pending_prop = _pending_property_for_guest(pending_grouped, cid)
                 if pending_prop is not None:
                     prop_id = pending_prop
+            bookai_resolution = _bookai_flag_resolution(
+                _bookai_settings(state),
+                aliases=_related_memory_ids(state, cid) or [],
+                chat_id=cid,
+                property_id=prop_id,
+                instance_id=instance_id,
+                default=True,
+            )
             items.append(
                 {
                     "chat_id": cid,
@@ -1579,6 +1587,7 @@ def register_chatter_routes(app, state) -> None:
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                     "client_phone": phone or cid,
                     "whatsapp_phone_number": instance_whatsapp_phone_number,
+                    "bookai_enabled": bool(bookai_resolution.get("value")),
                     "unread_count": 0,
                     "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
                     "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
