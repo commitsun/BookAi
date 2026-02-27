@@ -1414,7 +1414,7 @@ def register_chatter_routes(app, state) -> None:
 
 
         while len(ordered_keys) < target:
-            page_size=100
+            page_size=30
             query = (
                 supabase.table("chat_last_message")
                 .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
