@@ -919,6 +919,12 @@ def _pending_escalations_summary(escalations: List[Dict[str, Any]]) -> str:
 
 
 def _bookai_settings(state) -> Dict[str, bool]:
+    load_tracking = getattr(state, "load_tracking", None)
+    if callable(load_tracking):
+        try:
+            load_tracking()
+        except Exception as exc:
+            log.debug("No se pudo recargar tracking en chatter_routes: %s", exc)
     settings = state.tracking.setdefault("bookai_enabled", {})
     if not isinstance(settings, dict):
         state.tracking["bookai_enabled"] = {}

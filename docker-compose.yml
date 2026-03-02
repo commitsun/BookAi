@@ -9,14 +9,13 @@ services:
     environment:
       - AWS_SDK_LOAD_CONFIG=1
       - AWS_REGION=${AWS_REGION:-}
-      - UVICORN_WORKERS=${UVICORN_WORKERS:-2}
     volumes:
       - .:/app
       - ${HOME}/.aws:/root/.aws:ro
     ports:
       - "8000:8000"
     command: >
-      sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"
+      sh -c "uvicorn main:app --host 0.0.0.0 --port 8000 --workers 1"
     restart: always
     networks:
       - default

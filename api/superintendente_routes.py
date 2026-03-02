@@ -319,6 +319,12 @@ def _clean_chat_id(chat_id: str) -> str:
 
 
 def _bookai_settings(state: Any) -> dict[str, bool]:
+    load_tracking = getattr(state, "load_tracking", None)
+    if callable(load_tracking):
+        try:
+            load_tracking()
+        except Exception as exc:
+            log.debug("No se pudo recargar tracking en superintendente_routes: %s", exc)
     settings = state.tracking.setdefault("bookai_enabled", {})
     if not isinstance(settings, dict):
         state.tracking["bookai_enabled"] = {}

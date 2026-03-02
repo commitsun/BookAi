@@ -230,6 +230,62 @@ def _as_bool_or_none(value: Any) -> Optional[bool]:
     return None
 
 
+def _resolve_bookai_enabled_suffix_fallback(
+    bookai_flags: dict[Any, Any],
+    *,
+    clean_id: str,
+    property_candidates: list[str],
+) -> tuple[Optional[bool], Optional[str], Optional[str]]:
+    if not clean_id:
+        return None, None, None
+
+    seen_props: set[str] = set()
+    prop_false_key: Optional[str] = None
+    prop_true_key: Optional[str] = None
+
+    for prop in property_candidates:
+        normalized_prop = str(prop or "").strip()
+        if not normalized_prop or normalized_prop in seen_props:
+            continue
+        seen_props.add(normalized_prop)
+        suffix = f"|{clean_id}:{normalized_prop}"
+        for key, raw_val in bookai_flags.items():
+            if not str(key).endswith(suffix):
+                continue
+            parsed = _as_bool_or_none(raw_val)
+            if parsed is None:
+                continue
+            if parsed is False and prop_false_key is None:
+                prop_false_key = str(key)
+            elif parsed is True and prop_true_key is None:
+                prop_true_key = str(key)
+
+    if prop_false_key:
+        return False, prop_false_key, "suffix_property_false"
+    if prop_true_key:
+        return True, prop_true_key, "suffix_property_true"
+
+    chat_suffix = f"|{clean_id}"
+    chat_false_key: Optional[str] = None
+    chat_true_key: Optional[str] = None
+    for key, raw_val in bookai_flags.items():
+        if not str(key).endswith(chat_suffix):
+            continue
+        parsed = _as_bool_or_none(raw_val)
+        if parsed is None:
+            continue
+        if parsed is False and chat_false_key is None:
+            chat_false_key = str(key)
+        elif parsed is True and chat_true_key is None:
+            chat_true_key = str(key)
+
+    if chat_false_key:
+        return False, chat_false_key, "suffix_chat_false"
+    if chat_true_key:
+        return True, chat_true_key, "suffix_chat_true"
+    return None, None, None
+
+
 def _resolve_bookai_enabled(
     state: Any,
     *,
@@ -240,6 +296,13 @@ def _resolve_bookai_enabled(
 ) -> Optional[bool]:
     if Settings.BOOKAI_GLOBAL_ENABLED is False:
         return False
+
+    load_tracking = getattr(state, "load_tracking", None)
+    if callable(load_tracking):
+        try:
+            load_tracking()
+        except Exception as exc:
+            log.debug("No se pudo recargar tracking antes de resolver BookAI: %s", exc)
 
     bookai_flags = getattr(state, "tracking", {}).get("bookai_enabled", {})
     if not isinstance(bookai_flags, dict):
@@ -293,15 +356,33 @@ def _resolve_bookai_enabled(
         for inst in normalized_instances:
             candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}:{prop}"))
             if candidate_value is not None:
+                log.info(
+                    "[BOOKAI_RESOLVE] clean_id=%s path=instance_property matched_key=%s value=%s",
+                    clean_id,
+                    f"{inst}|{clean_id}:{prop}",
+                    candidate_value,
+                )
                 return candidate_value
         if not has_instance_scope:
             candidate_value = _as_bool_or_none(bookai_flags.get(f"{clean_id}:{prop}"))
             if candidate_value is not None:
+                log.info(
+                    "[BOOKAI_RESOLVE] clean_id=%s path=legacy_property matched_key=%s value=%s",
+                    clean_id,
+                    f"{clean_id}:{prop}",
+                    candidate_value,
+                )
                 return candidate_value
 
     for inst in normalized_instances:
         candidate_value = _as_bool_or_none(bookai_flags.get(f"{inst}|{clean_id}"))
         if candidate_value is not None:
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=instance_chat matched_key=%s value=%s",
+                clean_id,
+                f"{inst}|{clean_id}",
+                candidate_value,
+            )
             return candidate_value
 
     # Fallback útil cuando aún no hay property_id en memoria:
@@ -317,16 +398,63 @@ def _resolve_bookai_enabled(
                 continue
             prefixed_values.append(parsed)
         if len(prefixed_values) == 1:
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=legacy_prefix_single matched_prefix=%s value=%s",
+                clean_id,
+                prefix,
+                prefixed_values[0],
+            )
             return prefixed_values[0]
         if len(prefixed_values) > 1 and all(v == prefixed_values[0] for v in prefixed_values):
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=legacy_prefix_uniform matched_prefix=%s value=%s",
+                clean_id,
+                prefix,
+                prefixed_values[0],
+            )
             return prefixed_values[0]
         if prefixed_values and any(v is False for v in prefixed_values):
             # Fail-safe: si hay configuraciones por propiedad y al menos una está desactivada,
             # no reactivar automáticamente cuando aún no se pudo resolver property_id.
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=legacy_prefix_false matched_prefix=%s value=False",
+                clean_id,
+                prefix,
+            )
             return False
 
     if not has_instance_scope:
-        return _as_bool_or_none(bookai_flags.get(clean_id))
+        candidate_value = _as_bool_or_none(bookai_flags.get(clean_id))
+        if candidate_value is not None:
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=legacy_chat matched_key=%s value=%s",
+                clean_id,
+                clean_id,
+                candidate_value,
+            )
+            return candidate_value
+
+        suffix_value, matched_key, suffix_path = _resolve_bookai_enabled_suffix_fallback(
+            bookai_flags,
+            clean_id=clean_id,
+            property_candidates=property_candidates,
+        )
+        if suffix_value is not None:
+            log.info(
+                "[BOOKAI_RESOLVE] clean_id=%s path=%s matched_key=%s value=%s instance_scope=missing",
+                clean_id,
+                suffix_path,
+                matched_key,
+                suffix_value,
+            )
+            return suffix_value
+
+        log.debug(
+            "[BOOKAI_RESOLVE] clean_id=%s path=no_instance_no_match property_candidates=%s",
+            clean_id,
+            ",".join(property_candidates),
+        )
+        return None
     return None
 
 

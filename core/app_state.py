@@ -6,6 +6,7 @@ import logging
 import os
 import pickle
 from collections import deque
+from typing import Optional
 
 from channels_wrapper.manager import ChannelManager
 from agents.supervisor_input_agent import SupervisorInputAgent
@@ -73,6 +74,7 @@ class AppState:
 
         # Tracking mínimo persistente (retrocompatibilidad)
         self.tracking: dict = {}
+        self._tracking_mtime: Optional[float] = None
         self.load_tracking()
 
     # ---------------------------------------------------------
@@ -82,6 +84,10 @@ class AppState:
         try:
             with open(TRACK_FILE, "wb") as f:
                 pickle.dump(self.tracking, f)
+            try:
+                self._tracking_mtime = os.path.getmtime(TRACK_FILE)
+            except Exception:
+                self._tracking_mtime = None
         except Exception as exc:
             self.log.warning("No se pudo guardar tracking: %s", exc)
 
@@ -89,8 +95,13 @@ class AppState:
         if not os.path.exists(TRACK_FILE):
             return
         try:
+            current_mtime = os.path.getmtime(TRACK_FILE)
+            if self._tracking_mtime is not None and current_mtime == self._tracking_mtime:
+                return
             with open(TRACK_FILE, "rb") as f:
-                self.tracking.update(pickle.load(f))
+                loaded = pickle.load(f)
+            self.tracking = loaded if isinstance(loaded, dict) else {}
+            self._tracking_mtime = current_mtime
             self.log.info("Tracking restaurado (%s items)", len(self.tracking))
         except Exception as exc:
             self.log.warning("No se pudo cargar tracking: %s", exc)

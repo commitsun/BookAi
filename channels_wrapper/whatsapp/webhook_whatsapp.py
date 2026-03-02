@@ -457,6 +457,21 @@ def register_whatsapp_routes(app, state):
                         context_id=cid,
                     )
 
+                final_bookai_enabled = _resolve_bookai_enabled(
+                    state,
+                    chat_id=str(sender or ""),
+                    mem_id=str(cid or ""),
+                    clean_id=re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                    property_id=property_id,
+                )
+                if final_bookai_enabled is False:
+                    log.info(
+                        "🤫 BookAI desactivado antes del envio para %s (property_id=%s); respuesta descartada.",
+                        re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                        property_id,
+                    )
+                    return
+
                 await send_fragmented_async(send_to_channel, sender, resp)
 
             await state.buffer_manager.add_message(memory_id, text, _process_buffered)
