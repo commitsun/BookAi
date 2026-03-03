@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import re
@@ -651,6 +652,7 @@ async def process_user_message(
         mem_id = memory_id or chat_id
         escalation_chat_id = mem_id or chat_id
         guest_message_persisted = False
+        initial_property_id = property_id
         main_agent_invoked = False
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
@@ -682,7 +684,7 @@ async def process_user_message(
                 return text
 
         def _persist_guest_message() -> None:
-            nonlocal guest_message_persisted
+            nonlocal guest_message_persisted, property_id
             if guest_message_persisted:
                 return
             try:
@@ -695,6 +697,56 @@ async def process_user_message(
                     skip_recent_duplicate_guard=True,
                 )
                 guest_message_persisted = True
+                if channel == "whatsapp":
+                    resolved_property_id = property_id
+                    if state.memory_manager:
+                        try:
+                            resolved_property_id = (
+                                state.memory_manager.get_flag(mem_id, "property_id")
+                                or state.memory_manager.get_flag(chat_id, "property_id")
+                                or resolved_property_id
+                            )
+                        except Exception:
+                            resolved_property_id = property_id
+                    if resolved_property_id is not None:
+                        property_id = resolved_property_id
+                    if initial_property_id is None or (
+                        resolved_property_id is not None
+                        and str(resolved_property_id).strip() != str(initial_property_id).strip()
+                    ):
+                        payload = {
+                            "chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
+                            "guest_chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
+                            "context_id": str(mem_id or chat_id or "").strip(),
+                            "property_id": resolved_property_id,
+                            "channel": channel,
+                            "sender": "guest",
+                            "message": user_message,
+                            "created_at": datetime.now(timezone.utc).isoformat(),
+                        }
+                        socket_mgr = getattr(state, "socket_manager", None)
+                        if (
+                            resolved_property_id is not None
+                            and socket_mgr
+                            and getattr(socket_mgr, "enabled", False)
+                        ):
+                            try:
+                                loop = asyncio.get_running_loop()
+                                loop.create_task(
+                                    socket_mgr.emit(
+                                        "chat.message.created",
+                                        payload,
+                                        rooms=[f"property:{resolved_property_id}"],
+                                    )
+                                )
+                            except Exception:
+                                pass
+                        elif state.memory_manager:
+                            state.memory_manager.set_flag(
+                                mem_id,
+                                "pending_property_room_guest_message",
+                                payload,
+                            )
             except Exception as exc:
                 log.warning("No se pudo persistir mensaje del huésped en pipeline: %s", exc)
 
@@ -708,8 +760,7 @@ async def process_user_message(
         )
         if bookai_enabled is False:
             try:
-                state.memory_manager.save(mem_id, "user", user_message)
-                guest_message_persisted = True
+                _persist_guest_message()
             except Exception as exc:
                 log.warning("No se pudo guardar mensaje con BookAI apagado: %s", exc)
             log.info("🤫 BookAI desactivado para %s; se omite respuesta automática.", clean_id)

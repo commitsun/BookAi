@@ -1,3 +1,4 @@
+import asyncio
 import time
 import re
 import logging
@@ -647,6 +648,49 @@ class MemoryManager:
         """Marca un flag de estado (ej. escalación activa)."""
         cid = self._clean_id(conversation_id)
         self.state_flags.setdefault(cid, {})[flag_name] = value
+        if flag_name == "property_id" and value is not None:
+            pending_keys: list[str] = []
+            if cid:
+                pending_keys.append(cid)
+            try:
+                last_mem = self.get_flag(conversation_id, "last_memory_id")
+            except Exception:
+                last_mem = None
+            if last_mem:
+                pending_keys.append(self._clean_id(last_mem))
+            seen: set[str] = set()
+            for pending_key in pending_keys:
+                key = str(pending_key or "").strip()
+                if not key or key in seen:
+                    continue
+                seen.add(key)
+                pending_payload = self.state_flags.get(key, {}).get("pending_property_room_guest_message")
+                if not isinstance(pending_payload, dict):
+                    continue
+                payload = dict(pending_payload)
+                payload["property_id"] = value
+                try:
+                    from core.socket_manager import get_global_socket_manager
+
+                    socket_mgr = get_global_socket_manager()
+                except Exception:
+                    socket_mgr = None
+                emitted = False
+                if socket_mgr and getattr(socket_mgr, "enabled", False):
+                    try:
+                        loop = asyncio.get_running_loop()
+                        loop.create_task(
+                            socket_mgr.emit(
+                                "chat.message.created",
+                                payload,
+                                rooms=[f"property:{value}"],
+                            )
+                        )
+                        emitted = True
+                    except Exception:
+                        pass
+                if emitted and key in self.state_flags and "pending_property_room_guest_message" in self.state_flags[key]:
+                    del self.state_flags[key]["pending_property_room_guest_message"]
         log.debug(f"🚩 Flag '{flag_name}' = {value} para {cid}")
 
     def get_flag(self, conversation_id: str, flag_name: str) -> Optional[Any]:

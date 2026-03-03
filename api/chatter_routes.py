@@ -1436,11 +1436,42 @@ def register_chatter_routes(app, state) -> None:
             rows = resp.data or []
             if not rows:
                 break
+            hidden_by_original: Dict[str, Dict[str, Any]] = {}
+            hidden_by_chat_property: Dict[Tuple[str, str], Dict[str, Any]] = {}
+            row_chat_ids = [
+                str(row.get("conversation_id") or "").strip()
+                for row in rows
+                if str(row.get("conversation_id") or "").strip()
+            ]
+            if row_chat_ids:
+                try:
+                    hidden_query = (
+                        supabase.table("chat_history")
+                        .select("conversation_id, original_chat_id, property_id, archived_at, hidden_at")
+                        .in_("conversation_id", list(dict.fromkeys(row_chat_ids)))
+                        .eq("channel", channel)
+                        .or_("archived_at.not.is.null,hidden_at.not.is.null")
+                    )
+                    if property_id is not None and not instance_id:
+                        hidden_query = hidden_query.eq("property_id", property_id)
+                    hidden_rows = hidden_query.order("created_at", desc=True).limit(5000).execute().data or []
+                    for hidden_row in hidden_rows:
+                        hidden_original_chat_id = str(hidden_row.get("original_chat_id") or "").strip()
+                        hidden_conversation_id = str(hidden_row.get("conversation_id") or "").strip()
+                        hidden_property_id = _normalize_property_id(hidden_row.get("property_id"))
+                        if hidden_original_chat_id and hidden_original_chat_id not in hidden_by_original:
+                            hidden_by_original[hidden_original_chat_id] = hidden_row
+                        if hidden_conversation_id and hidden_property_id is not None:
+                            hidden_key = (hidden_conversation_id, str(hidden_property_id).strip())
+                            if hidden_key not in hidden_by_chat_property:
+                                hidden_by_chat_property[hidden_key] = hidden_row
+                except Exception:
+                    pass
             for row in rows:
                 cid = str(row.get("conversation_id") or "").strip()
                 clean_cid = _clean_chat_id(cid)
                 original_chat_id = str(row.get("original_chat_id") or "").strip()
-                prop_id = row.get("property_id")
+                prop_id = _normalize_property_id(row.get("property_id"))
                 if property_id is not None and not instance_id and prop_id is None:
                     continue
                 if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
@@ -1453,6 +1484,12 @@ def register_chatter_routes(app, state) -> None:
                             continue
                     elif not in_chat_set and not in_original_set:
                         continue
+                hidden_key = (cid, str(prop_id).strip()) if prop_id is not None else None
+                if (
+                    (original_chat_id and original_chat_id in hidden_by_original)
+                    or (hidden_key and hidden_key in hidden_by_chat_property)
+                ):
+                    continue
                 key = cid
                 content = (row.get("content") or "").strip()
                 if (
@@ -1878,6 +1915,11 @@ def register_chatter_routes(app, state) -> None:
         # IMPORTANTE: session_id debe resolverse después de cualquier ajuste de context_id.
         # Si no, puede persistirse en el contexto equivocado y no aparecer en chatter.
         session_id = context_id or chat_id
+        chat_exists_before = bool(state.memory_manager and state.memory_manager.has_history(session_id))
+        history_property_before = _resolve_property_id_from_history(
+            session_id,
+            payload.channel.lower(),
+        )
 
         if token_instance_id and state.memory_manager:
             try:
@@ -2075,6 +2117,81 @@ def register_chatter_routes(app, state) -> None:
             sender_for_ui = "guest"
         else:
             sender_for_ui = "bookai"
+        socket_mgr = getattr(state, "socket_manager", None)
+        if (
+            socket_mgr
+            and getattr(socket_mgr, "enabled", False)
+            and property_id is not None
+            and (not chat_exists_before or history_property_before is None)
+        ):
+            folio_id = None
+            reservation_locator = None
+            checkin = None
+            checkout = None
+            reservation_status = None
+            room_number = None
+            client_name = None
+            if state.memory_manager:
+                try:
+                    folio_id = state.memory_manager.get_flag(session_id, "folio_id")
+                    reservation_locator = state.memory_manager.get_flag(session_id, "reservation_locator")
+                    checkin = state.memory_manager.get_flag(session_id, "checkin")
+                    checkout = state.memory_manager.get_flag(session_id, "checkout")
+                    reservation_status = state.memory_manager.get_flag(session_id, "reservation_status")
+                    room_number = state.memory_manager.get_flag(session_id, "room_number")
+                    client_name = state.memory_manager.get_flag(session_id, "client_name")
+                except Exception:
+                    pass
+            whatsapp_phone_number = None
+            if instance_id:
+                try:
+                    instance_payload = fetch_instance_by_code(instance_id) or {}
+                    instance_number = _resolve_instance_number(instance_payload)
+                    whatsapp_phone_number = _to_international_phone(instance_number or "")
+                except Exception:
+                    whatsapp_phone_number = None
+            bookai_resolution = _bookai_flag_resolution(
+                _bookai_settings(state),
+                aliases=_related_memory_ids(state, chat_id) or [],
+                chat_id=chat_id,
+                property_id=property_id,
+                instance_id=instance_id,
+                default=True,
+            )
+            await socket_mgr.emit(
+                "chat.list.updated",
+                {
+                    "property_id": property_id,
+                    "action": "created",
+                    "chat": {
+                        "chat_id": chat_id,
+                        "property_id": property_id,
+                        "reservation_id": folio_id,
+                        "reservation_locator": reservation_locator,
+                        "reservation_status": reservation_status,
+                        "room_number": room_number,
+                        "checkin": checkin,
+                        "checkout": checkout,
+                        "channel": payload.channel.lower(),
+                        "last_message": outgoing_message,
+                        "last_message_at": now_iso,
+                        "avatar": None,
+                        "client_name": client_name,
+                        "client_phone": _extract_guest_phone(chat_id) or chat_id,
+                        "whatsapp_phone_number": whatsapp_phone_number,
+                        "bookai_enabled": bool(bookai_resolution.get("value")),
+                        "unread_count": 0,
+                        **_pending_snapshot_for_chat(
+                            chat_id,
+                            property_id,
+                            instance_id=instance_id,
+                            memory_manager=getattr(state, "memory_manager", None),
+                        ),
+                        "folio_id": folio_id,
+                    },
+                },
+                rooms=[f"property:{property_id}"],
+            )
         await _emit(
             "chat.message.created",
             {
@@ -2637,6 +2754,406 @@ def register_chatter_routes(app, state) -> None:
             "read_status": True,
         }
 
+    @router.post("/chats/{chat_id}/archive")
+    async def archive_chat(
+        chat_id: str,
+        property_id: Optional[str] = Query(default=None),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
+        channel = "whatsapp"
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        summary_row: Dict[str, Any] | None = None
+        history_rows: List[Dict[str, Any]] = []
+        try:
+            summary_query = (
+                supabase.table("chat_last_message")
+                .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                .eq("conversation_id", clean_id)
+                .eq("channel", channel)
+            )
+            if property_id is not None:
+                summary_query = summary_query.eq("property_id", property_id)
+            summary_rows = summary_query.order("created_at", desc=True).limit(20).execute().data or []
+            if summary_rows:
+                summary_row = summary_rows[0]
+        except Exception:
+            summary_row = None
+        if property_id is None and summary_row is not None:
+            property_id = _normalize_property_id(summary_row.get("property_id"))
+        if property_id is None:
+            property_id = _normalize_property_id(_resolve_property_id_from_history(clean_id, channel))
+        if property_id is None and getattr(state, "memory_manager", None):
+            try:
+                property_id = _normalize_property_id(state.memory_manager.get_flag(clean_id, "property_id"))
+            except Exception:
+                property_id = None
+        if property_id is None:
+            raise HTTPException(status_code=422, detail="property_id requerido")
+        if summary_row is None or _normalize_property_id(summary_row.get("property_id")) != property_id:
+            try:
+                summary_rows = (
+                    supabase.table("chat_last_message")
+                    .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                    .eq("conversation_id", clean_id)
+                    .eq("channel", channel)
+                    .eq("property_id", property_id)
+                    .order("created_at", desc=True)
+                    .limit(20)
+                    .execute()
+                    .data
+                    or []
+                )
+                if summary_rows:
+                    summary_row = summary_rows[0]
+            except Exception:
+                pass
+        try:
+            history_rows = (
+                supabase.table("chat_history")
+                .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                .eq("conversation_id", clean_id)
+                .eq("channel", channel)
+                .eq("property_id", property_id)
+                .order("created_at", desc=True)
+                .limit(100)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            history_rows = []
+        if history_rows and (
+            summary_row is None
+            or _normalize_property_id(summary_row.get("property_id")) != property_id
+        ):
+            summary_row = history_rows[0]
+        if summary_row is None or _normalize_property_id(summary_row.get("property_id")) != property_id:
+            raise HTTPException(status_code=404, detail="Chat no encontrado")
+        target_original_chat_id = str((summary_row or {}).get("original_chat_id") or "").strip()
+        if not target_original_chat_id:
+            for row in history_rows:
+                candidate_original = str((row or {}).get("original_chat_id") or "").strip()
+                if candidate_original:
+                    target_original_chat_id = candidate_original
+                    break
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if target_original_chat_id:
+            (
+                supabase.table("chat_history")
+                .update({"archived_at": now_iso})
+                .eq("original_chat_id", target_original_chat_id)
+                .eq("channel", channel)
+                .execute()
+            )
+        (
+            supabase.table("chat_history")
+            .update({"archived_at": now_iso})
+            .eq("conversation_id", clean_id)
+            .eq("property_id", property_id)
+            .eq("channel", channel)
+            .execute()
+        )
+
+        last = summary_row or {}
+        prop_id = property_id
+        phone = _extract_guest_phone(clean_id)
+        folio_id = None
+        reservation_locator = None
+        checkin = None
+        checkout = None
+        reservation_client_name = None
+        reservation_status = None
+        room_number = None
+        memory_manager = getattr(state, "memory_manager", None)
+        if memory_manager:
+            try:
+                folio_id = memory_manager.get_flag(clean_id, "folio_id") or memory_manager.get_flag(clean_id, "origin_folio_id")
+                reservation_locator = memory_manager.get_flag(clean_id, "reservation_locator") or memory_manager.get_flag(clean_id, "origin_folio_code")
+                checkin = memory_manager.get_flag(clean_id, "checkin") or memory_manager.get_flag(clean_id, "origin_folio_min_checkin")
+                checkout = memory_manager.get_flag(clean_id, "checkout") or memory_manager.get_flag(clean_id, "origin_folio_max_checkout")
+                reservation_status = memory_manager.get_flag(clean_id, "reservation_status")
+                room_number = memory_manager.get_flag(clean_id, "room_number")
+            except Exception:
+                pass
+        try:
+            active = get_active_chat_reservation(chat_id=clean_id, property_id=prop_id)
+            if active:
+                folio_id = active.get("folio_id") or folio_id
+                reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else reservation_locator
+                checkin = active.get("checkin") or checkin
+                checkout = active.get("checkout") or checkout
+                reservation_client_name = active.get("client_name") if isinstance(active, dict) else None
+            if memory_manager and folio_id:
+                memory_manager.set_flag(clean_id, "folio_id", folio_id)
+            if memory_manager and reservation_locator:
+                memory_manager.set_flag(clean_id, "reservation_locator", reservation_locator)
+            if memory_manager and checkin:
+                memory_manager.set_flag(clean_id, "checkin", checkin)
+            if memory_manager and checkout:
+                memory_manager.set_flag(clean_id, "checkout", checkout)
+        except Exception:
+            pass
+        whatsapp_phone_number = None
+        if instance_id:
+            try:
+                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_number = _resolve_instance_number(instance_payload)
+                whatsapp_phone_number = _to_international_phone(instance_number or "")
+            except Exception:
+                whatsapp_phone_number = None
+        bookai_resolution = _bookai_flag_resolution(
+            _bookai_settings(state),
+            aliases=_related_memory_ids(state, clean_id) or [],
+            chat_id=clean_id,
+            property_id=prop_id,
+            instance_id=instance_id,
+            default=True,
+        )
+        socket_mgr = getattr(state, "socket_manager", None)
+        if socket_mgr and getattr(socket_mgr, "enabled", False):
+            await socket_mgr.emit(
+                "chat.list.updated",
+                {
+                    "property_id": prop_id,
+                    "action": "archived",
+                    "chat": {
+                        "chat_id": clean_id,
+                        "property_id": prop_id,
+                        "reservation_id": folio_id,
+                        "reservation_locator": reservation_locator,
+                        "reservation_status": reservation_status,
+                        "room_number": room_number,
+                        "checkin": checkin,
+                        "checkout": checkout,
+                        "channel": last.get("channel") or channel,
+                        "last_message": last.get("content"),
+                        "last_message_at": last.get("created_at"),
+                        "avatar": None,
+                        "client_name": reservation_client_name or last.get("client_name"),
+                        "client_phone": phone or clean_id,
+                        "whatsapp_phone_number": whatsapp_phone_number,
+                        "bookai_enabled": bool(bookai_resolution.get("value")),
+                        "unread_count": 0,
+                        **_pending_snapshot_for_chat(
+                            clean_id,
+                            prop_id,
+                            instance_id=instance_id,
+                            memory_manager=memory_manager,
+                        ),
+                        "folio_id": folio_id,
+                    },
+                },
+                rooms=[f"property:{prop_id}"],
+            )
+
+        return {
+            "chat_id": clean_id,
+            "property_id": prop_id,
+            "archived": True,
+        }
+
+    @router.post("/chats/{chat_id}/hide")
+    async def hide_chat(
+        chat_id: str,
+        property_id: Optional[str] = Query(default=None),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
+    ):
+        clean_id = _clean_chat_id(chat_id) or chat_id
+        property_id = _normalize_property_id(property_id)
+        channel = "whatsapp"
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
+        summary_row: Dict[str, Any] | None = None
+        history_rows: List[Dict[str, Any]] = []
+        try:
+            summary_query = (
+                supabase.table("chat_last_message")
+                .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                .eq("conversation_id", clean_id)
+                .eq("channel", channel)
+            )
+            if property_id is not None:
+                summary_query = summary_query.eq("property_id", property_id)
+            summary_rows = summary_query.order("created_at", desc=True).limit(20).execute().data or []
+            if summary_rows:
+                summary_row = summary_rows[0]
+        except Exception:
+            summary_row = None
+        if property_id is None and summary_row is not None:
+            property_id = _normalize_property_id(summary_row.get("property_id"))
+        if property_id is None:
+            property_id = _normalize_property_id(_resolve_property_id_from_history(clean_id, channel))
+        if property_id is None and getattr(state, "memory_manager", None):
+            try:
+                property_id = _normalize_property_id(state.memory_manager.get_flag(clean_id, "property_id"))
+            except Exception:
+                property_id = None
+        if property_id is None:
+            raise HTTPException(status_code=422, detail="property_id requerido")
+        if summary_row is None or _normalize_property_id(summary_row.get("property_id")) != property_id:
+            try:
+                summary_rows = (
+                    supabase.table("chat_last_message")
+                    .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                    .eq("conversation_id", clean_id)
+                    .eq("channel", channel)
+                    .eq("property_id", property_id)
+                    .order("created_at", desc=True)
+                    .limit(20)
+                    .execute()
+                    .data
+                    or []
+                )
+                if summary_rows:
+                    summary_row = summary_rows[0]
+            except Exception:
+                pass
+        try:
+            history_rows = (
+                supabase.table("chat_history")
+                .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
+                .eq("conversation_id", clean_id)
+                .eq("channel", channel)
+                .eq("property_id", property_id)
+                .order("created_at", desc=True)
+                .limit(100)
+                .execute()
+                .data
+                or []
+            )
+        except Exception:
+            history_rows = []
+        if history_rows and (
+            summary_row is None
+            or _normalize_property_id(summary_row.get("property_id")) != property_id
+        ):
+            summary_row = history_rows[0]
+        if summary_row is None or _normalize_property_id(summary_row.get("property_id")) != property_id:
+            raise HTTPException(status_code=404, detail="Chat no encontrado")
+        target_original_chat_id = str((summary_row or {}).get("original_chat_id") or "").strip()
+        if not target_original_chat_id:
+            for row in history_rows:
+                candidate_original = str((row or {}).get("original_chat_id") or "").strip()
+                if candidate_original:
+                    target_original_chat_id = candidate_original
+                    break
+        now_iso = datetime.now(timezone.utc).isoformat()
+        if target_original_chat_id:
+            (
+                supabase.table("chat_history")
+                .update({"hidden_at": now_iso})
+                .eq("original_chat_id", target_original_chat_id)
+                .eq("channel", channel)
+                .execute()
+            )
+        (
+            supabase.table("chat_history")
+            .update({"hidden_at": now_iso})
+            .eq("conversation_id", clean_id)
+            .eq("property_id", property_id)
+            .eq("channel", channel)
+            .execute()
+        )
+
+        last = summary_row or {}
+        prop_id = property_id
+        phone = _extract_guest_phone(clean_id)
+        folio_id = None
+        reservation_locator = None
+        checkin = None
+        checkout = None
+        reservation_client_name = None
+        reservation_status = None
+        room_number = None
+        memory_manager = getattr(state, "memory_manager", None)
+        if memory_manager:
+            try:
+                folio_id = memory_manager.get_flag(clean_id, "folio_id") or memory_manager.get_flag(clean_id, "origin_folio_id")
+                reservation_locator = memory_manager.get_flag(clean_id, "reservation_locator") or memory_manager.get_flag(clean_id, "origin_folio_code")
+                checkin = memory_manager.get_flag(clean_id, "checkin") or memory_manager.get_flag(clean_id, "origin_folio_min_checkin")
+                checkout = memory_manager.get_flag(clean_id, "checkout") or memory_manager.get_flag(clean_id, "origin_folio_max_checkout")
+                reservation_status = memory_manager.get_flag(clean_id, "reservation_status")
+                room_number = memory_manager.get_flag(clean_id, "room_number")
+            except Exception:
+                pass
+        try:
+            active = get_active_chat_reservation(chat_id=clean_id, property_id=prop_id)
+            if active:
+                folio_id = active.get("folio_id") or folio_id
+                reservation_locator = active.get("reservation_locator") if isinstance(active, dict) else reservation_locator
+                checkin = active.get("checkin") or checkin
+                checkout = active.get("checkout") or checkout
+                reservation_client_name = active.get("client_name") if isinstance(active, dict) else None
+            if memory_manager and folio_id:
+                memory_manager.set_flag(clean_id, "folio_id", folio_id)
+            if memory_manager and reservation_locator:
+                memory_manager.set_flag(clean_id, "reservation_locator", reservation_locator)
+            if memory_manager and checkin:
+                memory_manager.set_flag(clean_id, "checkin", checkin)
+            if memory_manager and checkout:
+                memory_manager.set_flag(clean_id, "checkout", checkout)
+        except Exception:
+            pass
+        whatsapp_phone_number = None
+        if instance_id:
+            try:
+                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_number = _resolve_instance_number(instance_payload)
+                whatsapp_phone_number = _to_international_phone(instance_number or "")
+            except Exception:
+                whatsapp_phone_number = None
+        bookai_resolution = _bookai_flag_resolution(
+            _bookai_settings(state),
+            aliases=_related_memory_ids(state, clean_id) or [],
+            chat_id=clean_id,
+            property_id=prop_id,
+            instance_id=instance_id,
+            default=True,
+        )
+        socket_mgr = getattr(state, "socket_manager", None)
+        if socket_mgr and getattr(socket_mgr, "enabled", False):
+            await socket_mgr.emit(
+                "chat.list.updated",
+                {
+                    "property_id": prop_id,
+                    "action": "deleted",
+                    "chat": {
+                        "chat_id": clean_id,
+                        "property_id": prop_id,
+                        "reservation_id": folio_id,
+                        "reservation_locator": reservation_locator,
+                        "reservation_status": reservation_status,
+                        "room_number": room_number,
+                        "checkin": checkin,
+                        "checkout": checkout,
+                        "channel": last.get("channel") or channel,
+                        "last_message": last.get("content"),
+                        "last_message_at": last.get("created_at"),
+                        "avatar": None,
+                        "client_name": reservation_client_name or last.get("client_name"),
+                        "client_phone": phone or clean_id,
+                        "whatsapp_phone_number": whatsapp_phone_number,
+                        "bookai_enabled": bool(bookai_resolution.get("value")),
+                        "unread_count": 0,
+                        **_pending_snapshot_for_chat(
+                            clean_id,
+                            prop_id,
+                            instance_id=instance_id,
+                            memory_manager=memory_manager,
+                        ),
+                        "folio_id": folio_id,
+                    },
+                },
+                rooms=[f"property:{prop_id}"],
+            )
+
+        return {
+            "chat_id": clean_id,
+            "property_id": prop_id,
+            "hidden": True,
+        }
+
     @router.get("/templates")
     async def list_templates(
         instance_id: Optional[str] = Query(default=None),
@@ -2718,6 +3235,11 @@ def register_chatter_routes(app, state) -> None:
 
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
+        chat_exists_before = bool(state.memory_manager and state.memory_manager.has_history(session_id))
+        history_property_before = _resolve_property_id_from_history(
+            session_id,
+            payload.channel.lower(),
+        )
         folio_id = None
         reservation_locator = None
         checkin = None
@@ -2964,6 +3486,71 @@ def register_chatter_routes(app, state) -> None:
 
         now_iso = datetime.now(timezone.utc).isoformat()
         rooms = _rooms(chat_id, property_id, "whatsapp")
+        socket_mgr = getattr(state, "socket_manager", None)
+        if (
+            socket_mgr
+            and getattr(socket_mgr, "enabled", False)
+            and property_id is not None
+            and (not chat_exists_before or history_property_before is None)
+        ):
+            reservation_status = None
+            room_number = None
+            if state.memory_manager:
+                try:
+                    reservation_status = state.memory_manager.get_flag(session_id, "reservation_status")
+                    room_number = state.memory_manager.get_flag(session_id, "room_number")
+                except Exception:
+                    pass
+            whatsapp_phone_number = None
+            if instance_id:
+                try:
+                    instance_payload = fetch_instance_by_code(instance_id) or {}
+                    instance_number = _resolve_instance_number(instance_payload)
+                    whatsapp_phone_number = _to_international_phone(instance_number or "")
+                except Exception:
+                    whatsapp_phone_number = None
+            bookai_resolution = _bookai_flag_resolution(
+                _bookai_settings(state),
+                aliases=_related_memory_ids(state, chat_id) or [],
+                chat_id=chat_id,
+                property_id=property_id,
+                instance_id=instance_id,
+                default=True,
+            )
+            await socket_mgr.emit(
+                "chat.list.updated",
+                {
+                    "property_id": property_id,
+                    "action": "created",
+                    "chat": {
+                        "chat_id": chat_id,
+                        "property_id": property_id,
+                        "reservation_id": folio_id,
+                        "reservation_locator": reservation_locator,
+                        "reservation_status": reservation_status,
+                        "room_number": room_number,
+                        "checkin": checkin,
+                        "checkout": checkout,
+                        "channel": "whatsapp",
+                        "last_message": rendered or template_name,
+                        "last_message_at": now_iso,
+                        "avatar": None,
+                        "client_name": reservation_client_name,
+                        "client_phone": _extract_guest_phone(chat_id) or chat_id,
+                        "whatsapp_phone_number": whatsapp_phone_number,
+                        "bookai_enabled": bool(bookai_resolution.get("value")),
+                        "unread_count": 0,
+                        **_pending_snapshot_for_chat(
+                            chat_id,
+                            property_id,
+                            instance_id=instance_id,
+                            memory_manager=getattr(state, "memory_manager", None),
+                        ),
+                        "folio_id": folio_id,
+                    },
+                },
+                rooms=[f"property:{property_id}"],
+            )
         await _emit(
             "chat.message.created",
             {

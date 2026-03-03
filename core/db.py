@@ -183,6 +183,51 @@ def save_message(
             data["property_id"] = property_id
         if structured_payload is not None:
             data["structured_payload"] = structured_payload
+        try:
+            state_query = supabase.table(table).select("archived_at, hidden_at")
+            state_rows = []
+            if property_id is not None:
+                state_rows = (
+                    state_query
+                    .eq("conversation_id", clean_id)
+                    .eq("property_id", property_id)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+            if not state_rows and original_clean:
+                state_rows = (
+                    supabase.table(table)
+                    .select("archived_at, hidden_at")
+                    .eq("original_chat_id", original_clean)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+            if not state_rows:
+                state_rows = (
+                    supabase.table(table)
+                    .select("archived_at, hidden_at")
+                    .eq("conversation_id", clean_id)
+                    .order("created_at", desc=True)
+                    .limit(1)
+                    .execute()
+                    .data
+                    or []
+                )
+            if state_rows:
+                archived_at = state_rows[0].get("archived_at")
+                hidden_at = state_rows[0].get("hidden_at")
+                if archived_at is not None:
+                    data["archived_at"] = archived_at
+                if hidden_at is not None:
+                    data["hidden_at"] = hidden_at
+        except Exception:
+            pass
 
         try:
             supabase.table(table).insert(data).execute()
