@@ -415,6 +415,7 @@ def register_whatsapp_routes(app, state):
                                     },
                                 },
                             )
+                            log.info("[chat.list.updated] deferred — property_id not yet resolved for %s", clean_chat_id)
                 except Exception as exc:
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
                 try:

@@ -802,8 +802,12 @@ async def process_user_message(
                                                 chat_id,
                                                 "pending_property_room_chat_list_updated",
                                             )
-                            except Exception:
-                                pass
+                            except Exception as exc:
+                                logging.getLogger("Pipeline").error(
+                                    "[chat.list.updated] deferred emission failed for %s: %s",
+                                    mem_id, exc, exc_info=True,
+                                )
+
                         elif state.memory_manager:
                             state.memory_manager.set_flag(
                                 mem_id,
