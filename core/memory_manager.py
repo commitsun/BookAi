@@ -695,12 +695,6 @@ class MemoryManager:
                 if isinstance(pending_list_payload, dict):
                     list_payload = dict(pending_list_payload)
                     list_payload["property_id"] = value
-                    pending_instance_id = str(
-                        list_payload.pop("target_instance_id", None)
-                        or self.get_flag(key, "instance_id")
-                        or self.get_flag(key, "instance_hotel_code")
-                        or ""
-                    ).strip()
                     chat_payload = list_payload.get("chat")
                     if isinstance(chat_payload, dict):
                         chat_payload = dict(chat_payload)
@@ -725,11 +719,7 @@ class MemoryManager:
                                 socket_mgr.emit(
                                     "chat.list.updated",
                                     list_payload,
-                                    rooms=(
-                                        f"property:{value}:{pending_instance_id}"
-                                        if pending_instance_id
-                                        else f"property:{value}"
-                                    ),
+                                    rooms=f"property:{value}",
                                 )
                             )
                             emitted_list = True

@@ -19,38 +19,6 @@ class SocketManager:
         self.enabled = False
         self.sio = None
         self._bearer_token = (bearer_token or "").strip()
-        self._sid_instances: dict[str, str] = {}
-        self._token_instances: dict[str, str] = {}
-        raw_map = str(Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
-        if raw_map.startswith("{"):
-            try:
-                payload = json.loads(raw_map)
-                if isinstance(payload, dict):
-                    for token, instance_id in payload.items():
-                        token_text = str(token or "").strip()
-                        instance_text = str(instance_id or "").strip()
-                        if token_text and instance_text:
-                            self._token_instances[token_text] = instance_text
-            except Exception:
-                log.warning("ROOMDOO_TOKEN_INSTANCE_MAP inválido para socket auth (JSON).")
-        elif raw_map:
-            for chunk in raw_map.split(","):
-                part = str(chunk or "").strip()
-                if not part or "=" not in part:
-                    continue
-                instance_id, token = part.split("=", 1)
-                token_text = str(token or "").strip()
-                instance_text = str(instance_id or "").strip()
-                if token_text and instance_text:
-                    self._token_instances[token_text] = instance_text
-        legacy_test_token = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
-        legacy_test_instance = str(Settings.ROOMDOO_INSTANCE_ID_TEST or "").strip()
-        if legacy_test_token and legacy_test_instance:
-            self._token_instances.setdefault(legacy_test_token, legacy_test_instance)
-        legacy_alda_token = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
-        legacy_alda_instance = str(Settings.ROOMDOO_INSTANCE_ID_ALDA or "").strip()
-        if legacy_alda_token and legacy_alda_instance:
-            self._token_instances.setdefault(legacy_alda_token, legacy_alda_instance)
         self._valid_tokens = self._parse_valid_tokens(self._bearer_token)
 
         try:
@@ -149,18 +117,11 @@ class SocketManager:
             if not self._is_token_valid(token):
                 log.warning("Socket.IO connect rechazado (sid=%s)", sid)
                 return False
-            raw = str(token or "").strip()
-            if raw.lower().startswith("bearer "):
-                raw = raw.split(" ", 1)[1].strip()
-            instance_id = self._token_instances.get(raw)
-            if instance_id:
-                self._sid_instances[str(sid)] = instance_id
             log.info("Socket.IO conectado: %s", sid)
             return True
 
         @self.sio.event
         async def disconnect(sid):
-            self._sid_instances.pop(str(sid), None)
             log.info("Socket.IO desconectado: %s", sid)
 
         @self.sio.event
@@ -168,42 +129,26 @@ class SocketManager:
             rooms = (data or {}).get("rooms") or []
             log.debug("Socket join sid=%s rooms=%s", sid, rooms)
             for room in rooms:
-                room_text = str(room)
-                await self.sio.enter_room(sid, room_text)
-                instance_id = self._sid_instances.get(str(sid))
-                if instance_id and room_text.startswith("property:"):
-                    await self.sio.enter_room(sid, f"{room_text}:{instance_id}")
+                await self.sio.enter_room(sid, str(room))
 
         @self.sio.event
         async def room_join(sid, data):
             rooms = (data or {}).get("rooms") or []
             log.debug("Socket room_join sid=%s rooms=%s", sid, rooms)
             for room in rooms:
-                room_text = str(room)
-                await self.sio.enter_room(sid, room_text)
-                instance_id = self._sid_instances.get(str(sid))
-                if instance_id and room_text.startswith("property:"):
-                    await self.sio.enter_room(sid, f"{room_text}:{instance_id}")
+                await self.sio.enter_room(sid, str(room))
 
         @self.sio.event
         async def leave(sid, data):
             rooms = (data or {}).get("rooms") or []
             for room in rooms:
-                room_text = str(room)
-                await self.sio.leave_room(sid, room_text)
-                instance_id = self._sid_instances.get(str(sid))
-                if instance_id and room_text.startswith("property:"):
-                    await self.sio.leave_room(sid, f"{room_text}:{instance_id}")
+                await self.sio.leave_room(sid, str(room))
 
         @self.sio.event
         async def room_leave(sid, data):
             rooms = (data or {}).get("rooms") or []
             for room in rooms:
-                room_text = str(room)
-                await self.sio.leave_room(sid, room_text)
-                instance_id = self._sid_instances.get(str(sid))
-                if instance_id and room_text.startswith("property:"):
-                    await self.sio.leave_room(sid, f"{room_text}:{instance_id}")
+                await self.sio.leave_room(sid, str(room))
 
     async def emit(self, event: str, data: dict[str, Any], rooms: str | Iterable[str] | None = None) -> None:
         if not self.enabled or not self.sio:

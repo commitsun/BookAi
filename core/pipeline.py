@@ -751,14 +751,6 @@ async def process_user_message(
                                 if isinstance(pending_list_payload, dict):
                                     list_payload = dict(pending_list_payload)
                                     list_payload["property_id"] = resolved_property_id
-                                    pending_instance_id = str(
-                                        list_payload.pop("target_instance_id", None)
-                                        or state.memory_manager.get_flag(mem_id, "instance_id")
-                                        or state.memory_manager.get_flag(mem_id, "instance_hotel_code")
-                                        or state.memory_manager.get_flag(chat_id, "instance_id")
-                                        or state.memory_manager.get_flag(chat_id, "instance_hotel_code")
-                                        or ""
-                                    ).strip()
                                     chat_payload = list_payload.get("chat")
                                     if isinstance(chat_payload, dict):
                                         chat_payload = dict(chat_payload)
@@ -768,11 +760,7 @@ async def process_user_message(
                                         socket_mgr.emit(
                                             "chat.list.updated",
                                             list_payload,
-                                            rooms=(
-                                                f"property:{resolved_property_id}:{pending_instance_id}"
-                                                if pending_instance_id
-                                                else f"property:{resolved_property_id}"
-                                            ),
+                                            rooms=f"property:{resolved_property_id}",
                                         )
                                     )
                                     state.memory_manager.clear_flag(

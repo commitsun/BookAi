@@ -378,7 +378,6 @@ def register_whatsapp_routes(app, state):
                                 "pending_property_room_chat_list_updated",
                                 {
                                     "property_id": None,
-                                    "target_instance_id": instance_id,
                                     "action": "created",
                                     "chat": {
                                         "chat_id": clean_chat_id,
@@ -456,7 +455,7 @@ def register_whatsapp_routes(app, state):
                                         "folio_id": folio_id,
                                     },
                                 },
-                                rooms=f"property:{property_id}:{instance_id}" if instance_id else f"property:{property_id}",
+                                rooms=f"property:{property_id}",
                             )
                         await socket_mgr.emit(
                             "chat.message.created",
@@ -528,7 +527,6 @@ def register_whatsapp_routes(app, state):
                         "pending_property_room_chat_list_updated",
                         {
                             "property_id": None,
-                            "target_instance_id": instance_id,
                             "action": "created",
                             "chat": {
                                 "chat_id": clean_chat_id,
@@ -602,7 +600,7 @@ def register_whatsapp_routes(app, state):
                                 "folio_id": folio_id,
                             },
                         },
-                        rooms=f"property:{property_id}:{instance_id}" if instance_id else f"property:{property_id}",
+                        rooms=f"property:{property_id}",
                     )
                 await socket_mgr.emit(
                     "chat.message.created",
