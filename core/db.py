@@ -272,6 +272,96 @@ def save_message(
         logging.error(f"⚠️ Error guardando mensaje en Supabase: {e}", exc_info=True)
 
 
+def is_chat_visible_in_list(
+    conversation_id: str,
+    *,
+    property_id: str | int | None,
+    channel: str | None = None,
+    original_chat_id: str | None = None,
+) -> bool:
+    """
+    Replica la lógica efectiva del listado de chats:
+    - Debe existir fila en chat_last_message para conversation_id+property_id+channel
+    - No puede haber historial marcado como archived/hidden para ese chat/property
+    """
+    clean_id = str(conversation_id or "").replace("+", "").strip()
+    if not clean_id or property_id is None:
+        return False
+
+    current_channel = str(channel or "whatsapp").strip() or "whatsapp"
+    original_clean = str(original_chat_id or "").replace("+", "").strip()
+
+    try:
+        summary_rows = (
+            supabase.table("chat_last_message")
+            .select("conversation_id, original_chat_id")
+            .eq("conversation_id", clean_id)
+            .eq("property_id", property_id)
+            .eq("channel", current_channel)
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if not summary_rows and original_clean:
+            summary_rows = (
+                supabase.table("chat_last_message")
+                .select("conversation_id, original_chat_id")
+                .eq("original_chat_id", original_clean)
+                .eq("property_id", property_id)
+                .eq("channel", current_channel)
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+        if not summary_rows:
+            return False
+
+        summary_row = summary_rows[0] or {}
+        effective_original = str(summary_row.get("original_chat_id") or original_clean or "").replace("+", "").strip()
+
+        hidden_by_chat = (
+            supabase.table("chat_history")
+            .select("conversation_id")
+            .eq("conversation_id", clean_id)
+            .eq("property_id", property_id)
+            .eq("channel", current_channel)
+            .or_("archived_at.not.is.null,hidden_at.not.is.null")
+            .order("created_at", desc=True)
+            .limit(1)
+            .execute()
+            .data
+            or []
+        )
+        if hidden_by_chat:
+            return False
+
+        if effective_original:
+            hidden_by_original = (
+                supabase.table("chat_history")
+                .select("original_chat_id")
+                .eq("original_chat_id", effective_original)
+                .eq("property_id", property_id)
+                .eq("channel", current_channel)
+                .or_("archived_at.not.is.null,hidden_at.not.is.null")
+                .order("created_at", desc=True)
+                .limit(1)
+                .execute()
+                .data
+                or []
+            )
+            if hidden_by_original:
+                return False
+
+        return True
+    except Exception as exc:
+        logging.debug("No se pudo resolver visibilidad en listado para %s/%s: %s", clean_id, property_id, exc)
+        return False
+
+
 # ======================================================
 # 🧠 Obtener historial de conversación
 # ======================================================

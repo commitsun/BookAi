@@ -6,6 +6,7 @@ from datetime import datetime, timedelta
 from typing import List, Dict, Any, Optional
 from core.db import (
     get_conversation_history,
+    is_chat_visible_in_list,
     save_message,
     get_last_property_id_for_conversation,
     get_last_property_id_for_original_chat,
@@ -700,24 +701,28 @@ class MemoryManager:
                 if isinstance(pending_list_payload, dict):
                     list_payload = dict(pending_list_payload)
                     list_payload["property_id"] = value
+                    original_chat_id = str(list_payload.pop("_original_chat_id", "") or "").strip()
                     chat_payload = list_payload.get("chat")
                     if isinstance(chat_payload, dict):
                         chat_payload = dict(chat_payload)
                         chat_payload["property_id"] = value
                         list_payload["chat"] = chat_payload
                     emitted_list = False
-                    has_db_history = False
-                    try:
-                        db_rows = get_conversation_history(
-                            self._resolve_db_conversation_id(key),
-                            limit=1,
-                            property_id=value,
-                            table=self._resolve_history_table(key),
-                        )
-                        has_db_history = bool(db_rows)
-                    except Exception:
-                        has_db_history = False
-                    if has_db_history and socket_mgr and getattr(socket_mgr, "enabled", False):
+                    chat_id_for_visibility = str(
+                        (chat_payload or {}).get("chat_id") if isinstance(chat_payload, dict) else key
+                    ).strip() or str(key or "").strip()
+                    channel_name = str(
+                        (chat_payload or {}).get("channel") if isinstance(chat_payload, dict) else "whatsapp"
+                    ).strip() or "whatsapp"
+                    if not original_chat_id and ":" in str(key or ""):
+                        original_chat_id = str(key).strip()
+                    visible_after = is_chat_visible_in_list(
+                        chat_id_for_visibility,
+                        property_id=value,
+                        channel=channel_name,
+                        original_chat_id=original_chat_id or None,
+                    )
+                    if visible_after and socket_mgr and getattr(socket_mgr, "enabled", False):
                         try:
                             loop = asyncio.get_running_loop()
                             loop.create_task(

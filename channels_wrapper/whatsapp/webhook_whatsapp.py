@@ -12,6 +12,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.utils.text_utils import send_fragmented_async
+from core.db import is_chat_visible_in_list
 from core.pipeline import process_user_message, _resolve_bookai_enabled
 
 log = logging.getLogger("WhatsAppWebhook")
@@ -266,13 +267,7 @@ def register_whatsapp_routes(app, state):
                 return JSONResponse({"status": "ignored"})
 
             log.info("💬 WhatsApp %s: %s", sender, text)
-            chat_exists_before = bool(state.memory_manager and state.memory_manager.has_history(memory_id))
-            history_property_before = None
-            if chat_exists_before:
-                try:
-                    history_property_before = _resolve_property_id_fallback(memory_id, sender)
-                except Exception:
-                    history_property_before = None
+            chat_visible_before = False
             if client_name:
                 state.memory_manager.set_flag(memory_id, "client_name", client_name)
             state.memory_manager.set_flag(memory_id, "guest_number", sender)
@@ -329,6 +324,12 @@ def register_whatsapp_routes(app, state):
             clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
             context_id = str(memory_id or sender or "").strip()
             clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            chat_visible_before = is_chat_visible_in_list(
+                clean_chat_id,
+                property_id=property_id,
+                channel="whatsapp",
+                original_chat_id=context_id,
+            )
             socket_mgr = getattr(state, "socket_manager", None)
             bookai_enabled = _resolve_bookai_enabled(
                 state,
@@ -357,6 +358,13 @@ def register_whatsapp_routes(app, state):
                         property_id = _resolve_property_id_fallback(memory_id, sender)
                         if property_id is not None:
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                    if property_id is not None and not chat_visible_before:
+                        chat_visible_before = is_chat_visible_in_list(
+                            clean_chat_id,
+                            property_id=property_id,
+                            channel="whatsapp",
+                            original_chat_id=context_id,
+                        )
                     if property_id is None:
                         state.memory_manager.set_flag(
                             memory_id,
@@ -372,14 +380,15 @@ def register_whatsapp_routes(app, state):
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                             },
                         )
-                        if not chat_exists_before or history_property_before is None:
+                        if not chat_visible_before:
                             state.memory_manager.set_flag(
                                 memory_id,
                                 "pending_property_room_chat_list_updated",
                                 {
-                                    "property_id": None,
-                                    "action": "created",
-                                    "chat": {
+                                "property_id": None,
+                                "action": "created",
+                                "_original_chat_id": context_id,
+                                "chat": {
                                         "chat_id": clean_chat_id,
                                         "property_id": None,
                                         "reservation_id": state.memory_manager.get_flag(memory_id, "folio_id"),
@@ -416,7 +425,13 @@ def register_whatsapp_routes(app, state):
                             rooms.append(f"property:{property_id}")
                         rooms.append("channel:whatsapp")
                         now_iso = datetime.now(timezone.utc).isoformat()
-                        if property_id is not None and (not chat_exists_before or history_property_before is None):
+                        chat_visible_after = is_chat_visible_in_list(
+                            clean_chat_id,
+                            property_id=property_id,
+                            channel="whatsapp",
+                            original_chat_id=context_id,
+                        )
+                        if property_id is not None and not chat_visible_before and chat_visible_after:
                             folio_id = state.memory_manager.get_flag(memory_id, "folio_id")
                             reservation_locator = state.memory_manager.get_flag(memory_id, "reservation_locator")
                             checkin = state.memory_manager.get_flag(memory_id, "checkin")
@@ -522,13 +537,21 @@ def register_whatsapp_routes(app, state):
                     except Exception:
                         current_property_id = None
                 property_id = current_property_id
-                if property_id is None and (not chat_exists_before or history_property_before is None):
+                if property_id is not None and not chat_visible_before:
+                    chat_visible_before = is_chat_visible_in_list(
+                        clean_chat_id,
+                        property_id=property_id,
+                        channel="whatsapp",
+                        original_chat_id=context_id,
+                    )
+                if property_id is None and not chat_visible_before:
                     state.memory_manager.set_flag(
                         memory_id,
                         "pending_property_room_chat_list_updated",
                         {
                             "property_id": None,
                             "action": "created",
+                            "_original_chat_id": context_id,
                             "chat": {
                                 "chat_id": clean_chat_id,
                                 "property_id": None,
@@ -562,7 +585,7 @@ def register_whatsapp_routes(app, state):
                     rooms.append(f"property:{property_id}")
                 rooms.append("channel:whatsapp")
                 now_iso = datetime.now(timezone.utc).isoformat()
-                if property_id is not None and (not chat_exists_before or history_property_before is None):
+                if property_id is not None and not chat_visible_before:
                     folio_id = state.memory_manager.get_flag(memory_id, "folio_id")
                     reservation_locator = state.memory_manager.get_flag(memory_id, "reservation_locator")
                     checkin = state.memory_manager.get_flag(memory_id, "checkin")

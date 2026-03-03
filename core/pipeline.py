@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from core.config import ModelConfig, ModelTier, Settings
+from core.db import is_chat_visible_in_list
 from core.language_manager import language_manager
 from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
@@ -653,6 +654,14 @@ async def process_user_message(
         escalation_chat_id = mem_id or chat_id
         guest_message_persisted = False
         initial_property_id = property_id
+        chat_list_chat_id = _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or "")
+        chat_list_original_id = str(mem_id or chat_id or "").strip() or None
+        chat_visible_before = is_chat_visible_in_list(
+            chat_list_chat_id,
+            property_id=initial_property_id,
+            channel=channel,
+            original_chat_id=chat_list_original_id,
+        )
         main_agent_invoked = False
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
@@ -762,29 +771,37 @@ async def process_user_message(
                                 )
                                 if isinstance(pending_list_payload, dict):
                                     list_payload = dict(pending_list_payload)
+                                    list_payload.pop("_original_chat_id", None)
                                     list_payload["property_id"] = resolved_property_id
                                     chat_payload = list_payload.get("chat")
                                     if isinstance(chat_payload, dict):
                                         chat_payload = dict(chat_payload)
                                         chat_payload["property_id"] = resolved_property_id
                                         list_payload["chat"] = chat_payload
-                                    loop.create_task(
-                                        socket_mgr.emit(
-                                            "chat.list.updated",
-                                            list_payload,
-                                            rooms=f"property:{resolved_property_id}",
-                                            instance_id=resolved_instance_id,
+                                    chat_visible_after = is_chat_visible_in_list(
+                                        chat_list_chat_id,
+                                        property_id=resolved_property_id,
+                                        channel=channel,
+                                        original_chat_id=chat_list_original_id,
+                                    )
+                                    if not chat_visible_before and chat_visible_after:
+                                        loop.create_task(
+                                            socket_mgr.emit(
+                                                "chat.list.updated",
+                                                list_payload,
+                                                rooms=f"property:{resolved_property_id}",
+                                                instance_id=resolved_instance_id,
+                                            )
                                         )
-                                    )
-                                    state.memory_manager.clear_flag(
-                                        mem_id,
-                                        "pending_property_room_chat_list_updated",
-                                    )
-                                    if str(chat_id or "").strip() and str(chat_id or "").strip() != str(mem_id or "").strip():
                                         state.memory_manager.clear_flag(
-                                            chat_id,
+                                            mem_id,
                                             "pending_property_room_chat_list_updated",
                                         )
+                                        if str(chat_id or "").strip() and str(chat_id or "").strip() != str(mem_id or "").strip():
+                                            state.memory_manager.clear_flag(
+                                                chat_id,
+                                                "pending_property_room_chat_list_updated",
+                                            )
                             except Exception:
                                 pass
                         elif state.memory_manager:

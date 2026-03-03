@@ -14,7 +14,7 @@ from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
-from core.db import supabase
+from core.db import supabase, is_chat_visible_in_list
 from core.escalation_db import (
     list_pending_escalations,
     list_pending_escalations_for_chat,
@@ -1915,10 +1915,9 @@ def register_chatter_routes(app, state) -> None:
         # IMPORTANTE: session_id debe resolverse después de cualquier ajuste de context_id.
         # Si no, puede persistirse en el contexto equivocado y no aparecer en chatter.
         session_id = context_id or chat_id
-        chat_exists_before = bool(state.memory_manager and state.memory_manager.has_history(session_id))
-        history_property_before = _resolve_property_id_from_history(
-            session_id,
-            payload.channel.lower(),
+        chat_visible_before = False
+        resolved_original_chat_id = context_id or (
+            str(session_id).strip() if isinstance(session_id, str) and ":" in session_id else None
         )
 
         if token_instance_id and state.memory_manager:
@@ -2021,9 +2020,6 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.clear_flag(mem_id, "escalation_confirmation_pending")
                 state.memory_manager.clear_flag(mem_id, "consulta_base_realizada")
                 state.memory_manager.clear_flag(mem_id, "inciso_enviado")
-            resolved_original_chat_id = context_id or (
-                str(session_id).strip() if isinstance(session_id, str) and ":" in session_id else None
-            )
             if not resolved_original_chat_id and state.memory_manager:
                 try:
                     last_mem = (
@@ -2041,6 +2037,12 @@ def register_chatter_routes(app, state) -> None:
                         resolved_original_chat_id = built_ctx.strip()
                 except Exception:
                     pass
+            chat_visible_before = is_chat_visible_in_list(
+                chat_id,
+                property_id=property_id,
+                channel=payload.channel.lower(),
+                original_chat_id=resolved_original_chat_id,
+            )
             state.memory_manager.save(
                 session_id,
                 role,
@@ -2094,6 +2096,12 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.set_flag(mem_id, "property_id", property_id)
 
         rooms = _rooms(chat_id, property_id, payload.channel.lower())
+        chat_visible_after = is_chat_visible_in_list(
+            chat_id,
+            property_id=property_id,
+            channel=payload.channel.lower(),
+            original_chat_id=resolved_original_chat_id,
+        )
         try:
             resolved_ids = resolve_pending_escalations_for_chat(
                 chat_id,
@@ -2144,7 +2152,8 @@ def register_chatter_routes(app, state) -> None:
             socket_mgr
             and getattr(socket_mgr, "enabled", False)
             and property_id is not None
-            and (not chat_exists_before or history_property_before is None)
+            and not chat_visible_before
+            and chat_visible_after
         ):
             folio_id = None
             reservation_locator = None
@@ -3260,11 +3269,7 @@ def register_chatter_routes(app, state) -> None:
 
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
-        chat_exists_before = bool(state.memory_manager and state.memory_manager.has_history(session_id))
-        history_property_before = _resolve_property_id_from_history(
-            session_id,
-            payload.channel.lower(),
-        )
+        chat_visible_before = False
         folio_id = None
         reservation_locator = None
         checkin = None
@@ -3476,6 +3481,12 @@ def register_chatter_routes(app, state) -> None:
             for mem_id in [session_id, chat_id]:
                 if mem_id:
                     state.memory_manager.set_flag(mem_id, "default_channel", "whatsapp")
+            chat_visible_before = is_chat_visible_in_list(
+                chat_id,
+                property_id=property_id,
+                channel="whatsapp",
+                original_chat_id=context_id or None,
+            )
             if rendered:
                 if property_id is not None:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
@@ -3511,12 +3522,19 @@ def register_chatter_routes(app, state) -> None:
 
         now_iso = datetime.now(timezone.utc).isoformat()
         rooms = _rooms(chat_id, property_id, "whatsapp")
+        chat_visible_after = is_chat_visible_in_list(
+            chat_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=context_id or None,
+        )
         socket_mgr = getattr(state, "socket_manager", None)
         if (
             socket_mgr
             and getattr(socket_mgr, "enabled", False)
             and property_id is not None
-            and (not chat_exists_before or history_property_before is None)
+            and not chat_visible_before
+            and chat_visible_after
         ):
             reservation_status = None
             room_number = None
