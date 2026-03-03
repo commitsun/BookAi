@@ -1382,6 +1382,43 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
+    def _restore_chat_visibility(
+        chat_id: str,
+        *,
+        property_id: Optional[str | int],
+        channel: str,
+        original_chat_id: Optional[str] = None,
+    ) -> bool:
+        clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+        if not clean_id or property_id is None:
+            return False
+
+        restore_payload = {"archived_at": None, "hidden_at": None}
+        current_channel = str(channel or "whatsapp").strip() or "whatsapp"
+        original_clean = str(original_chat_id or "").replace("+", "").strip()
+
+        try:
+            if original_clean:
+                (
+                    supabase.table("chat_history")
+                    .update(restore_payload)
+                    .eq("original_chat_id", original_clean)
+                    .eq("property_id", property_id)
+                    .eq("channel", current_channel)
+                    .execute()
+                )
+            (
+                supabase.table("chat_history")
+                .update(restore_payload)
+                .eq("conversation_id", clean_id)
+                .eq("property_id", property_id)
+                .eq("channel", current_channel)
+                .execute()
+            )
+            return True
+        except Exception:
+            return False
+
     @router.get("/chats")
     async def list_chats(
         page: int = Query(default=1, ge=1),
@@ -1919,6 +1956,15 @@ def register_chatter_routes(app, state) -> None:
         resolved_original_chat_id = context_id or (
             str(session_id).strip() if isinstance(session_id, str) and ":" in session_id else None
         )
+        log.info(
+            "[CHATTER_SEND] request chat_id=%s property_id=%s sender=%s instance_id=%s context_id=%s session_id=%s",
+            chat_id,
+            property_id,
+            payload.sender,
+            instance_id,
+            context_id,
+            session_id,
+        )
 
         if token_instance_id and state.memory_manager:
             try:
@@ -2043,6 +2089,14 @@ def register_chatter_routes(app, state) -> None:
                 channel=payload.channel.lower(),
                 original_chat_id=resolved_original_chat_id,
             )
+            log.info(
+                "[CHATTER_SEND] visibility.before chat_id=%s property_id=%s channel=%s original_chat_id=%s visible=%s",
+                chat_id,
+                property_id,
+                payload.channel.lower(),
+                resolved_original_chat_id,
+                chat_visible_before,
+            )
             state.memory_manager.save(
                 session_id,
                 role,
@@ -2096,11 +2150,34 @@ def register_chatter_routes(app, state) -> None:
                 state.memory_manager.set_flag(mem_id, "property_id", property_id)
 
         rooms = _rooms(chat_id, property_id, payload.channel.lower())
+        visibility_restored = False
+        if not chat_visible_before:
+            visibility_restored = _restore_chat_visibility(
+                chat_id,
+                property_id=property_id,
+                channel=payload.channel.lower(),
+                original_chat_id=resolved_original_chat_id,
+            )
+            log.info(
+                "[CHATTER_SEND] visibility.restore chat_id=%s property_id=%s channel=%s attempted=%s",
+                chat_id,
+                property_id,
+                payload.channel.lower(),
+                visibility_restored,
+            )
         chat_visible_after = is_chat_visible_in_list(
             chat_id,
             property_id=property_id,
             channel=payload.channel.lower(),
             original_chat_id=resolved_original_chat_id,
+        )
+        log.info(
+            "[CHATTER_SEND] visibility.after chat_id=%s property_id=%s channel=%s original_chat_id=%s visible=%s",
+            chat_id,
+            property_id,
+            payload.channel.lower(),
+            resolved_original_chat_id,
+            chat_visible_after,
         )
         try:
             resolved_ids = resolve_pending_escalations_for_chat(
@@ -2224,6 +2301,20 @@ def register_chatter_routes(app, state) -> None:
                 rooms=f"property:{property_id}",
                 instance_id=instance_id,
             )
+            log.info(
+                "[CHATTER_SEND] emit chat.list.updated action=created chat_id=%s property_id=%s room=property:%s",
+                chat_id,
+                property_id,
+                property_id,
+            )
+        else:
+            log.info(
+                "[CHATTER_SEND] skip chat.list.updated chat_id=%s property_id=%s visible_before=%s visible_after=%s",
+                chat_id,
+                property_id,
+                chat_visible_before,
+                chat_visible_after,
+            )
         await _emit(
             "chat.message.created",
             {
@@ -2235,6 +2326,12 @@ def register_chatter_routes(app, state) -> None:
                 "message": outgoing_message,
                 "created_at": now_iso,
             },
+        )
+        log.info(
+            "[CHATTER_SEND] emit chat.message.created chat_id=%s property_id=%s rooms=%s",
+            chat_id,
+            property_id,
+            rooms,
         )
         await _emit(
             "chat.updated",
@@ -2252,6 +2349,12 @@ def register_chatter_routes(app, state) -> None:
                     memory_manager=getattr(state, "memory_manager", None),
                 ),
             },
+        )
+        log.info(
+            "[CHATTER_SEND] emit chat.updated chat_id=%s property_id=%s rooms=%s",
+            chat_id,
+            property_id,
+            rooms,
         )
 
         return {
