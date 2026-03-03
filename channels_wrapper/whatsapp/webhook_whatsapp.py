@@ -391,7 +391,6 @@ def register_whatsapp_routes(app, state):
                                 "chat": {
                                         "chat_id": clean_chat_id,
                                         "property_id": None,
-                                        "reservation_id": state.memory_manager.get_flag(memory_id, "folio_id"),
                                         "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
                                         "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
                                         "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
@@ -405,7 +404,7 @@ def register_whatsapp_routes(app, state):
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
                                         "bookai_enabled": False,
-                                        "unread_count": 0,
+                                        "unread_count": 1,
                                         "needs_action": None,
                                         "needs_action_type": None,
                                         "needs_action_reason": None,
@@ -416,6 +415,7 @@ def register_whatsapp_routes(app, state):
                                     },
                                 },
                             )
+                            log.info("[chat.list.updated] deferred — property_id not yet resolved for %s", clean_chat_id)
                 except Exception as exc:
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
                 try:
@@ -446,7 +446,6 @@ def register_whatsapp_routes(app, state):
                                     "chat": {
                                         "chat_id": clean_chat_id,
                                         "property_id": property_id,
-                                        "reservation_id": folio_id,
                                         "reservation_locator": reservation_locator,
                                         "reservation_status": reservation_status,
                                         "room_number": room_number,
@@ -460,7 +459,7 @@ def register_whatsapp_routes(app, state):
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
                                         "bookai_enabled": False,
-                                        "unread_count": 0,
+                                        "unread_count": 1,
                                         "needs_action": None,
                                         "needs_action_type": None,
                                         "needs_action_reason": None,
@@ -555,7 +554,6 @@ def register_whatsapp_routes(app, state):
                             "chat": {
                                 "chat_id": clean_chat_id,
                                 "property_id": None,
-                                "reservation_id": state.memory_manager.get_flag(memory_id, "folio_id"),
                                 "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
                                 "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
                                 "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
@@ -569,7 +567,7 @@ def register_whatsapp_routes(app, state):
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
                                 "bookai_enabled": True,
-                                "unread_count": 0,
+                                "unread_count": 1,
                                 "needs_action": None,
                                 "needs_action_type": None,
                                 "needs_action_reason": None,
@@ -600,7 +598,6 @@ def register_whatsapp_routes(app, state):
                             "chat": {
                                 "chat_id": clean_chat_id,
                                 "property_id": property_id,
-                                "reservation_id": folio_id,
                                 "reservation_locator": reservation_locator,
                                 "reservation_status": reservation_status,
                                 "room_number": room_number,
@@ -614,7 +611,7 @@ def register_whatsapp_routes(app, state):
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
                                 "bookai_enabled": True,
-                                "unread_count": 0,
+                                "unread_count": 1,
                                 "needs_action": None,
                                 "needs_action_type": None,
                                 "needs_action_reason": None,

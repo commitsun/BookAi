@@ -693,8 +693,11 @@ class MemoryManager:
                             )
                         )
                         emitted = True
-                    except Exception:
-                        pass
+                    except Exception as exc:
+                        log.error(
+                            "[chat.message.created] deferred emission failed for %s: %s",
+                            key, exc, exc_info=True,
+                        )
                 if emitted and key in self.state_flags and "pending_property_room_guest_message" in self.state_flags[key]:
                     del self.state_flags[key]["pending_property_room_guest_message"]
                 pending_list_payload = self.state_flags.get(key, {}).get("pending_property_room_chat_list_updated")
@@ -734,8 +737,11 @@ class MemoryManager:
                                 )
                             )
                             emitted_list = True
-                        except Exception:
-                            pass
+                        except Exception as exc:
+                            log.error(
+                                "[chat.list.updated] deferred emission failed for %s: %s",
+                                key, exc, exc_info=True,
+                            )
                     if emitted_list and key in self.state_flags and "pending_property_room_chat_list_updated" in self.state_flags[key]:
                         del self.state_flags[key]["pending_property_room_chat_list_updated"]
         log.debug(f"🚩 Flag '{flag_name}' = {value} para {cid}")
