@@ -691,6 +691,42 @@ class MemoryManager:
                         pass
                 if emitted and key in self.state_flags and "pending_property_room_guest_message" in self.state_flags[key]:
                     del self.state_flags[key]["pending_property_room_guest_message"]
+                pending_list_payload = self.state_flags.get(key, {}).get("pending_property_room_chat_list_updated")
+                if isinstance(pending_list_payload, dict):
+                    list_payload = dict(pending_list_payload)
+                    list_payload["property_id"] = value
+                    chat_payload = list_payload.get("chat")
+                    if isinstance(chat_payload, dict):
+                        chat_payload = dict(chat_payload)
+                        chat_payload["property_id"] = value
+                        list_payload["chat"] = chat_payload
+                    emitted_list = False
+                    has_db_history = False
+                    try:
+                        db_rows = get_conversation_history(
+                            self._resolve_db_conversation_id(key),
+                            limit=1,
+                            property_id=value,
+                            table=self._resolve_history_table(key),
+                        )
+                        has_db_history = bool(db_rows)
+                    except Exception:
+                        has_db_history = False
+                    if has_db_history and socket_mgr and getattr(socket_mgr, "enabled", False):
+                        try:
+                            loop = asyncio.get_running_loop()
+                            loop.create_task(
+                                socket_mgr.emit(
+                                    "chat.list.updated",
+                                    list_payload,
+                                    rooms=f"property:{value}",
+                                )
+                            )
+                            emitted_list = True
+                        except Exception:
+                            pass
+                    if emitted_list and key in self.state_flags and "pending_property_room_chat_list_updated" in self.state_flags[key]:
+                        del self.state_flags[key]["pending_property_room_chat_list_updated"]
         log.debug(f"🚩 Flag '{flag_name}' = {value} para {cid}")
 
     def get_flag(self, conversation_id: str, flag_name: str) -> Optional[Any]:

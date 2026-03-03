@@ -714,6 +714,15 @@ async def process_user_message(
                         resolved_property_id is not None
                         and str(resolved_property_id).strip() != str(initial_property_id).strip()
                     ):
+                        pending_list_payload = None
+                        if state.memory_manager:
+                            try:
+                                pending_list_payload = (
+                                    state.memory_manager.get_flag(mem_id, "pending_property_room_chat_list_updated")
+                                    or state.memory_manager.get_flag(chat_id, "pending_property_room_chat_list_updated")
+                                )
+                            except Exception:
+                                pending_list_payload = None
                         payload = {
                             "chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
                             "guest_chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
@@ -739,6 +748,30 @@ async def process_user_message(
                                         rooms=[f"property:{resolved_property_id}"],
                                     )
                                 )
+                                if isinstance(pending_list_payload, dict):
+                                    list_payload = dict(pending_list_payload)
+                                    list_payload["property_id"] = resolved_property_id
+                                    chat_payload = list_payload.get("chat")
+                                    if isinstance(chat_payload, dict):
+                                        chat_payload = dict(chat_payload)
+                                        chat_payload["property_id"] = resolved_property_id
+                                        list_payload["chat"] = chat_payload
+                                    loop.create_task(
+                                        socket_mgr.emit(
+                                            "chat.list.updated",
+                                            list_payload,
+                                            rooms=f"property:{resolved_property_id}",
+                                        )
+                                    )
+                                    state.memory_manager.clear_flag(
+                                        mem_id,
+                                        "pending_property_room_chat_list_updated",
+                                    )
+                                    if str(chat_id or "").strip() and str(chat_id or "").strip() != str(mem_id or "").strip():
+                                        state.memory_manager.clear_flag(
+                                            chat_id,
+                                            "pending_property_room_chat_list_updated",
+                                        )
                             except Exception:
                                 pass
                         elif state.memory_manager:

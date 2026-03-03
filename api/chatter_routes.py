@@ -2190,7 +2190,7 @@ def register_chatter_routes(app, state) -> None:
                         "folio_id": folio_id,
                     },
                 },
-                rooms=[f"property:{property_id}"],
+                rooms=f"property:{property_id}",
             )
         await _emit(
             "chat.message.created",
@@ -2945,7 +2945,7 @@ def register_chatter_routes(app, state) -> None:
                         "folio_id": folio_id,
                     },
                 },
-                rooms=[f"property:{prop_id}"],
+                rooms=f"property:{prop_id}",
             )
 
         return {
@@ -3145,7 +3145,7 @@ def register_chatter_routes(app, state) -> None:
                         "folio_id": folio_id,
                     },
                 },
-                rooms=[f"property:{prop_id}"],
+                rooms=f"property:{prop_id}",
             )
 
         return {
@@ -3549,7 +3549,7 @@ def register_chatter_routes(app, state) -> None:
                         "folio_id": folio_id,
                     },
                 },
-                rooms=[f"property:{property_id}"],
+                rooms=f"property:{property_id}",
             )
         await _emit(
             "chat.message.created",

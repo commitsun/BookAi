@@ -372,6 +372,41 @@ def register_whatsapp_routes(app, state):
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                             },
                         )
+                        if not chat_exists_before or history_property_before is None:
+                            state.memory_manager.set_flag(
+                                memory_id,
+                                "pending_property_room_chat_list_updated",
+                                {
+                                    "property_id": None,
+                                    "action": "created",
+                                    "chat": {
+                                        "chat_id": clean_chat_id,
+                                        "property_id": None,
+                                        "reservation_id": state.memory_manager.get_flag(memory_id, "folio_id"),
+                                        "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
+                                        "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
+                                        "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
+                                        "checkin": state.memory_manager.get_flag(memory_id, "checkin"),
+                                        "checkout": state.memory_manager.get_flag(memory_id, "checkout"),
+                                        "channel": "whatsapp",
+                                        "last_message": text,
+                                        "last_message_at": datetime.now(timezone.utc).isoformat(),
+                                        "avatar": None,
+                                        "client_name": client_name,
+                                        "client_phone": clean_chat_id,
+                                        "whatsapp_phone_number": normalized_instance_number or None,
+                                        "bookai_enabled": False,
+                                        "unread_count": 0,
+                                        "needs_action": None,
+                                        "needs_action_type": None,
+                                        "needs_action_reason": None,
+                                        "proposed_response": None,
+                                        "is_final_response": False,
+                                        "escalation_messages": None,
+                                        "folio_id": state.memory_manager.get_flag(memory_id, "folio_id"),
+                                    },
+                                },
+                            )
                 except Exception as exc:
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
                 try:
@@ -420,7 +455,7 @@ def register_whatsapp_routes(app, state):
                                         "folio_id": folio_id,
                                     },
                                 },
-                                rooms=[f"property:{property_id}"],
+                                rooms=f"property:{property_id}",
                             )
                         await socket_mgr.emit(
                             "chat.message.created",
@@ -486,6 +521,41 @@ def register_whatsapp_routes(app, state):
                     except Exception:
                         current_property_id = None
                 property_id = current_property_id
+                if property_id is None and (not chat_exists_before or history_property_before is None):
+                    state.memory_manager.set_flag(
+                        memory_id,
+                        "pending_property_room_chat_list_updated",
+                        {
+                            "property_id": None,
+                            "action": "created",
+                            "chat": {
+                                "chat_id": clean_chat_id,
+                                "property_id": None,
+                                "reservation_id": state.memory_manager.get_flag(memory_id, "folio_id"),
+                                "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
+                                "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
+                                "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
+                                "checkin": state.memory_manager.get_flag(memory_id, "checkin"),
+                                "checkout": state.memory_manager.get_flag(memory_id, "checkout"),
+                                "channel": "whatsapp",
+                                "last_message": text,
+                                "last_message_at": datetime.now(timezone.utc).isoformat(),
+                                "avatar": None,
+                                "client_name": client_name,
+                                "client_phone": clean_chat_id,
+                                "whatsapp_phone_number": normalized_instance_number or None,
+                                "bookai_enabled": True,
+                                "unread_count": 0,
+                                "needs_action": None,
+                                "needs_action_type": None,
+                                "needs_action_reason": None,
+                                "proposed_response": None,
+                                "is_final_response": False,
+                                "escalation_messages": None,
+                                "folio_id": state.memory_manager.get_flag(memory_id, "folio_id"),
+                            },
+                        },
+                    )
                 rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
                 if property_id is not None:
                     rooms.append(f"property:{property_id}")
@@ -530,7 +600,7 @@ def register_whatsapp_routes(app, state):
                                 "folio_id": folio_id,
                             },
                         },
-                        rooms=[f"property:{property_id}"],
+                        rooms=f"property:{property_id}",
                     )
                 await socket_mgr.emit(
                     "chat.message.created",
