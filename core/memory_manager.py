@@ -676,6 +676,10 @@ class MemoryManager:
                 except Exception:
                     socket_mgr = None
                 emitted = False
+                instance_id = (
+                    self.get_flag(key, "instance_id")
+                    or self.get_flag(key, "instance_hotel_code")
+                )
                 if socket_mgr and getattr(socket_mgr, "enabled", False):
                     try:
                         loop = asyncio.get_running_loop()
@@ -683,7 +687,8 @@ class MemoryManager:
                             socket_mgr.emit(
                                 "chat.message.created",
                                 payload,
-                                rooms=[f"property:{value}"],
+                                rooms=f"property:{value}",
+                                instance_id=instance_id,
                             )
                         )
                         emitted = True
@@ -720,6 +725,7 @@ class MemoryManager:
                                     "chat.list.updated",
                                     list_payload,
                                     rooms=f"property:{value}",
+                                    instance_id=instance_id,
                                 )
                             )
                             emitted_list = True

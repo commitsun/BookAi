@@ -734,6 +734,17 @@ async def process_user_message(
                             "created_at": datetime.now(timezone.utc).isoformat(),
                         }
                         socket_mgr = getattr(state, "socket_manager", None)
+                        resolved_instance_id = None
+                        if state.memory_manager:
+                            try:
+                                resolved_instance_id = (
+                                    state.memory_manager.get_flag(mem_id, "instance_id")
+                                    or state.memory_manager.get_flag(mem_id, "instance_hotel_code")
+                                    or state.memory_manager.get_flag(chat_id, "instance_id")
+                                    or state.memory_manager.get_flag(chat_id, "instance_hotel_code")
+                                )
+                            except Exception:
+                                resolved_instance_id = None
                         if (
                             resolved_property_id is not None
                             and socket_mgr
@@ -745,7 +756,8 @@ async def process_user_message(
                                     socket_mgr.emit(
                                         "chat.message.created",
                                         payload,
-                                        rooms=[f"property:{resolved_property_id}"],
+                                        rooms=f"property:{resolved_property_id}",
+                                        instance_id=resolved_instance_id,
                                     )
                                 )
                                 if isinstance(pending_list_payload, dict):
@@ -761,6 +773,7 @@ async def process_user_message(
                                             "chat.list.updated",
                                             list_payload,
                                             rooms=f"property:{resolved_property_id}",
+                                            instance_id=resolved_instance_id,
                                         )
                                     )
                                     state.memory_manager.clear_flag(

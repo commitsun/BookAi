@@ -456,6 +456,7 @@ def register_whatsapp_routes(app, state):
                                     },
                                 },
                                 rooms=f"property:{property_id}",
+                                instance_id=instance_id,
                             )
                         await socket_mgr.emit(
                             "chat.message.created",
@@ -601,6 +602,7 @@ def register_whatsapp_routes(app, state):
                             },
                         },
                         rooms=f"property:{property_id}",
+                        instance_id=instance_id,
                     )
                 await socket_mgr.emit(
                     "chat.message.created",

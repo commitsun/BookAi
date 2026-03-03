@@ -20,6 +20,8 @@ class SocketManager:
         self.sio = None
         self._bearer_token = (bearer_token or "").strip()
         self._valid_tokens = self._parse_valid_tokens(self._bearer_token)
+        self._token_instances = self._parse_token_instances()
+        self._sid_instances: dict[str, str] = {}
 
         try:
             import socketio  # type: ignore
@@ -81,6 +83,67 @@ class SocketManager:
                 tokens.add(token_text)
         return tokens
 
+    @staticmethod
+    def _parse_token_instances() -> dict[str, str]:
+        mapping: dict[str, str] = {}
+
+        token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
+        token_alda = str(Settings.ROOMDOO_BOOKAI_TOKEN_ALDA or "").strip()
+        instance_test = str(Settings.ROOMDOO_INSTANCE_ID_TEST or "").strip()
+        instance_alda = str(Settings.ROOMDOO_INSTANCE_ID_ALDA or "").strip()
+        if token_test and instance_test:
+            mapping[token_test] = instance_test
+        if token_alda and instance_alda:
+            mapping[token_alda] = instance_alda
+
+        raw_map = str(Settings.ROOMDOO_TOKEN_INSTANCE_MAP or "").strip()
+        if not raw_map:
+            return mapping
+
+        if raw_map.startswith("{"):
+            try:
+                payload = json.loads(raw_map)
+                if isinstance(payload, dict):
+                    for token, instance in payload.items():
+                        token_text = str(token or "").strip()
+                        instance_text = str(instance or "").strip()
+                        if token_text and instance_text:
+                            mapping[token_text] = instance_text
+            except Exception:
+                log.warning("ROOMDOO_TOKEN_INSTANCE_MAP inválido para socket instancias (JSON).")
+            return mapping
+
+        for chunk in raw_map.split(","):
+            part = str(chunk or "").strip()
+            if not part or "=" not in part:
+                continue
+            instance, token = part.split("=", 1)
+            token_text = str(token or "").strip()
+            instance_text = str(instance or "").strip()
+            if token_text and instance_text:
+                mapping[token_text] = instance_text
+        return mapping
+
+    @staticmethod
+    def _normalize_token(token: str | None) -> str:
+        raw = str(token or "").strip()
+        if raw.lower().startswith("bearer "):
+            raw = raw.split(" ", 1)[1].strip()
+        return raw
+
+    def _room_participants(self, room: str) -> list[str]:
+        if not self.sio:
+            return []
+        try:
+            rooms = getattr(self.sio.manager, "rooms", {}) or {}
+            namespace_rooms = rooms.get("/", {}) if hasattr(rooms, "get") else {}
+            participants = namespace_rooms.get(str(room), {}) if hasattr(namespace_rooms, "get") else {}
+            if hasattr(participants, "keys"):
+                return [str(sid) for sid in participants.keys()]
+            return [str(sid) for sid in participants]
+        except Exception:
+            return []
+
     def _extract_auth_token(self, environ: dict, auth: Any | None) -> str | None:
         if isinstance(auth, dict):
             token = auth.get("token") or auth.get("bearer")
@@ -102,9 +165,7 @@ class SocketManager:
             return False
         if not token:
             return False
-        raw = str(token).strip()
-        if raw.lower().startswith("bearer "):
-            raw = raw.split(" ", 1)[1].strip()
+        raw = self._normalize_token(token)
         return raw in self._valid_tokens
 
     def _register_handlers(self) -> None:
@@ -117,11 +178,16 @@ class SocketManager:
             if not self._is_token_valid(token):
                 log.warning("Socket.IO connect rechazado (sid=%s)", sid)
                 return False
+            normalized = self._normalize_token(token)
+            instance_id = self._token_instances.get(normalized)
+            if instance_id:
+                self._sid_instances[str(sid)] = str(instance_id)
             log.info("Socket.IO conectado: %s", sid)
             return True
 
         @self.sio.event
         async def disconnect(sid):
+            self._sid_instances.pop(str(sid), None)
             log.info("Socket.IO desconectado: %s", sid)
 
         @self.sio.event
@@ -150,7 +216,13 @@ class SocketManager:
             for room in rooms:
                 await self.sio.leave_room(sid, str(room))
 
-    async def emit(self, event: str, data: dict[str, Any], rooms: str | Iterable[str] | None = None) -> None:
+    async def emit(
+        self,
+        event: str,
+        data: dict[str, Any],
+        rooms: str | Iterable[str] | None = None,
+        instance_id: str | None = None,
+    ) -> None:
         if not self.enabled or not self.sio:
             return
         log.debug("Socket emit event=%s rooms=%s", event, rooms)
@@ -158,6 +230,17 @@ class SocketManager:
             await self.sio.emit(event, data)
             return
         if isinstance(rooms, str):
+            normalized_instance = str(instance_id or "").strip()
+            if normalized_instance and rooms.startswith("property:"):
+                target_sids = [
+                    sid
+                    for sid in self._room_participants(rooms)
+                    if self._sid_instances.get(str(sid)) == normalized_instance
+                ]
+                if target_sids:
+                    for sid in target_sids:
+                        await self.sio.emit(event, data, room=sid)
+                    return
             await self.sio.emit(event, data, room=rooms)
             return
         unique_rooms = []

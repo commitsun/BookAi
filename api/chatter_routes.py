@@ -2071,6 +2071,28 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.warning("No se pudo guardar el mensaje en memoria: %s", exc)
 
+        emit_related_ids = _related_memory_ids(state, chat_id)
+        for extra_id in (session_id, context_id):
+            if extra_id and extra_id not in emit_related_ids:
+                emit_related_ids.append(extra_id)
+        if property_id is None and state.memory_manager:
+            for mem_id in emit_related_ids:
+                try:
+                    candidate = state.memory_manager.get_flag(mem_id, "property_id")
+                except Exception:
+                    candidate = None
+                if candidate is not None:
+                    property_id = candidate
+                    break
+        if property_id is None:
+            property_id = _resolve_property_id_from_history(
+                session_id or chat_id,
+                payload.channel.lower(),
+            )
+        if property_id is not None and state.memory_manager:
+            for mem_id in emit_related_ids:
+                state.memory_manager.set_flag(mem_id, "property_id", property_id)
+
         rooms = _rooms(chat_id, property_id, payload.channel.lower())
         try:
             resolved_ids = resolve_pending_escalations_for_chat(
@@ -2191,6 +2213,7 @@ def register_chatter_routes(app, state) -> None:
                     },
                 },
                 rooms=f"property:{property_id}",
+                instance_id=instance_id,
             )
         await _emit(
             "chat.message.created",
@@ -2946,6 +2969,7 @@ def register_chatter_routes(app, state) -> None:
                     },
                 },
                 rooms=f"property:{prop_id}",
+                instance_id=instance_id,
             )
 
         return {
@@ -3146,6 +3170,7 @@ def register_chatter_routes(app, state) -> None:
                     },
                 },
                 rooms=f"property:{prop_id}",
+                instance_id=instance_id,
             )
 
         return {
@@ -3550,6 +3575,7 @@ def register_chatter_routes(app, state) -> None:
                     },
                 },
                 rooms=f"property:{property_id}",
+                instance_id=instance_id,
             )
         await _emit(
             "chat.message.created",
