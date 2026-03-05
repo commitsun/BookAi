@@ -38,6 +38,13 @@ class Settings:
     WHATSAPP_TOKEN = os.getenv("WHATSAPP_TOKEN")
     WHATSAPP_PHONE_ID = os.getenv("WHATSAPP_PHONE_ID")
     WHATSAPP_VERIFY_TOKEN = os.getenv("WHATSAPP_VERIFY_TOKEN")
+    WA_CONTACTS_PRECHECK_ENABLED = _env_bool("WA_CONTACTS_PRECHECK_ENABLED", False)
+    try:
+        WA_CONTACTS_PRECHECK_TIMEOUT_SECONDS = float(
+            os.getenv("WA_CONTACTS_PRECHECK_TIMEOUT_SECONDS", "6")
+        )
+    except Exception:
+        WA_CONTACTS_PRECHECK_TIMEOUT_SECONDS = 6.0
 
     # Telegram / encargado
     TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
