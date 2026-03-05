@@ -11,6 +11,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
@@ -30,6 +31,13 @@ from core.db import upsert_chat_reservation, get_active_chat_reservation
 log = logging.getLogger("ChatterRoutes")
 _INSTANCE_CHAT_SETS_TTL_SECONDS = 5
 _instance_chat_sets_cache: Dict[str, Tuple[float, set[str], set[str]]] = {}
+
+try:
+    import phonenumbers
+    from phonenumbers import NumberParseException
+except Exception:
+    phonenumbers = None
+    NumberParseException = Exception
 
 
 # ---------------------------------------------------------------------------
@@ -245,6 +253,34 @@ def _instance_chat_sets(
 
 def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
+
+
+def _is_plausible_whatsapp_chat_id(chat_id: str) -> bool:
+    digits = _clean_chat_id(chat_id)
+    if not digits:
+        return False
+    if len(digits) < 8 or len(digits) > 15:
+        return False
+    if not phonenumbers:
+        return True
+
+    raw = str(chat_id or "").strip()
+    candidate = raw if raw.startswith("+") else f"+{digits}"
+    try:
+        parsed = phonenumbers.parse(candidate, None)
+    except NumberParseException:
+        return False
+
+    if not phonenumbers.is_possible_number(parsed):
+        return False
+    if not phonenumbers.is_valid_number(parsed):
+        return False
+    try:
+        if phonenumbers.number_type(parsed) == phonenumbers.PhoneNumberType.FIXED_LINE:
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _extract_guest_phone(chat_id: str) -> str:
@@ -3330,6 +3366,15 @@ def register_chatter_routes(app, state) -> None:
         auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         chat_id = _clean_chat_id(payload.chat_id) or payload.chat_id
+        if not _is_plausible_whatsapp_chat_id(chat_id):
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "code": "wa_invalid_phone",
+                    "message": "El número de teléfono indicado no tiene una cuenta de WhatsApp.",
+                },
+            )
         property_id = _normalize_property_id(payload.property_id)
         if payload.channel.lower() != "whatsapp":
             raise HTTPException(status_code=422, detail="Canal no soportado")
@@ -3437,6 +3482,30 @@ def register_chatter_routes(app, state) -> None:
                     )
                 except Exception:
                     instance_id = None
+
+        precheck = await state.channel_manager.check_recipient_has_whatsapp_account(
+            chat_id,
+            channel="whatsapp",
+            context_id=context_id,
+            request_id=f"chatter:{template_name}:{chat_id}",
+        )
+        if not bool(precheck.get("hasWhatsApp", True)):
+            masked_phone = f"{chat_id[:2]}***{chat_id[-2:]}" if len(chat_id or "") > 4 else "***"
+            log.warning(
+                "[WA_PRECHECK_BLOCK] phone=%s chat_id=%s reservation_id=%s reason=%s",
+                masked_phone,
+                chat_id,
+                folio_id or reservation_locator,
+                precheck.get("reason") or "not_on_whatsapp",
+            )
+            return JSONResponse(
+                status_code=422,
+                content={
+                    "ok": False,
+                    "code": "wa_no_account",
+                    "message": "El número de teléfono indicado no tiene una cuenta de WhatsApp.",
+                },
+            )
 
         try:
             await state.channel_manager.send_template_message(

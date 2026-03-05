@@ -31,6 +31,13 @@ from core.db import upsert_chat_reservation
 
 log = logging.getLogger("TemplateRoutes")
 
+try:
+    import phonenumbers
+    from phonenumbers import NumberParseException
+except Exception:
+    phonenumbers = None
+    NumberParseException = Exception
+
 
 # ---------------------------------------------------------------------------
 # Modelos de entrada
@@ -175,6 +182,43 @@ def _normalize_phone(phone: str) -> str:
     """Solo dígitos, para Meta Cloud API."""
     digits = re.sub(r"\D", "", phone or "")
     return digits
+
+
+def _is_plausible_recipient_phone(phone: str, country: Optional[str] = None) -> bool:
+    """
+    Validación global de teléfono:
+    - Longitud E.164 plausible.
+    - Número posible/válido según plan nacional.
+    - Bloquea líneas fijas (no WhatsApp objetivo).
+    """
+    digits = _normalize_phone(phone)
+    if not digits:
+        return False
+    if len(digits) < 8 or len(digits) > 15:
+        return False
+    if not phonenumbers:
+        return True
+
+    raw = str(phone or "").strip()
+    region = str(country or "").strip().upper() or None
+    candidate = raw if raw.startswith("+") else f"+{digits}"
+
+    try:
+        parsed = phonenumbers.parse(candidate, region)
+    except NumberParseException:
+        return False
+
+    if not phonenumbers.is_possible_number(parsed):
+        return False
+    if not phonenumbers.is_valid_number(parsed):
+        return False
+
+    try:
+        if phonenumbers.number_type(parsed) == phonenumbers.PhoneNumberType.FIXED_LINE:
+            return False
+    except Exception:
+        pass
+    return True
 
 
 def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
@@ -677,6 +721,18 @@ def register_template_routes(app, state) -> None:
                     ]
                 else:
                     parameters = list(raw_params)
+            if not _is_plausible_recipient_phone(
+                payload.recipient.phone,
+                payload.recipient.country,
+            ):
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "ok": False,
+                        "code": "wa_invalid_phone",
+                        "message": "El número de teléfono indicado no tiene una cuenta de WhatsApp.",
+                    },
+                )
             chat_id = _normalize_phone(payload.recipient.phone)
             if not chat_id:
                 raise HTTPException(status_code=422, detail="Teléfono de destino inválido")
@@ -826,6 +882,46 @@ def register_template_routes(app, state) -> None:
             except Exception as exc:
                 log.warning("No se pudo guardar folio/checkin/checkout en memoria: %s", exc)
 
+            ensure_instance_credentials(state.memory_manager, session_id)
+            # Refuerzo: fija credenciales WA de la instancia resuelta por token,
+            # evitando arrastre de otra instancia para el mismo guest chat_id.
+            try:
+                inst_payload = fetch_instance_by_code(instance_id) if instance_id else {}
+                if inst_payload:
+                    for target in [session_id, context_id, chat_id]:
+                        if not target:
+                            continue
+                        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                            val = inst_payload.get(key)
+                            if val:
+                                state.memory_manager.set_flag(target, key, val)
+            except Exception as exc:
+                log.warning("No se pudo reforzar credenciales WA por instance_id: %s", exc)
+
+            precheck = await state.channel_manager.check_recipient_has_whatsapp_account(
+                chat_id,
+                channel="whatsapp",
+                context_id=context_id,
+                request_id=idempotency_key or f"template_api:{wa_template}:{chat_id}",
+            )
+            if not bool(precheck.get("hasWhatsApp", True)):
+                masked_phone = f"{chat_id[:2]}***{chat_id[-2:]}" if len(chat_id or "") > 4 else "***"
+                log.warning(
+                    "[WA_PRECHECK_BLOCK] phone=%s chat_id=%s reservation_id=%s reason=%s",
+                    masked_phone,
+                    chat_id,
+                    folio_id or reservation_locator,
+                    precheck.get("reason") or "not_on_whatsapp",
+                )
+                return JSONResponse(
+                    status_code=422,
+                    content={
+                        "ok": False,
+                        "code": "wa_no_account",
+                        "message": "El número de teléfono indicado no tiene una cuenta de WhatsApp.",
+                    },
+                )
+
             if folio_id and folio_from_meta:
                 try:
                     log.info(
@@ -851,22 +947,6 @@ def register_template_routes(app, state) -> None:
                     )
                 except Exception as exc:
                     log.warning("No se pudo persistir reserva en tabla: %s", exc)
-
-            ensure_instance_credentials(state.memory_manager, session_id)
-            # Refuerzo: fija credenciales WA de la instancia resuelta por token,
-            # evitando arrastre de otra instancia para el mismo guest chat_id.
-            try:
-                inst_payload = fetch_instance_by_code(instance_id) if instance_id else {}
-                if inst_payload:
-                    for target in [session_id, context_id, chat_id]:
-                        if not target:
-                            continue
-                        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
-                            val = inst_payload.get(key)
-                            if val:
-                                state.memory_manager.set_flag(target, key, val)
-            except Exception as exc:
-                log.warning("No se pudo reforzar credenciales WA por instance_id: %s", exc)
 
             outbound_parameters = parameters
             if template_def:
