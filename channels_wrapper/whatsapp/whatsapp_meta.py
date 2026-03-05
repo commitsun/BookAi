@@ -152,6 +152,16 @@ class WhatsAppChannel(BaseChannel):
     def send_message(self, user_id: str, text: str):
         phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
         token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
+        if not phone_id or not token:
+            log.error("❌ Faltan credenciales de WhatsApp para enviar mensaje.")
+            return {
+                "ok": False,
+                "provider": "meta_whatsapp",
+                "message_type": "text",
+                "recipient_id": user_id,
+                "delivery_status": "error",
+                "raw_error": "missing_whatsapp_credentials",
+            }
         url = f"https://graph.facebook.com/v19.0/{phone_id}/messages"
         headers = {
             "Authorization": f"Bearer {token}",
@@ -167,10 +177,44 @@ class WhatsAppChannel(BaseChannel):
             r = requests.post(url, headers=headers, json=payload, timeout=10)
             if r.status_code != 200:
                 log.error(f"⚠️ Error WhatsApp ({r.status_code}): {r.text}")
+                return {
+                    "ok": False,
+                    "provider": "meta_whatsapp",
+                    "message_type": "text",
+                    "recipient_id": user_id,
+                    "status_code": r.status_code,
+                    "delivery_status": "error",
+                    "raw_error": r.text,
+                }
             else:
+                response_payload = {}
+                try:
+                    response_payload = r.json() or {}
+                except Exception:
+                    response_payload = {}
+                wamid = str(
+                    ((response_payload.get("messages") or [{}])[0] or {}).get("id") or ""
+                ).strip() or None
                 log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
+                return {
+                    "ok": True,
+                    "provider": "meta_whatsapp",
+                    "message_type": "text",
+                    "recipient_id": user_id,
+                    "status_code": r.status_code,
+                    "delivery_status": "pending",
+                    "wamid": wamid,
+                }
         except Exception as e:
             log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
+            return {
+                "ok": False,
+                "provider": "meta_whatsapp",
+                "message_type": "text",
+                "recipient_id": user_id,
+                "delivery_status": "error",
+                "raw_error": str(e),
+            }
 
     # ---------------------------------------------------------------------
     # Envío de plantillas (WhatsApp)
@@ -191,7 +235,15 @@ class WhatsAppChannel(BaseChannel):
         token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
         if not token or not phone_id:
             log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
-            return
+            return {
+                "ok": False,
+                "provider": "meta_whatsapp",
+                "message_type": "template",
+                "template_name": template_id,
+                "recipient_id": user_id,
+                "delivery_status": "error",
+                "raw_error": "missing_whatsapp_credentials",
+            }
 
         def _iter_params(params: dict | list | tuple | None) -> Iterable[Any]:
             if params is None:
@@ -292,8 +344,25 @@ class WhatsAppChannel(BaseChannel):
                     r.text,
                     payload,
                 )
-                return False
+                return {
+                    "ok": False,
+                    "provider": "meta_whatsapp",
+                    "message_type": "template",
+                    "template_name": template_id,
+                    "recipient_id": user_id,
+                    "status_code": r.status_code,
+                    "delivery_status": "error",
+                    "raw_error": r.text,
+                }
 
+            response_payload = {}
+            try:
+                response_payload = r.json() or {}
+            except Exception:
+                response_payload = {}
+            wamid = str(
+                ((response_payload.get("messages") or [{}])[0] or {}).get("id") or ""
+            ).strip() or None
             log.info(
                 "🚀 WhatsApp (plantilla) → %s: %s (%s) params=%s",
                 user_id,
@@ -301,7 +370,16 @@ class WhatsAppChannel(BaseChannel):
                 r.status_code,
                 payload.get("template", {}).get("components"),
             )
-            return True
+            return {
+                "ok": True,
+                "provider": "meta_whatsapp",
+                "message_type": "template",
+                "template_name": template_id,
+                "recipient_id": user_id,
+                "status_code": r.status_code,
+                "delivery_status": "pending",
+                "wamid": wamid,
+            }
         except Exception as e:
             log.error(
                 "⚠️ Error enviando plantilla WhatsApp (%s → %s): %s",
@@ -310,7 +388,15 @@ class WhatsAppChannel(BaseChannel):
                 e,
                 exc_info=True,
             )
-            return False
+            return {
+                "ok": False,
+                "provider": "meta_whatsapp",
+                "message_type": "template",
+                "template_name": template_id,
+                "recipient_id": user_id,
+                "delivery_status": "error",
+                "raw_error": str(e),
+            }
 
     # ---------------------------------------------------------------------
     # Parser de payload (Meta Webhook)

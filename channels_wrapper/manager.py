@@ -6,6 +6,7 @@ import logging
 import asyncio
 import time
 from channels_wrapper.base_channel import BaseChannel  # 👈 Verificación de herencia
+from core.db import is_whatsapp_number_marked_no_whatsapp
 
 log = logging.getLogger("ChannelManager")
 
@@ -113,6 +114,38 @@ class ChannelManager:
                 # Solo usa el chat de entorno si no se proporcionó ninguno
                 chat_id = chat_id or C.TELEGRAM_CHAT_ID
 
+            send_fn = getattr(channel_obj, "send_message", None)
+            if not send_fn:
+                raise AttributeError(f"El canal '{channel}' no implementa send_message().")
+
+            if channel == "whatsapp":
+                blocked = False
+                blocked_reason = "no_whatsapp"
+                if self.memory_manager:
+                    for lookup in [context_id, chat_id]:
+                        if not lookup:
+                            continue
+                        if self.memory_manager.get_flag(lookup, "no_whatsapp"):
+                            blocked = True
+                            break
+                if not blocked:
+                    try:
+                        blocked = is_whatsapp_number_marked_no_whatsapp(chat_id)
+                    except Exception as exc:
+                        log.warning("No se pudo comprobar bloqueo WA para %s: %s", chat_id, exc)
+                        blocked = False
+                    if blocked and self.memory_manager:
+                        for lookup in [context_id, chat_id]:
+                            if lookup:
+                                self.memory_manager.set_flag(lookup, "no_whatsapp", True)
+                if blocked:
+                    log.warning("⛔ Envío WhatsApp bloqueado para %s: %s", chat_id, blocked_reason)
+                    return {
+                        "blocked": True,
+                        "reason": blocked_reason,
+                        "chat_id": chat_id,
+                    }
+
             # 🛑 Filtro anti-duplicados de salida (mensajes idénticos en pocos segundos)
             msg_norm = (message or "").strip()
             key = (channel, chat_id)
@@ -124,10 +157,6 @@ class ChannelManager:
                     log.info("↩️ Envío duplicado evitado (%s → %s)", channel, chat_id)
                     return
             self._recent_sends[key] = (msg_norm, now)
-
-            send_fn = getattr(channel_obj, "send_message", None)
-            if not send_fn:
-                raise AttributeError(f"El canal '{channel}' no implementa send_message().")
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
@@ -163,12 +192,18 @@ class ChannelManager:
                 except Exception as exc:
                     log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 
+            result = None
             if asyncio.iscoroutinefunction(send_fn):
-                await send_fn(chat_id, message)
+                result = await send_fn(chat_id, message)
             else:
-                send_fn(chat_id, message)
+                result = send_fn(chat_id, message)
+
+            if isinstance(result, dict) and result.get("ok") is False:
+                log.warning("⚠️ [%s] El canal devolvió error enviando a %s", channel, chat_id)
+                return result
 
             log.info(f"📤 [{channel}] Mensaje enviado a {chat_id}: {message[:80]}...")
+            return result
 
         except Exception as e:
             log.error(f"❌ Error enviando mensaje por canal '{channel}': {e}", exc_info=True)
@@ -199,6 +234,35 @@ class ChannelManager:
             send_fn = getattr(channel_obj, "send_template_message", None)
             if not send_fn:
                 raise AttributeError(f"El canal '{channel}' no implementa send_template_message().")
+
+            if channel == "whatsapp":
+                blocked = False
+                blocked_reason = "no_whatsapp"
+                if self.memory_manager:
+                    for lookup in [context_id, chat_id]:
+                        if not lookup:
+                            continue
+                        if self.memory_manager.get_flag(lookup, "no_whatsapp"):
+                            blocked = True
+                            break
+                if not blocked:
+                    try:
+                        blocked = is_whatsapp_number_marked_no_whatsapp(chat_id)
+                    except Exception as exc:
+                        log.warning("No se pudo comprobar bloqueo WA para %s: %s", chat_id, exc)
+                        blocked = False
+                    if blocked and self.memory_manager:
+                        for lookup in [context_id, chat_id]:
+                            if lookup:
+                                self.memory_manager.set_flag(lookup, "no_whatsapp", True)
+                if blocked:
+                    log.warning("⛔ Envío plantilla WhatsApp bloqueado para %s: %s", chat_id, blocked_reason)
+                    return {
+                        "blocked": True,
+                        "reason": blocked_reason,
+                        "chat_id": chat_id,
+                        "template_id": template_id,
+                    }
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
@@ -252,11 +316,18 @@ class ChannelManager:
                 result = send_fn(chat_id, template_id, parameters=parameters, language=language)
 
             # Considera éxito si no devuelve nada o es truthy
-            ok = True if result is None else bool(result)
+            if isinstance(result, dict) and result.get("blocked"):
+                return result
+
+            if isinstance(result, dict):
+                ok = bool(result.get("ok", True))
+            else:
+                ok = True if result is None else bool(result)
             if not ok:
                 raise RuntimeError(f"El canal '{channel}' no confirmó el envío de la plantilla.")
 
             log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
+            return result
         except Exception as e:
             log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
             raise

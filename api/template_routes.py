@@ -22,7 +22,12 @@ from api.chatter_routes import (
     _to_international_phone,
 )
 from core.config import Settings
-from core.db import is_chat_visible_in_list, supabase
+from core.db import (
+    attach_meta_whatsapp_outbound_to_latest_message,
+    is_chat_visible_in_list,
+    set_meta_whatsapp_pending_and_hidden,
+    supabase,
+)
 from core.template_registry import TemplateRegistry
 from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
@@ -900,7 +905,7 @@ def register_template_routes(app, state) -> None:
                         ],
                     }
 
-            await state.channel_manager.send_template_message(
+            send_result = await state.channel_manager.send_template_message(
                 chat_id,
                 wa_template,
                 parameters=outbound_parameters,
@@ -908,6 +913,16 @@ def register_template_routes(app, state) -> None:
                 channel="whatsapp",
                 context_id=context_id,
             )
+            if isinstance(send_result, dict) and send_result.get("blocked"):
+                blocked_reason = str(send_result.get("reason") or "").strip().lower()
+                return {
+                    "status": "blocked",
+                    "template": wa_template,
+                    "chat_id": chat_id,
+                    "instance_id": instance_id,
+                    "language": language,
+                    "message": "numero sin cuenta de whatsapp" if blocked_reason == "no_whatsapp" else "envio bloqueado",
+                }
 
             # Si falta checkin/checkout y hay folio_id, intenta enriquecer desde PMS.
             if folio_id and folio_from_meta and (not checkin or not checkout):
@@ -1034,6 +1049,16 @@ def register_template_routes(app, state) -> None:
                         channel="whatsapp",
                         original_chat_id=context_id or None,
                     )
+                    try:
+                        set_meta_whatsapp_pending_and_hidden(
+                            conversation_id=session_id,
+                            content=rendered,
+                            role="bookai",
+                            channel="whatsapp",
+                            original_chat_id=context_id or None,
+                        )
+                    except Exception as meta_exc:
+                        log.warning("No se pudo marcar pending/hidden la plantilla API: %s", meta_exc)
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = instance_id or payload.source.instance_url or property_code
                 state.memory_manager.save(
@@ -1046,6 +1071,16 @@ def register_template_routes(app, state) -> None:
                     channel="whatsapp",
                     original_chat_id=context_id or None,
                 )
+                try:
+                    attach_meta_whatsapp_outbound_to_latest_message(
+                        conversation_id=session_id,
+                        provider_result=send_result,
+                        content=rendered or None,
+                        role="bookai",
+                        original_chat_id=context_id or None,
+                    )
+                except Exception as meta_exc:
+                    log.warning("No se pudo adjuntar metadata WA a plantilla API: %s", meta_exc)
             except Exception as exc:
                 log.warning("No se pudo registrar el envío en memoria: %s", exc)
             try:
@@ -1060,160 +1095,11 @@ def register_template_routes(app, state) -> None:
             except Exception:
                 pass
 
-            now_iso = datetime.now(timezone.utc).isoformat()
-            rooms = _rooms(state, chat_id, property_id, "whatsapp", context_id=context_id)
-            visibility_restored = False
-            if not chat_visible_before:
-                visibility_restored = _restore_chat_visibility(
-                    chat_id,
-                    property_id=property_id,
-                    channel="whatsapp",
-                    original_chat_id=context_id or None,
-                )
-                log.info(
-                    "[TEMPLATE_SEND] visibility.restore chat_id=%s property_id=%s channel=whatsapp attempted=%s",
-                    chat_id,
-                    property_id,
-                    visibility_restored,
-                )
-            chat_visible_after = is_chat_visible_in_list(
-                chat_id,
-                property_id=property_id,
-                channel="whatsapp",
-                original_chat_id=context_id or None,
-            )
             log.info(
-                "[TEMPLATE_SEND] visibility.after chat_id=%s property_id=%s channel=whatsapp original_chat_id=%s visible=%s",
+                "[TEMPLATE_SEND] outbound WA persistido como pending/hidden chat_id=%s property_id=%s template=%s",
                 chat_id,
                 property_id,
-                context_id or None,
-                chat_visible_after,
-            )
-
-            socket_mgr = getattr(state, "socket_manager", None)
-            if (
-                socket_mgr
-                and getattr(socket_mgr, "enabled", False)
-                and property_id is not None
-                and not chat_visible_before
-                and chat_visible_after
-            ):
-                reservation_status = None
-                room_number = None
-                if state.memory_manager:
-                    try:
-                        reservation_status = state.memory_manager.get_flag(session_id, "reservation_status")
-                        room_number = state.memory_manager.get_flag(session_id, "room_number")
-                    except Exception:
-                        pass
-                whatsapp_phone_number = None
-                if instance_id:
-                    try:
-                        instance_payload = fetch_instance_by_code(instance_id) or {}
-                        instance_number = _normalize_phone(_resolve_instance_number(instance_payload) or "")
-                        whatsapp_phone_number = _to_international_phone(instance_number or "")
-                    except Exception:
-                        whatsapp_phone_number = None
-                bookai_resolution = _bookai_flag_resolution(
-                    _bookai_settings(state),
-                    aliases=_related_memory_ids(state, chat_id) or [],
-                    chat_id=chat_id,
-                    property_id=property_id,
-                    instance_id=instance_id,
-                    default=True,
-                )
-                await socket_mgr.emit(
-                    "chat.list.updated",
-                    {
-                        "property_id": property_id,
-                        "action": "created",
-                        "chat": {
-                            "chat_id": chat_id,
-                            "property_id": property_id,
-                            "reservation_id": folio_id,
-                            "reservation_locator": reservation_locator,
-                            "reservation_status": reservation_status,
-                            "room_number": room_number,
-                            "checkin": checkin,
-                            "checkout": checkout,
-                            "channel": "whatsapp",
-                            "last_message": rendered or wa_template,
-                            "last_message_at": now_iso,
-                            "avatar": None,
-                            "client_name": reservation_client_name,
-                            "client_phone": _extract_guest_phone(chat_id) or chat_id,
-                            "whatsapp_phone_number": whatsapp_phone_number,
-                            "bookai_enabled": bool(bookai_resolution.get("value")),
-                            "unread_count": 0,
-                            **_pending_snapshot_for_chat(
-                                chat_id,
-                                property_id,
-                                instance_id=instance_id,
-                                memory_manager=getattr(state, "memory_manager", None),
-                            ),
-                            "folio_id": folio_id,
-                        },
-                    },
-                    rooms=f"property:{property_id}",
-                    instance_id=instance_id,
-                )
-                log.info(
-                    "[TEMPLATE_SEND] emit chat.list.updated action=created chat_id=%s property_id=%s room=property:%s",
-                    chat_id,
-                    property_id,
-                    property_id,
-                )
-            else:
-                log.info(
-                    "[TEMPLATE_SEND] skip chat.list.updated chat_id=%s property_id=%s visible_before=%s visible_after=%s",
-                    chat_id,
-                    property_id,
-                    chat_visible_before,
-                    chat_visible_after,
-                )
-
-            await _emit(
-                "chat.message.created",
-                {
-                    "rooms": rooms,
-                    "chat_id": chat_id,
-                    "property_id": property_id,
-                    "channel": "whatsapp",
-                    "sender": "bookai",
-                    "message": rendered or wa_template,
-                    "created_at": now_iso,
-                    "template": wa_template,
-                    "template_language": language,
-                },
-            )
-            log.info(
-                "[TEMPLATE_SEND] emit chat.message.created chat_id=%s property_id=%s rooms=%s",
-                chat_id,
-                property_id,
-                rooms,
-            )
-            await _emit(
-                "chat.updated",
-                {
-                    "rooms": rooms,
-                    "chat_id": chat_id,
-                    "property_id": property_id,
-                    "channel": "whatsapp",
-                    "last_message": rendered or wa_template,
-                    "last_message_at": now_iso,
-                    **_pending_snapshot_for_chat(
-                        chat_id,
-                        property_id,
-                        instance_id=instance_id,
-                        memory_manager=getattr(state, "memory_manager", None),
-                    ),
-                },
-            )
-            log.info(
-                "[TEMPLATE_SEND] emit chat.updated chat_id=%s property_id=%s rooms=%s",
-                chat_id,
-                property_id,
-                rooms,
+                wa_template,
             )
 
             return {

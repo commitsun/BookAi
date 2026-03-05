@@ -10,7 +10,7 @@ from datetime import datetime, timezone
 from typing import Any, Optional
 
 from core.config import ModelConfig, ModelTier, Settings
-from core.db import is_chat_visible_in_list
+from core.db import is_chat_visible_in_list, set_meta_whatsapp_pending_and_hidden
 from core.language_manager import language_manager
 from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
@@ -1169,10 +1169,22 @@ async def process_user_message(
             )
             return None
 
+        if channel == "whatsapp":
+            try:
+                set_meta_whatsapp_pending_and_hidden(
+                    conversation_id=mem_id,
+                    content=response_raw,
+                    role="bookai",
+                    channel="whatsapp",
+                    original_chat_id=str(mem_id or chat_id or "").strip() or None,
+                )
+            except Exception as exc:
+                log.warning("No se pudo marcar pending/hidden la respuesta WA del agente: %s", exc)
+
         # Emitimos evento en tiempo real para respuestas de IA.
         try:
             socket_mgr = getattr(state, "socket_manager", None)
-            if socket_mgr and getattr(socket_mgr, "enabled", False):
+            if socket_mgr and getattr(socket_mgr, "enabled", False) and channel != "whatsapp":
                 prop_id = None
                 if state.memory_manager:
                     try:

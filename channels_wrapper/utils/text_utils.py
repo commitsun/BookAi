@@ -182,7 +182,7 @@ async def send_fragmented_async(send_callable, user_id: str, reply: str):
     - Mantiene coherencia y tono cálido.
     """
     if not reply or not isinstance(reply, str):
-        return
+        return []
 
     try:
         fragments = await fragment_text_with_ai(reply)
@@ -197,6 +197,7 @@ async def send_fragmented_async(send_callable, user_id: str, reply: str):
     fragments = [_normalize_fragment_punctuation(frag) for frag in normalized if frag and frag.strip()]
 
     total = len(fragments)
+    results = []
 
     for idx, frag in enumerate(fragments):
         frag = frag.strip()
@@ -210,7 +211,10 @@ async def send_fragmented_async(send_callable, user_id: str, reply: str):
         try:
             result = send_callable(user_id, frag)
             if asyncio.iscoroutine(result):
-                await result
+                result = await result
+            results.append(result)
             log.info(f"📤 Enviado fragmento {idx+1}/{total} ({len(frag)} chars)")
         except Exception as e:
             log.error(f"⚠️ Error al enviar fragmento {idx+1}: {e}")
+
+    return results
