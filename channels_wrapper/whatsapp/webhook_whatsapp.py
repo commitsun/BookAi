@@ -12,7 +12,14 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.utils.text_utils import send_fragmented_async
-from core.db import is_chat_visible_in_list
+from core.db import (
+    find_wa_outbox_message,
+    is_chat_visible_in_list,
+    mark_wa_outbox_message_visible,
+    supabase,
+    update_wa_outbox_message,
+)
+from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.pipeline import process_user_message, _resolve_bookai_enabled
 
 log = logging.getLogger("WhatsAppWebhook")
@@ -161,6 +168,490 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
     return None
 
 
+def _iter_status_events(payload: dict) -> list[dict]:
+    events: list[dict] = []
+    for entry in payload.get("entry", []) or []:
+        for change in entry.get("changes", []) or []:
+            value = change.get("value", {}) or {}
+            metadata = value.get("metadata", {}) or {}
+            for raw_status in value.get("statuses", []) or []:
+                if not isinstance(raw_status, dict):
+                    continue
+                event = dict(raw_status)
+                event["_metadata"] = metadata
+                event["_value"] = value
+                events.append(event)
+    return events
+
+
+def _extract_status_error(status_event: dict) -> tuple[str | None, str | None]:
+    errors = status_event.get("errors") or []
+    if not isinstance(errors, list) or not errors:
+        return None, None
+    first_error = errors[0] if isinstance(errors[0], dict) else {}
+    code = first_error.get("code")
+    error_data = first_error.get("error_data") if isinstance(first_error.get("error_data"), dict) else {}
+    details = (
+        error_data.get("details")
+        or first_error.get("message")
+        or first_error.get("title")
+        or status_event.get("status")
+    )
+    code_text = str(code).strip() if code is not None else None
+    details_text = str(details).strip() if details else None
+    return code_text or None, details_text or None
+
+
+def _is_no_whatsapp_account_error(*, error_code: str | None, error_details: str | None) -> bool:
+    if str(error_code or "").strip() == "131026":
+        return True
+    normalized = str(error_details or "").strip().lower()
+    if not normalized:
+        return False
+    return ("not on whatsapp" in normalized) or ("no esta en whatsapp" in normalized)
+
+
+def _outbox_payload(outbox_row: dict) -> dict:
+    payload = outbox_row.get("payload")
+    return payload if isinstance(payload, dict) else {}
+
+
+def _parse_property_id(value: str | int | None) -> str | int | None:
+    if value is None:
+        return None
+    raw = str(value).strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        try:
+            return int(raw)
+        except Exception:
+            return raw
+    return raw
+
+
+def _status_rooms(outbox_row: dict) -> list[str]:
+    payload = _outbox_payload(outbox_row)
+    context_id = str(payload.get("context_id") or outbox_row.get("context_id") or "").strip()
+    chat_id = str(payload.get("chat_id") or outbox_row.get("chat_id") or "").strip()
+    recipient_id = str(outbox_row.get("recipient_id") or "").strip()
+    property_id = payload.get("property_id")
+    if property_id is None:
+        property_id = outbox_row.get("property_id")
+
+    rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, chat_id, recipient_id)]
+    if property_id is not None and str(property_id).strip():
+        rooms.append(f"property:{property_id}")
+    rooms.append("channel:whatsapp")
+
+    unique_rooms: list[str] = []
+    seen: set[str] = set()
+    for room in rooms:
+        candidate = str(room or "").strip()
+        if not candidate or candidate in seen:
+            continue
+        seen.add(candidate)
+        unique_rooms.append(candidate)
+    return unique_rooms
+
+
+def _restore_chat_visibility(
+    chat_id: str,
+    *,
+    property_id: str | int | None,
+    channel: str = "whatsapp",
+    original_chat_id: str | None = None,
+) -> bool:
+    clean_id = str(chat_id or "").replace("+", "").strip()
+    if not clean_id or property_id is None:
+        return False
+
+    restore_payload = {"archived_at": None, "hidden_at": None}
+    current_channel = str(channel or "whatsapp").strip() or "whatsapp"
+    original_clean = str(original_chat_id or "").replace("+", "").strip()
+
+    try:
+        if original_clean:
+            (
+                supabase.table("chat_history")
+                .update(restore_payload)
+                .eq("original_chat_id", original_clean)
+                .eq("property_id", property_id)
+                .eq("channel", current_channel)
+                .execute()
+            )
+        (
+            supabase.table("chat_history")
+            .update(restore_payload)
+            .eq("conversation_id", clean_id)
+            .eq("property_id", property_id)
+            .eq("channel", current_channel)
+            .execute()
+        )
+        return True
+    except Exception:
+        return False
+
+
+def _hide_legacy_visible_message(outbox_row: dict) -> None:
+    payload = _outbox_payload(outbox_row)
+    chat_id = str(
+        payload.get("chat_id")
+        or outbox_row.get("chat_id")
+        or outbox_row.get("recipient_id")
+        or ""
+    ).strip()
+    if not chat_id:
+        return
+
+    property_id = payload.get("property_id")
+    if property_id is None:
+        property_id = outbox_row.get("property_id")
+    context_id = str(payload.get("context_id") or outbox_row.get("context_id") or "").strip()
+    content = str(
+        outbox_row.get("visible_message_content")
+        or outbox_row.get("rendered_text")
+        or payload.get("rendered_text")
+        or payload.get("template_name")
+        or outbox_row.get("template_name")
+        or ""
+    ).strip()
+
+    try:
+        query = (
+            supabase.table("chat_history")
+            .select("id")
+            .eq("conversation_id", chat_id)
+            .eq("channel", "whatsapp")
+            .eq("role", "bookai")
+            .order("created_at", desc=True)
+            .limit(1)
+        )
+        if property_id is not None and str(property_id).strip():
+            query = query.eq("property_id", property_id)
+        if context_id:
+            query = query.eq("original_chat_id", context_id)
+        if content:
+            query = query.eq("content", content)
+        rows = query.execute().data or []
+        if not rows:
+            return
+        row_id = rows[0].get("id")
+        if row_id is None:
+            return
+        now_iso = datetime.now(timezone.utc).isoformat()
+        (
+            supabase.table("chat_history")
+            .update({"hidden_at": now_iso, "archived_at": now_iso})
+            .eq("id", row_id)
+            .execute()
+        )
+        log.info(
+            "[WA_STATUS] legacy hidden chat_id=%s property_id=%s row_id=%s",
+            chat_id,
+            property_id,
+            row_id,
+        )
+    except Exception as exc:
+        log.warning("No se pudo ocultar mensaje legacy para outbox failed: %s", exc)
+
+
+async def _emit_status_event(
+    state,
+    *,
+    outbox_row: dict,
+    status: str,
+    event_type: str,
+    error_code: str | None = None,
+    error_details: str | None = None,
+) -> None:
+    socket_mgr = getattr(state, "socket_manager", None)
+    if not socket_mgr or not getattr(socket_mgr, "enabled", False):
+        return
+
+    payload = _outbox_payload(outbox_row)
+    chat_id = str(payload.get("chat_id") or outbox_row.get("chat_id") or outbox_row.get("recipient_id") or "").strip()
+    property_id = payload.get("property_id")
+    if property_id is None:
+        property_id = outbox_row.get("property_id")
+    event_payload = {
+        "type": event_type,
+        "provider": outbox_row.get("provider") or "meta",
+        "provider_message_id": outbox_row.get("provider_message_id"),
+        "status": status,
+        "recipient_id": outbox_row.get("recipient_id"),
+        "chat_id": chat_id,
+        "property_id": property_id,
+        "error_code": error_code,
+        "error_details": error_details,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+    }
+    await socket_mgr.emit(
+        "wa.send.status",
+        event_payload,
+        rooms=_status_rooms(outbox_row),
+        instance_id=payload.get("instance_id") or outbox_row.get("instance_id"),
+    )
+
+
+async def _confirm_visible_message_from_outbox(state, outbox_row: dict, status_value: str) -> None:
+    payload = _outbox_payload(outbox_row)
+    recipient_id = str(outbox_row.get("recipient_id") or "").strip()
+    chat_id = str(payload.get("chat_id") or outbox_row.get("chat_id") or recipient_id).strip()
+    context_id = str(payload.get("context_id") or outbox_row.get("context_id") or "").strip() or None
+    session_id = context_id or chat_id or recipient_id
+    if not session_id:
+        return
+
+    property_id = _parse_property_id(payload.get("property_id") or outbox_row.get("property_id"))
+    instance_id = str(payload.get("instance_id") or outbox_row.get("instance_id") or "").strip() or None
+    template_name = str(payload.get("template_name") or outbox_row.get("template_name") or "").strip() or None
+    template_language = str(payload.get("template_language") or outbox_row.get("template_language") or "es").strip() or "es"
+    rendered_message = str(
+        outbox_row.get("rendered_text")
+        or payload.get("rendered_text")
+        or template_name
+        or ""
+    ).strip()
+    if not rendered_message:
+        return
+
+    memory_manager = getattr(state, "memory_manager", None)
+    if memory_manager:
+        targets = [chat_id, context_id, session_id, recipient_id]
+        for target in targets:
+            target_value = str(target or "").strip()
+            if not target_value:
+                continue
+            try:
+                memory_manager.set_flag(target_value, "default_channel", "whatsapp")
+                memory_manager.set_flag(target_value, "guest_number", recipient_id or chat_id)
+                if property_id is not None:
+                    memory_manager.set_flag(target_value, "property_id", property_id)
+                if instance_id:
+                    memory_manager.set_flag(target_value, "instance_id", instance_id)
+                    memory_manager.set_flag(target_value, "instance_hotel_code", instance_id)
+            except Exception:
+                pass
+
+    chat_visible_before = False
+    if property_id is not None:
+        chat_visible_before = is_chat_visible_in_list(
+            chat_id or recipient_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=context_id,
+        )
+
+    if memory_manager:
+        try:
+            memory_manager.save(
+                session_id,
+                role="bookai",
+                content=rendered_message,
+                channel="whatsapp",
+                original_chat_id=context_id,
+            )
+            source_tag = instance_id or "webhook"
+            memory_manager.save(
+                session_id,
+                role="system",
+                content=(
+                    f"[TEMPLATE_SENT] plantilla={template_name or ''} "
+                    f"lang={template_language} instance={instance_id or ''} origen={source_tag}"
+                ).strip(),
+                channel="whatsapp",
+                original_chat_id=context_id,
+            )
+        except Exception as exc:
+            log.warning("No se pudo confirmar mensaje visible desde outbox (%s): %s", session_id, exc)
+            return
+
+    mark_wa_outbox_message_visible(
+        str(outbox_row.get("provider_message_id") or "").strip(),
+        visible_message_content=rendered_message,
+    )
+
+    if property_id is not None and not chat_visible_before:
+        _restore_chat_visibility(
+            chat_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=context_id,
+        )
+    chat_visible_after = False
+    if property_id is not None:
+        chat_visible_after = is_chat_visible_in_list(
+            chat_id or recipient_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=context_id,
+        )
+
+    socket_mgr = getattr(state, "socket_manager", None)
+    if socket_mgr and getattr(socket_mgr, "enabled", False):
+        now_iso = datetime.now(timezone.utc).isoformat()
+        rooms = _status_rooms(outbox_row)
+        if property_id is not None and not chat_visible_before and chat_visible_after:
+            await socket_mgr.emit(
+                "chat.list.updated",
+                {
+                    "property_id": property_id,
+                    "action": "created",
+                    "chat": {
+                        "chat_id": chat_id,
+                        "property_id": property_id,
+                        "channel": "whatsapp",
+                        "last_message": rendered_message,
+                        "last_message_at": now_iso,
+                        "client_phone": recipient_id or chat_id,
+                        "unread_count": 0,
+                    },
+                },
+                rooms=f"property:{property_id}",
+                instance_id=instance_id,
+            )
+        await socket_mgr.emit(
+            "chat.message.created",
+            {
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": "whatsapp",
+                "sender": "bookai",
+                "message": rendered_message,
+                "created_at": now_iso,
+                "template": template_name,
+                "template_language": template_language,
+                "provider_message_id": outbox_row.get("provider_message_id"),
+                "delivery_status": status_value,
+            },
+            rooms=rooms,
+        )
+        await socket_mgr.emit(
+            "chat.updated",
+            {
+                "chat_id": chat_id,
+                "property_id": property_id,
+                "channel": "whatsapp",
+                "last_message": rendered_message,
+                "last_message_at": now_iso,
+                "provider_message_id": outbox_row.get("provider_message_id"),
+                "delivery_status": status_value,
+            },
+            rooms=rooms,
+        )
+
+    try:
+        await sync_guest_offer_state_from_sent_wa(
+            state,
+            guest_id=chat_id or recipient_id,
+            sent_message=rendered_message,
+            source="template_webhook_confirmed",
+            session_id=session_id,
+            property_id=property_id,
+        )
+    except Exception:
+        pass
+
+
+async def _handle_status_payload(state, payload: dict) -> dict:
+    processed = 0
+    matched = 0
+    status_events = _iter_status_events(payload)
+    for status_event in status_events:
+        processed += 1
+        provider_message_id = str(status_event.get("id") or "").strip()
+        status_value = str(status_event.get("status") or "").strip().lower()
+        if not provider_message_id or not status_value:
+            continue
+
+        outbox_row = find_wa_outbox_message(provider_message_id)
+        if not outbox_row:
+            log.info(
+                "[WA_STATUS] unmatched wamid=%s status=%s (idempotent skip)",
+                provider_message_id,
+                status_value,
+            )
+            continue
+        matched += 1
+        error_code, error_details = _extract_status_error(status_event)
+
+        if status_value in {"sent", "delivered", "read"}:
+            updated = update_wa_outbox_message(
+                provider_message_id,
+                status=status_value,
+                last_webhook_payload=status_event,
+            )
+            outbox_row = updated or outbox_row
+            outbox_row = find_wa_outbox_message(provider_message_id) or outbox_row
+            if outbox_row.get("visible_message_created_at"):
+                log.info(
+                    "[WA_STATUS] already visible wamid=%s status=%s",
+                    provider_message_id,
+                    status_value,
+                )
+            else:
+                await _confirm_visible_message_from_outbox(state, outbox_row, status_value)
+                outbox_row = find_wa_outbox_message(provider_message_id) or outbox_row
+            await _emit_status_event(
+                state,
+                outbox_row=outbox_row,
+                status=status_value,
+                event_type="wa_send_confirmed",
+            )
+            log.info(
+                "[WA_STATUS] confirmed wamid=%s status=%s chat_id=%s",
+                provider_message_id,
+                status_value,
+                outbox_row.get("chat_id") or outbox_row.get("recipient_id"),
+            )
+            continue
+
+        if status_value == "failed":
+            updated = update_wa_outbox_message(
+                provider_message_id,
+                status="failed",
+                error_code=error_code,
+                error_details=error_details,
+                last_webhook_payload=status_event,
+            )
+            outbox_row = updated or outbox_row
+            _hide_legacy_visible_message(outbox_row)
+            is_no_account = _is_no_whatsapp_account_error(
+                error_code=error_code,
+                error_details=error_details,
+            )
+            await _emit_status_event(
+                state,
+                outbox_row=outbox_row,
+                status="failed",
+                event_type="wa_send_failed_no_account" if is_no_account else "wa_send_failed",
+                error_code=error_code,
+                error_details=error_details,
+            )
+            log.warning(
+                "[WA_STATUS] failed wamid=%s code=%s no_account=%s details=%s",
+                provider_message_id,
+                error_code,
+                is_no_account,
+                error_details,
+            )
+            continue
+
+        update_wa_outbox_message(
+            provider_message_id,
+            status=status_value,
+            last_webhook_payload=status_event,
+        )
+        log.info(
+            "[WA_STATUS] updated wamid=%s status=%s",
+            provider_message_id,
+            status_value,
+        )
+
+    return {"processed": processed, "matched": matched}
+
+
 def register_whatsapp_routes(app, state):
     """Registra los endpoints de webhook de WhatsApp en la app FastAPI."""
 
@@ -177,7 +668,10 @@ def register_whatsapp_routes(app, state):
         """Webhook WhatsApp (Meta) + Buffer inteligente + Transcripción de audio (Whisper)."""
         try:
             data = await request.json()
+            status_result = await _handle_status_payload(state, data)
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
+            if status_result.get("processed", 0) > 0 and not value.get("messages"):
+                return JSONResponse({"status": "status_processed", **status_result})
             msg = value.get("messages", [{}])[0]
             metadata = value.get("metadata", {}) or {}
             contacts = value.get("contacts", [])
