@@ -826,46 +826,6 @@ def register_template_routes(app, state) -> None:
             except Exception as exc:
                 log.warning("No se pudo guardar folio/checkin/checkout en memoria: %s", exc)
 
-            ensure_instance_credentials(state.memory_manager, session_id)
-            # Refuerzo: fija credenciales WA de la instancia resuelta por token,
-            # evitando arrastre de otra instancia para el mismo guest chat_id.
-            try:
-                inst_payload = fetch_instance_by_code(instance_id) if instance_id else {}
-                if inst_payload:
-                    for target in [session_id, context_id, chat_id]:
-                        if not target:
-                            continue
-                        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
-                            val = inst_payload.get(key)
-                            if val:
-                                state.memory_manager.set_flag(target, key, val)
-            except Exception as exc:
-                log.warning("No se pudo reforzar credenciales WA por instance_id: %s", exc)
-
-            precheck = await state.channel_manager.check_recipient_has_whatsapp_account(
-                chat_id,
-                channel="whatsapp",
-                context_id=context_id,
-                request_id=idempotency_key or f"template_api:{wa_template}:{chat_id}",
-            )
-            if not bool(precheck.get("hasWhatsApp", True)):
-                masked_phone = f"{chat_id[:2]}***{chat_id[-2:]}" if len(chat_id or "") > 4 else "***"
-                log.warning(
-                    "[WA_PRECHECK_BLOCK] phone=%s chat_id=%s reservation_id=%s reason=%s",
-                    masked_phone,
-                    chat_id,
-                    folio_id or reservation_locator,
-                    precheck.get("reason") or "not_on_whatsapp",
-                )
-                return JSONResponse(
-                    status_code=422,
-                    content={
-                        "ok": False,
-                        "code": "wa_no_account",
-                        "message": "This number has no WhatsApp account",
-                    },
-                )
-
             if folio_id and folio_from_meta:
                 try:
                     log.info(
@@ -891,6 +851,22 @@ def register_template_routes(app, state) -> None:
                     )
                 except Exception as exc:
                     log.warning("No se pudo persistir reserva en tabla: %s", exc)
+
+            ensure_instance_credentials(state.memory_manager, session_id)
+            # Refuerzo: fija credenciales WA de la instancia resuelta por token,
+            # evitando arrastre de otra instancia para el mismo guest chat_id.
+            try:
+                inst_payload = fetch_instance_by_code(instance_id) if instance_id else {}
+                if inst_payload:
+                    for target in [session_id, context_id, chat_id]:
+                        if not target:
+                            continue
+                        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+                            val = inst_payload.get(key)
+                            if val:
+                                state.memory_manager.set_flag(target, key, val)
+            except Exception as exc:
+                log.warning("No se pudo reforzar credenciales WA por instance_id: %s", exc)
 
             outbound_parameters = parameters
             if template_def:

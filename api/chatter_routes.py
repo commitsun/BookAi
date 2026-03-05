@@ -11,7 +11,6 @@ from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
-from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from core.config import Settings, ModelConfig, ModelTier
@@ -3438,30 +3437,6 @@ def register_chatter_routes(app, state) -> None:
                     )
                 except Exception:
                     instance_id = None
-
-        precheck = await state.channel_manager.check_recipient_has_whatsapp_account(
-            chat_id,
-            channel="whatsapp",
-            context_id=context_id,
-            request_id=f"chatter:{template_name}:{chat_id}",
-        )
-        if not bool(precheck.get("hasWhatsApp", True)):
-            masked_phone = f"{chat_id[:2]}***{chat_id[-2:]}" if len(chat_id or "") > 4 else "***"
-            log.warning(
-                "[WA_PRECHECK_BLOCK] phone=%s chat_id=%s reservation_id=%s reason=%s",
-                masked_phone,
-                chat_id,
-                folio_id or reservation_locator,
-                precheck.get("reason") or "not_on_whatsapp",
-            )
-            return JSONResponse(
-                status_code=422,
-                content={
-                    "ok": False,
-                    "code": "wa_no_account",
-                    "message": "This number has no WhatsApp account",
-                },
-            )
 
         try:
             await state.channel_manager.send_template_message(
