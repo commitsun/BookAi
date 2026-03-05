@@ -12,12 +12,7 @@ from fastapi import Request
 from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.utils.text_utils import send_fragmented_async
-from core.db import (
-    attach_meta_whatsapp_outbound_to_latest_message,
-    is_chat_visible_in_list,
-    set_meta_whatsapp_visible_by_wamid_if_hidden,
-    update_meta_whatsapp_status_by_wamid,
-)
+from core.db import is_chat_visible_in_list
 from core.pipeline import process_user_message, _resolve_bookai_enabled
 
 log = logging.getLogger("WhatsAppWebhook")
@@ -166,242 +161,6 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
     return None
 
 
-def _extract_status_error(status_payload: dict) -> tuple[str | None, str | None]:
-    errors = status_payload.get("errors") or []
-    if not isinstance(errors, list):
-        return None, None
-    for item in errors:
-        if not isinstance(item, dict):
-            continue
-        error_data = item.get("error_data") or {}
-        details = None
-        if isinstance(error_data, dict):
-            details = error_data.get("details")
-        if details is None:
-            details = item.get("details")
-        code = item.get("code")
-        code_text = str(code).strip() if code is not None else None
-        details_text = str(details).strip() if details is not None else None
-        if code_text or details_text:
-            return code_text or None, details_text or None
-    return None, None
-
-
-def _mark_no_whatsapp_flags(state, recipient_id: str, *, original_chat_id: str | None = None, instance_number: str | None = None, error_details: str | None = None) -> None:
-    if not getattr(state, "memory_manager", None):
-        return
-    clean_recipient = re.sub(r"\D", "", str(recipient_id or "")).strip() or str(recipient_id or "").strip()
-    normalized_instance_number = re.sub(r"\D", "", str(instance_number or "")).strip()
-    targets: list[str] = []
-    if clean_recipient:
-        targets.append(clean_recipient)
-    if original_chat_id:
-        targets.append(str(original_chat_id).strip())
-    if clean_recipient and normalized_instance_number:
-        targets.append(f"{normalized_instance_number}:{clean_recipient}")
-    seen: set[str] = set()
-    for target in targets:
-        current = str(target or "").strip()
-        if not current or current in seen:
-            continue
-        seen.add(current)
-        state.memory_manager.set_flag(current, "no_whatsapp", True)
-        if error_details:
-            state.memory_manager.set_flag(current, "no_whatsapp_details", error_details)
-
-
-def _first_memory_flag(state, keys: list[str], flag_name: str):
-    memory_manager = getattr(state, "memory_manager", None)
-    if not memory_manager:
-        return None
-    for key in keys:
-        current = str(key or "").strip()
-        if not current:
-            continue
-        try:
-            value = memory_manager.get_flag(current, flag_name)
-        except Exception:
-            value = None
-        if value is not None:
-            return value
-    return None
-
-
-async def _emit_confirmed_outbound_message(state, row: dict, metadata: dict | None = None) -> None:
-    socket_mgr = getattr(state, "socket_manager", None)
-    if not socket_mgr or not getattr(socket_mgr, "enabled", False):
-        return
-
-    metadata = metadata or {}
-    current_channel = str(row.get("channel") or "whatsapp").strip() or "whatsapp"
-    conversation_id = str(row.get("conversation_id") or "").strip()
-    if not conversation_id or current_channel != "whatsapp":
-        return
-
-    content = str(row.get("content") or "").strip()
-    if not content:
-        return
-
-    clean_chat_id = re.sub(r"\D", "", conversation_id).strip() or conversation_id
-    original_chat_id = str(row.get("original_chat_id") or "").strip() or None
-    context_id = original_chat_id or clean_chat_id
-    property_id = row.get("property_id")
-    memory_keys = [context_id, clean_chat_id, conversation_id]
-    created_at = row.get("created_at") or datetime.now(timezone.utc).isoformat()
-    role = str(row.get("role") or "").strip().lower()
-    if role == "user":
-        sender = "user"
-    elif role == "guest":
-        sender = "guest"
-    else:
-        sender = "bookai"
-
-    folio_id = _first_memory_flag(state, memory_keys, "folio_id")
-    reservation_locator = _first_memory_flag(state, memory_keys, "reservation_locator")
-    checkin = _first_memory_flag(state, memory_keys, "checkin")
-    checkout = _first_memory_flag(state, memory_keys, "checkout")
-    reservation_status = _first_memory_flag(state, memory_keys, "reservation_status")
-    room_number = _first_memory_flag(state, memory_keys, "room_number")
-    client_name = (
-        row.get("client_name")
-        or _first_memory_flag(state, memory_keys, "client_name")
-    )
-    instance_id = (
-        _first_memory_flag(state, memory_keys, "instance_id")
-        or _first_memory_flag(state, memory_keys, "instance_hotel_code")
-    )
-    whatsapp_phone_number = str(metadata.get("display_phone_number") or "").strip() or None
-
-    try:
-        bookai_enabled = _resolve_bookai_enabled(
-            state,
-            chat_id=clean_chat_id,
-            mem_id=context_id,
-            clean_id=clean_chat_id,
-            property_id=property_id,
-        )
-    except Exception:
-        bookai_enabled = True
-
-    rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, clean_chat_id)]
-    if property_id is not None:
-        rooms.append(f"property:{property_id}")
-    rooms.append("channel:whatsapp")
-
-    if property_id is not None:
-        await socket_mgr.emit(
-            "chat.list.updated",
-            {
-                "property_id": property_id,
-                "action": "created",
-                "chat": {
-                    "chat_id": clean_chat_id,
-                    "property_id": property_id,
-                    "reservation_id": folio_id,
-                    "reservation_locator": reservation_locator,
-                    "reservation_status": reservation_status,
-                    "room_number": room_number,
-                    "checkin": checkin,
-                    "checkout": checkout,
-                    "channel": "whatsapp",
-                    "last_message": content,
-                    "last_message_at": created_at,
-                    "avatar": None,
-                    "client_name": client_name,
-                    "client_phone": clean_chat_id,
-                    "whatsapp_phone_number": whatsapp_phone_number,
-                    "bookai_enabled": bool(bookai_enabled is not False),
-                    "unread_count": 0,
-                    "folio_id": folio_id,
-                },
-            },
-            rooms=f"property:{property_id}",
-            instance_id=instance_id,
-        )
-
-    await socket_mgr.emit(
-        "chat.message.created",
-        {
-            "rooms": rooms,
-            "chat_id": clean_chat_id,
-            "property_id": property_id,
-            "channel": "whatsapp",
-            "sender": sender,
-            "message": content,
-            "created_at": created_at,
-        },
-        rooms=rooms,
-    )
-    await socket_mgr.emit(
-        "chat.updated",
-        {
-            "rooms": rooms,
-            "chat_id": clean_chat_id,
-            "property_id": property_id,
-            "channel": "whatsapp",
-            "last_message": content,
-            "last_message_at": created_at,
-        },
-        rooms=rooms,
-    )
-
-
-async def _process_status_event(state, status_payload: dict, metadata: dict | None = None) -> None:
-    metadata = metadata or {}
-    wamid = str(status_payload.get("id") or "").strip()
-    delivery_status = str(status_payload.get("status") or "").strip().lower() or "pending"
-    recipient_id = str(status_payload.get("recipient_id") or "").strip()
-    if not wamid or not recipient_id:
-        return
-
-    error_code, error_details = _extract_status_error(status_payload)
-    update_result = update_meta_whatsapp_status_by_wamid(
-        wamid=wamid,
-        recipient_id=recipient_id,
-        delivery_status=delivery_status,
-        error_code=error_code,
-        error_details=error_details,
-    )
-    if update_result.get("no_whatsapp"):
-        _mark_no_whatsapp_flags(
-            state,
-            recipient_id,
-            original_chat_id=update_result.get("original_chat_id"),
-            instance_number=metadata.get("display_phone_number"),
-            error_details=error_details,
-        )
-        log.warning(
-            "⛔ Número sin WhatsApp detectado recipient_id=%s wamid=%s details=%s",
-            recipient_id,
-            wamid,
-            error_details or "",
-        )
-        return
-
-    released = False
-    if delivery_status in {"sent", "delivered", "read"}:
-        visible_result = set_meta_whatsapp_visible_by_wamid_if_hidden(
-            wamid=wamid,
-            recipient_id=recipient_id,
-        )
-        if visible_result.get("changed") and isinstance(visible_result.get("row"), dict):
-            await _emit_confirmed_outbound_message(
-                state,
-                visible_result["row"],
-                metadata=metadata,
-            )
-            released = True
-
-    log.info(
-        "📬 Status WA procesado recipient_id=%s wamid=%s status=%s updated=%s released=%s",
-        recipient_id,
-        wamid,
-        delivery_status,
-        update_result.get("updated"),
-        released,
-    )
-
-
 def register_whatsapp_routes(app, state):
     """Registra los endpoints de webhook de WhatsApp en la app FastAPI."""
 
@@ -418,23 +177,6 @@ def register_whatsapp_routes(app, state):
         """Webhook WhatsApp (Meta) + Buffer inteligente + Transcripción de audio (Whisper)."""
         try:
             data = await request.json()
-            processed_statuses = 0
-            for entry in data.get("entry", []) or []:
-                if not isinstance(entry, dict):
-                    continue
-                for change in entry.get("changes", []) or []:
-                    if not isinstance(change, dict):
-                        continue
-                    current_value = change.get("value", {}) or {}
-                    current_metadata = current_value.get("metadata", {}) or {}
-                    for status_payload in current_value.get("statuses", []) or []:
-                        if not isinstance(status_payload, dict):
-                            continue
-                        try:
-                            await _process_status_event(state, status_payload, current_metadata)
-                            processed_statuses += 1
-                        except Exception as exc:
-                            log.warning("No se pudo procesar status WA: %s", exc, exc_info=True)
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
             msg = value.get("messages", [{}])[0]
             metadata = value.get("metadata", {}) or {}
@@ -522,8 +264,6 @@ def register_whatsapp_routes(app, state):
                     log.info("📝 Transcripción completada: %s", text)
 
             if not sender or not text:
-                if processed_statuses:
-                    return JSONResponse({"status": "status_processed"})
                 return JSONResponse({"status": "ignored"})
 
             log.info("💬 WhatsApp %s: %s", sender, text)
@@ -956,17 +696,7 @@ def register_whatsapp_routes(app, state):
                     )
                     return
 
-                delivery_results = await send_fragmented_async(send_to_channel, sender, resp)
-                try:
-                    attach_meta_whatsapp_outbound_to_latest_message(
-                        conversation_id=cid,
-                        provider_result=delivery_results,
-                        content=resp,
-                        role="bookai",
-                        original_chat_id=cid,
-                    )
-                except Exception as exc:
-                    log.warning("No se pudo adjuntar wamid a respuesta automatica: %s", exc)
+                await send_fragmented_async(send_to_channel, sender, resp)
 
             await state.buffer_manager.add_message(memory_id, text, _process_buffered)
 
