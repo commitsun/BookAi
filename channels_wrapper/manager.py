@@ -186,7 +186,7 @@ class ChannelManager:
         language: str = "es",
         channel: str = "whatsapp",
         context_id: str | None = None,
-    ) -> dict:
+    ):
         """
         Envía una plantilla preaprobada (ej: WhatsApp).
         Aplica deduplicación ligera para evitar reenvíos repetidos en pocos segundos.
@@ -234,6 +234,17 @@ class ChannelManager:
                 except Exception as exc:
                     log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 
+            payload_hash = f"{template_id}|{parameters}"
+            key = (channel, chat_id, "template")
+            last = self._recent_sends.get(key)
+            now = time.monotonic()
+            if last:
+                last_hash, ts = last
+                if payload_hash == last_hash and (now - ts) < self._dedup_window:
+                    log.info("↩️ Envío de plantilla duplicado evitado (%s → %s)", channel, chat_id)
+                    return
+            self._recent_sends[key] = (payload_hash, now)
+
             result = None
             if asyncio.iscoroutinefunction(send_fn):
                 result = await send_fn(chat_id, template_id, parameters=parameters, language=language)
@@ -245,24 +256,7 @@ class ChannelManager:
             if not ok:
                 raise RuntimeError(f"El canal '{channel}' no confirmó el envío de la plantilla.")
 
-            provider_message_id = None
-            if isinstance(result, dict):
-                provider_message_id = (
-                    result.get("provider_message_id")
-                    or result.get("message_id")
-                )
-            log.info(
-                "📤 [%s] Plantilla '%s' enviada a %s wamid=%s",
-                channel,
-                template_id,
-                chat_id,
-                provider_message_id or "missing",
-            )
-            return {
-                "ok": True,
-                "provider_message_id": provider_message_id,
-                "result": result,
-            }
+            log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
         except Exception as e:
             log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
             raise
