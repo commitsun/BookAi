@@ -556,6 +556,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                 log.info("🔁 Escalación %s ya notificada y sin cambios; omitiendo duplicado.", existing_id)
                 return f"ℹ️ Escalación {existing_id} ya notificada; sin cambios."
 
+            existing_ts = str(existing_pending.get("timestamp") or "").strip() or datetime.utcnow().isoformat()
             update_escalation(
                 existing_id,
                 {
@@ -563,7 +564,8 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     "escalation_type": merged_type,
                     "escalation_reason": merged_reason,
                     "context": merged_context,
-                    "timestamp": datetime.utcnow().isoformat(),
+                    # Preservar hora original de creación de la escalación.
+                    "timestamp": existing_ts,
                     "property_id": property_id,
                 },
             )
@@ -574,7 +576,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                     existing.escalation_type = merged_type
                     existing.escalation_reason = merged_reason
                     existing.context = merged_context
-                    existing.timestamp = datetime.utcnow().isoformat()
+                    existing.timestamp = existing_ts
                     existing.property_id = property_id
             except Exception:
                 pass
@@ -611,6 +613,8 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                         "escalation_type": escalation_type,
                         "escalation_reason": merged_reason,
                         "context": merged_context,
+                        "timestamp": existing_ts,
+                        "created_at": existing_ts,
                         "property_id": property_id,
                     },
                     rooms=rooms,
@@ -632,6 +636,7 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
                         "proposed_response": (existing_pending.get("draft_response") or "").strip() or None,
                         "is_final_response": bool((existing_pending.get("draft_response") or "").strip()),
                         "escalation_id": existing_id,
+                        "timestamp": existing_ts,
                         "property_id": property_id,
                     },
                     rooms=rooms,

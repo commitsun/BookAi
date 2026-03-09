@@ -378,6 +378,7 @@ class InternoAgent:
         try:
             now_iso = datetime.utcnow().isoformat()
             if reuse_existing:
+                existing_ts = str((existing_pending or {}).get("timestamp") or "").strip() or now_iso
                 prev_msg = str((existing_pending or {}).get("guest_message") or "").strip()
                 prev_reason = str(
                     (existing_pending or {}).get("escalation_reason")
@@ -405,7 +406,8 @@ class InternoAgent:
                     "escalation_type": escalation_type or (existing_pending or {}).get("escalation_type"),
                     "escalation_reason": merged_reason,
                     "context": merged_context,
-                    "timestamp": now_iso,
+                    # Mantener la hora real de creación de la escalación.
+                    "timestamp": existing_ts,
                 }
                 if resolved_prop_id is not None:
                     update_payload["property_id"] = resolved_prop_id
@@ -417,7 +419,7 @@ class InternoAgent:
                     escalation_type=str(update_payload.get("escalation_type") or escalation_type),
                     escalation_reason=merged_reason,
                     context=merged_context,
-                    timestamp=now_iso,
+                    timestamp=existing_ts,
                     property_id=update_payload.get("property_id"),
                 )
                 self.escalations[escalation_id] = esc_record
@@ -472,6 +474,8 @@ class InternoAgent:
                     "type": escalation_type,
                     "reason": reason,
                     "context": reason,
+                    "timestamp": esc_record.timestamp,
+                    "created_at": esc_record.timestamp,
                     "property_id": prop_id,
                     "rooms": rooms,
                 },
@@ -486,6 +490,7 @@ class InternoAgent:
                     "needs_action_reason": (
                         f"{reason} (Idioma huésped: {guest_lang})" if (reason or "").strip() else None
                     ),
+                    "timestamp": esc_record.timestamp,
                     "proposed_response": None,
                     "escalation_id": escalation_id,
                     "escalation_messages": [],
