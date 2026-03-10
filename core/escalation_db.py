@@ -165,6 +165,84 @@ def _pending_chat_candidates(guest_chat_id: str) -> tuple[set[str], str]:
     return candidates, clean
 
 
+def _chat_escalations_query(guest_chat_id: str, property_id=None):
+    candidates, clean = _pending_chat_candidates(guest_chat_id)
+    like_clause = f"guest_chat_id.like.%:{clean}" if clean else ""
+    or_filters = [f"guest_chat_id.eq.{cand}" for cand in candidates]
+    if like_clause:
+        or_filters.append(like_clause)
+    if not or_filters:
+        return None
+    query = (
+        supabase.table("escalations")
+        .select("*")
+        .or_(",".join(or_filters))
+    )
+    if property_id is not None:
+        query = query.eq("property_id", property_id)
+    return query
+
+
+def is_escalation_resolved(escalation: dict | None) -> bool:
+    if not isinstance(escalation, dict):
+        return False
+    status = str(escalation.get("status") or "").strip().lower()
+    if status == "resolved":
+        return True
+    if escalation.get("resolved_at"):
+        return True
+    if bool(escalation.get("manager_confirmed")):
+        return True
+    if bool(escalation.get("sent_to_guest")):
+        return True
+    return False
+
+
+def get_latest_escalation_for_chat(guest_chat_id: str, property_id=None) -> dict | None:
+    if not guest_chat_id:
+        return None
+    try:
+        query = _chat_escalations_query(guest_chat_id, property_id=property_id)
+        if query is None:
+            return None
+        res = query.order("updated_at", desc=True).limit(100).execute()
+        data = res.data or []
+        if data:
+            return data[0]
+        return None
+    except Exception as e:
+        log.error(
+            "⚠️ Error obteniendo la última escalación para %s: %s",
+            guest_chat_id,
+            e,
+            exc_info=True,
+        )
+        return None
+
+
+def get_latest_resolved_escalation_for_chat(guest_chat_id: str, property_id=None) -> dict | None:
+    if not guest_chat_id:
+        return None
+    try:
+        query = _chat_escalations_query(guest_chat_id, property_id=property_id)
+        if query is None:
+            return None
+        res = query.order("updated_at", desc=True).limit(100).execute()
+        data = res.data or []
+        for row in data:
+            if is_escalation_resolved(row):
+                return row
+        return None
+    except Exception as e:
+        log.error(
+            "⚠️ Error obteniendo resolución de escalación para %s: %s",
+            guest_chat_id,
+            e,
+            exc_info=True,
+        )
+        return None
+
+
 def list_pending_escalations_for_chat(guest_chat_id: str, limit: int = 20, property_id=None) -> list[dict]:
     """Devuelve TODAS las escalaciones pendientes para un chat, ordenadas por antigüedad."""
     if not guest_chat_id:
@@ -230,6 +308,45 @@ def get_latest_pending_escalation(guest_chat_id: str, property_id=None) -> dict 
         log.error(
             "⚠️ Error obteniendo escalación pendiente para %s: %s",
             guest_chat_id,
+            e,
+            exc_info=True,
+        )
+        return None
+
+
+def resolve_escalation_with_resolution(
+    escalation_id: str,
+    *,
+    property_id=None,
+    resolution_medium: str | None = None,
+    resolution_notes: str | None = None,
+    resolved_at: str | None = None,
+    resolved_by: str | int | None = None,
+    resolved_by_name: str | None = None,
+) -> dict | None:
+    if not escalation_id:
+        return None
+    updates: dict = {
+        "manager_confirmed": True,
+        "sent_to_guest": True,
+        "resolved_at": resolved_at or datetime.utcnow().isoformat(),
+        "resolution_medium": resolution_medium,
+        "resolution_notes": (resolution_notes or "") if resolution_notes is not None else "",
+        "updated_at": datetime.utcnow().isoformat(),
+    }
+    if property_id is not None:
+        updates["property_id"] = property_id
+    if resolved_by is not None and str(resolved_by).strip() != "":
+        updates["resolved_by"] = str(resolved_by).strip()
+    if resolved_by_name is not None and str(resolved_by_name).strip() != "":
+        updates["resolved_by_name"] = str(resolved_by_name).strip()
+    try:
+        supabase.table("escalations").update(updates).eq("escalation_id", escalation_id).execute()
+        return get_escalation(escalation_id)
+    except Exception as e:
+        log.error(
+            "⚠️ Error resolviendo escalación %s con metadata de resolución: %s",
+            escalation_id,
             e,
             exc_info=True,
         )
