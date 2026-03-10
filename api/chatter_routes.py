@@ -1669,7 +1669,7 @@ def register_chatter_routes(app, state) -> None:
                     # Evita mezcla entre instancias cuando el mismo teléfono existe en ambas:
                     # con original_chat_id presente, la validación fuerte debe ser por original.
                     if original_chat_id:
-                        if not in_original_set and not in_chat_set:
+                        if not in_original_set:
                             continue
                     elif not in_chat_set and not in_original_set:
                         continue
@@ -2006,7 +2006,7 @@ def register_chatter_routes(app, state) -> None:
                 in_chat_set = bool(cid_clean and cid_clean in allowed_chat_ids)
                 in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
                 if original_chat_id:
-                    if not in_original_set and not in_chat_set:
+                    if not in_original_set:
                         continue
                 elif not in_chat_set and not in_original_set:
                     continue
