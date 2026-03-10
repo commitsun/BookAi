@@ -7,7 +7,6 @@ import json
 import logging
 import re
 from typing import Any, Dict, Optional
-from urllib.parse import urlsplit
 
 from fastapi import APIRouter, Depends, Header, HTTPException
 from fastapi.responses import JSONResponse
@@ -29,6 +28,14 @@ from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.template_structured import (
     build_template_structured_payload,
     extract_structured_csv,
+)
+from core.template_button_url import (
+    build_folio_details_url,
+    extract_folio_details_url,
+    extract_url_button_indexes,
+    resolve_button_base_url,
+    strip_url_control_params,
+    to_folio_dynamic_part,
 )
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation
@@ -114,6 +121,10 @@ class SendTemplateRequest(BaseModel):
     recipient: Recipient
     template: TemplatePayload
     meta: Optional[MetaInfo] = None
+    button_base_url: Optional[str] = Field(
+        default=None,
+        description="URL base publica para botones URL dinamicos (ej: https://alda.roomdoo.com)",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -288,97 +299,6 @@ def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
         if isinstance(val, str) and val.strip():
             return val.strip()
     return None
-
-
-_FOLIO_URL_PARAM_KEYS = ("folio_details_url", "folioDetailsUrl")
-_FOLIO_BASE_URL_PARAM_KEYS = ("folio_base_url", "folioBaseUrl")
-
-
-def _extract_folio_details_url(params: Dict[str, Any]) -> Optional[str]:
-    if not params:
-        return None
-    for key in _FOLIO_URL_PARAM_KEYS:
-        val = params.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return None
-
-
-def _extract_folio_base_url(params: Dict[str, Any]) -> Optional[str]:
-    if not params:
-        return None
-    for key in _FOLIO_BASE_URL_PARAM_KEYS:
-        val = params.get(key)
-        if isinstance(val, str) and val.strip():
-            return val.strip()
-    return None
-
-
-def _sanitize_base_url(value: Any) -> Optional[str]:
-    raw = str(value or "").strip()
-    if not raw:
-        return None
-    if not re.match(r"^https?://", raw, re.IGNORECASE):
-        return None
-    if not raw.endswith("/"):
-        raw += "/"
-    return raw
-
-
-def _build_folio_details_url(base_url: Optional[str], dynamic_part: Optional[str]) -> Optional[str]:
-    dynamic = str(dynamic_part or "").strip()
-    if not dynamic:
-        return None
-    if re.match(r"^https?://", dynamic, re.IGNORECASE):
-        return dynamic
-    if not base_url:
-        return None
-    return f"{base_url}{dynamic.lstrip('/')}"
-
-
-def _to_folio_dynamic_part(raw_value: Optional[str], base_url: Optional[str]) -> Optional[str]:
-    """
-    Meta URL buttons con {{1}} esperan la parte dinámica, no la URL completa.
-    Si llega una URL absoluta, intentamos recortar la base conocida o al menos host/scheme.
-    """
-    raw = str(raw_value or "").strip()
-    if not raw:
-        return None
-
-    known_base = _sanitize_base_url(base_url)
-    if known_base and raw.lower().startswith(known_base.lower()):
-        tail = raw[len(known_base):].lstrip("/")
-        return tail or None
-
-    if re.match(r"^https?://", raw, re.IGNORECASE):
-        parsed = urlsplit(raw)
-        path = (parsed.path or "").lstrip("/")
-        query = f"?{parsed.query}" if parsed.query else ""
-        fragment = f"#{parsed.fragment}" if parsed.fragment else ""
-        dynamic = f"{path}{query}{fragment}".strip()
-        return dynamic or None
-
-    return raw.lstrip("/") or None
-
-
-def _extract_url_button_indexes(components: Any) -> list[int]:
-    if not isinstance(components, list):
-        return []
-    indexes: list[int] = []
-    for comp in components:
-        if not isinstance(comp, dict):
-            continue
-        if str(comp.get("type") or "").strip().upper() != "BUTTONS":
-            continue
-        buttons = comp.get("buttons") or []
-        if not isinstance(buttons, list):
-            continue
-        for idx, button in enumerate(buttons):
-            if not isinstance(button, dict):
-                continue
-            if str(button.get("type") or "").strip().upper() == "URL":
-                indexes.append(idx)
-    return indexes
 
 
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
@@ -676,12 +596,12 @@ def register_template_routes(app, state) -> None:
                 or payload.source.hotel.id
             )
             template_params = dict(payload.template.parameters or {})
-            folio_details_url_raw = _extract_folio_details_url(template_params)
-            folio_base_url_raw = _extract_folio_base_url(template_params)
-            for control_key in _FOLIO_URL_PARAM_KEYS:
-                template_params.pop(control_key, None)
-            for control_key in _FOLIO_BASE_URL_PARAM_KEYS:
-                template_params.pop(control_key, None)
+            folio_details_url_raw = extract_folio_details_url(template_params)
+            button_base_url = resolve_button_base_url(
+                request_base_url=payload.button_base_url,
+                params=template_params,
+            )
+            template_params = strip_url_control_params(template_params)
 
             if idempotency_key:
                 if idempotency_key in state.processed_template_keys:
@@ -700,6 +620,12 @@ def register_template_routes(app, state) -> None:
                 template_code=template_code,
                 language=language,
             ) if registry else None
+
+            if not button_base_url and template_def:
+                button_base_url = resolve_button_base_url(
+                    request_base_url=button_base_url,
+                    template_components=template_def.components,
+                )
 
             wa_template = template_def.whatsapp_name if template_def else template_code
             if not template_def:
@@ -765,6 +691,13 @@ def register_template_routes(app, state) -> None:
                     state.memory_manager.set_flag(chat_id, "wa_context_property_id", property_id)
                 except Exception as exc:
                     log.warning("No se pudo guardar property_id en memoria: %s", exc)
+
+            if button_base_url:
+                try:
+                    state.memory_manager.set_flag(chat_id, "button_base_url", button_base_url)
+                    state.memory_manager.set_flag(chat_id, "folio_base_url", button_base_url)
+                except Exception as exc:
+                    log.warning("No se pudo guardar button_base_url en memoria: %s", exc)
 
             if property_code:
                 try:
@@ -865,12 +798,28 @@ def register_template_routes(app, state) -> None:
                         "client_name",
                         "property_id",
                         "property_name",
+                        "button_base_url",
+                        "folio_base_url",
                     ):
                         val = state.memory_manager.get_flag(chat_id, key)
                         if val is not None:
                             state.memory_manager.set_flag(context_id, key, val)
                 except Exception:
                     pass
+            if not button_base_url:
+                try:
+                    for target in [context_id, chat_id]:
+                        if not target:
+                            continue
+                        candidate = (
+                            state.memory_manager.get_flag(target, "button_base_url")
+                            or state.memory_manager.get_flag(target, "folio_base_url")
+                        )
+                        button_base_url = resolve_button_base_url(request_base_url=candidate)
+                        if button_base_url:
+                            break
+                except Exception:
+                    button_base_url = None
             try:
                 targets = [chat_id, context_id] if context_id else [chat_id]
                 if folio_id:
@@ -957,7 +906,7 @@ def register_template_routes(app, state) -> None:
             outbound_parameters = parameters
             button_url_value = None
             if template_def:
-                url_button_indexes = _extract_url_button_indexes(template_def.components)
+                url_button_indexes = extract_url_button_indexes(template_def.components)
                 # Fallback: algunas tablas legacy no guardan `components` en Supabase.
                 # Para la plantilla de confirmación con botón URL dinámico,
                 # asumimos índice 0 si no hay metadata pero sí localizador.
@@ -968,8 +917,7 @@ def register_template_routes(app, state) -> None:
                 ):
                     url_button_indexes = [0]
                 if folio_details_url_raw:
-                    base_url = _sanitize_base_url(folio_base_url_raw)
-                    button_url_value = _to_folio_dynamic_part(folio_details_url_raw, base_url)
+                    button_url_value = to_folio_dynamic_part(folio_details_url_raw, button_base_url)
                 elif reservation_locator:
                     button_url_value = reservation_locator
 
@@ -1103,10 +1051,7 @@ def register_template_routes(app, state) -> None:
                     channel="whatsapp",
                     original_chat_id=context_id or None,
                 )
-                resolved_cta_url = _build_folio_details_url(
-                    _sanitize_base_url(folio_base_url_raw),
-                    folio_details_url_raw,
-                )
+                resolved_cta_url = build_folio_details_url(button_base_url, folio_details_url_raw)
                 cta_action = "open_url" if resolved_cta_url else None
                 structured_payload = build_template_structured_payload(
                     template_code=template_def.code if template_def else template_code,
@@ -1292,6 +1237,7 @@ def register_template_routes(app, state) -> None:
                     "created_at": now_iso,
                     "template": wa_template,
                     "template_language": language,
+                    "button_base_url": button_base_url,
                     "structured_payload": structured_payload,
                     "structured_csv": structured_csv,
                 },
@@ -1332,6 +1278,7 @@ def register_template_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "instance_id": instance_id,
                 "language": language,
+                "button_base_url": button_base_url,
                 "structured_payload": structured_payload,
                 "structured_csv": structured_csv,
             }

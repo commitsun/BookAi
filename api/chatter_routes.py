@@ -34,6 +34,14 @@ from core.template_structured import (
     build_template_structured_payload,
     extract_structured_csv,
 )
+from core.template_button_url import (
+    build_folio_details_url,
+    extract_folio_details_url,
+    extract_url_button_indexes,
+    resolve_button_base_url,
+    strip_url_control_params,
+    to_folio_dynamic_part,
+)
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
@@ -84,6 +92,10 @@ class SendTemplateRequest(BaseModel):
     instance_id: Optional[str] = Field(default=None, description="ID de instancia (opcional)")
     language: Optional[str] = Field(default="es", description="Idioma de la plantilla")
     parameters: Dict[str, Any] = Field(default_factory=dict, description="Parametros para placeholders")
+    button_base_url: Optional[str] = Field(
+        default=None,
+        description="URL base publica para botones URL dinamicos (ej: https://alda.roomdoo.com)",
+    )
     rendered_text: Optional[str] = Field(
         default=None,
         description="Texto renderizado de la plantilla (opcional, para contexto)",
@@ -3770,6 +3782,13 @@ def register_chatter_routes(app, state) -> None:
         if payload_instance_id and token_instance_id and payload_instance_id != token_instance_id:
             raise HTTPException(status_code=403, detail="instance_id no coincide con el token")
         instance_id = payload_instance_id or token_instance_id
+        template_params_raw = dict(payload.parameters or {})
+        folio_details_url_raw = extract_folio_details_url(template_params_raw)
+        button_base_url = resolve_button_base_url(
+            request_base_url=payload.button_base_url,
+            params=template_params_raw,
+        )
+        template_params = strip_url_control_params(template_params_raw)
 
         template_def = None
         if registry:
@@ -3778,14 +3797,19 @@ def register_chatter_routes(app, state) -> None:
                 template_code=template_code,
                 language=language,
             )
+        if not button_base_url and template_def:
+            button_base_url = resolve_button_base_url(
+                request_base_url=button_base_url,
+                template_components=template_def.components,
+            )
 
         if template_def:
             template_name = template_def.whatsapp_name or template_code
-            parameters = template_def.build_meta_parameters(payload.parameters)
+            parameters = template_def.build_meta_parameters(template_params)
             language = template_def.language or language
         else:
             template_name = template_code
-            raw_params = payload.parameters or {}
+            raw_params = template_params
             if isinstance(raw_params, dict):
                 parameters = [
                     {
@@ -3858,6 +3882,11 @@ def register_chatter_routes(app, state) -> None:
                 for mem_id in [session_id, context_id, chat_id]:
                     if mem_id:
                         state.memory_manager.set_flag(mem_id, "checkout", checkout)
+            if button_base_url:
+                for mem_id in [session_id, context_id, chat_id]:
+                    if mem_id:
+                        state.memory_manager.set_flag(mem_id, "button_base_url", button_base_url)
+                        state.memory_manager.set_flag(mem_id, "folio_base_url", button_base_url)
             ensure_instance_credentials(state.memory_manager, session_id)
             if not instance_id:
                 try:
@@ -3867,6 +3896,20 @@ def register_chatter_routes(app, state) -> None:
                     )
                 except Exception:
                     instance_id = None
+            if not button_base_url:
+                try:
+                    for mem_id in [session_id, context_id, chat_id]:
+                        if not mem_id:
+                            continue
+                        candidate = (
+                            state.memory_manager.get_flag(mem_id, "button_base_url")
+                            or state.memory_manager.get_flag(mem_id, "folio_base_url")
+                        )
+                        button_base_url = resolve_button_base_url(request_base_url=candidate)
+                        if button_base_url:
+                            break
+                except Exception:
+                    button_base_url = None
 
         precheck = await state.channel_manager.check_recipient_has_whatsapp_account(
             chat_id,
@@ -3892,11 +3935,39 @@ def register_chatter_routes(app, state) -> None:
                 },
             )
 
+        outbound_parameters = parameters
+        button_url_value = None
+        if template_def:
+            url_button_indexes = extract_url_button_indexes(template_def.components)
+            # Compatibilidad con definiciones legacy de plantilla sin metadata de components.
+            if (
+                not url_button_indexes
+                and template_def.code in {"booking_confirmation_aldahotels_v1", "reserva_confirmation_aldahotels_v1"}
+                and reservation_locator
+            ):
+                url_button_indexes = [0]
+            if folio_details_url_raw:
+                button_url_value = to_folio_dynamic_part(folio_details_url_raw, button_base_url)
+            elif reservation_locator:
+                button_url_value = reservation_locator
+            if url_button_indexes and button_url_value:
+                outbound_parameters = {
+                    "body": parameters,
+                    "buttons": [
+                        {
+                            "index": idx,
+                            "sub_type": "url",
+                            "text": button_url_value,
+                        }
+                        for idx in url_button_indexes
+                    ],
+                }
+
         try:
             await state.channel_manager.send_template_message(
                 chat_id,
                 template_name,
-                parameters=parameters,
+                parameters=outbound_parameters,
                 language=language,
                 channel="whatsapp",
                 context_id=context_id,
@@ -4044,17 +4115,21 @@ def register_chatter_routes(app, state) -> None:
                 channel="whatsapp",
                 original_chat_id=context_id or None,
             )
+            resolved_cta_url = build_folio_details_url(button_base_url, folio_details_url_raw)
+            cta_action = "open_url" if resolved_cta_url else None
             structured_payload = build_template_structured_payload(
                 template_code=template_def.code if template_def else template_code,
                 template_name=template_name,
                 language=language,
-                parameters=payload.parameters or {},
+                parameters=template_params_raw,
                 reservation_locator=reservation_locator,
                 folio_id=folio_id,
                 guest_name=reservation_client_name,
-                hotel_name=_extract_property_name(payload.parameters or {}),
+                hotel_name=_extract_property_name(template_params_raw),
                 checkin=checkin,
                 checkout=checkout,
+                cta_action=cta_action,
+                cta_url=resolved_cta_url,
             )
             structured_csv = extract_structured_csv(structured_payload)
             if rendered:
@@ -4178,6 +4253,7 @@ def register_chatter_routes(app, state) -> None:
                 "created_at": now_iso,
                 "template": template_name,
                 "template_language": language,
+                "button_base_url": button_base_url,
                 "structured_payload": structured_payload,
                 "structured_csv": structured_csv,
             },
@@ -4206,6 +4282,7 @@ def register_chatter_routes(app, state) -> None:
             "template": template_name,
             "language": language,
             "instance_id": instance_id,
+            "button_base_url": button_base_url,
             "structured_payload": structured_payload,
             "structured_csv": structured_csv,
         }
