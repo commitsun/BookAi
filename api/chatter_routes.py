@@ -531,14 +531,14 @@ def _sanitize_guest_outgoing_text(text: str) -> str:
     return "\n".join(clean_lines).strip()
 
 
-def _is_internal_hidden_message(text: str) -> bool:
+def _is_internal_hidden_message(text: str, *, hide_template_sent: bool = True) -> bool:
     content = (text or "").strip()
     if not content:
         return False
     lowered = content.lower()
     if lowered.startswith("[superintendente]"):
         return True
-    if lowered.startswith("[template_sent]"):
+    if hide_template_sent and lowered.startswith("[template_sent]"):
         return True
     if lowered.startswith("contexto de propiedad actualizado"):
         return True
@@ -1574,7 +1574,7 @@ def register_chatter_routes(app, state) -> None:
                 if (
                     not cid
                     or key in summaries
-                    or _is_internal_hidden_message(content)
+                    or _is_internal_hidden_message(content, hide_template_sent=False)
                 ):
                     continue
                 ordered_keys.append(key)
