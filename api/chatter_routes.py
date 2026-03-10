@@ -25,6 +25,10 @@ from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.language_manager import language_manager
+from core.template_structured import (
+    build_template_structured_payload,
+    extract_structured_csv,
+)
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
@@ -533,6 +537,8 @@ def _is_internal_hidden_message(text: str) -> bool:
         return False
     lowered = content.lower()
     if lowered.startswith("[superintendente]"):
+        return True
+    if lowered.startswith("[template_sent]"):
         return True
     if lowered.startswith("contexto de propiedad actualizado"):
         return True
@@ -1766,7 +1772,7 @@ def register_chatter_routes(app, state) -> None:
         offset = (page - 1) * page_size
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
-        base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
+        base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id, structured_payload"
         extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
         try:
             query = supabase.table("chat_history").select(extended_fields)
@@ -1782,7 +1788,8 @@ def register_chatter_routes(app, state) -> None:
             ).execute()
         except Exception:
             try:
-                fallback_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
+                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
+                fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
                 query = supabase.table("chat_history").select(fallback_fields)
                 if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
@@ -1795,7 +1802,8 @@ def register_chatter_routes(app, state) -> None:
                     offset + page_size - 1,
                 ).execute()
             except Exception:
-                query = supabase.table("chat_history").select(base_fields)
+                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
+                query = supabase.table("chat_history").select(fallback_base_fields)
                 if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
                 else:
@@ -1843,6 +1851,13 @@ def register_chatter_routes(app, state) -> None:
 
         items = []
         for row in rows:
+            structured_payload = row.get("structured_payload")
+            if isinstance(structured_payload, str):
+                try:
+                    structured_payload = json.loads(structured_payload)
+                except Exception:
+                    structured_payload = None
+            structured_csv = extract_structured_csv(structured_payload)
             items.append(
                 {
                     "message_id": row.get("id") or row.get("message_id"),
@@ -1858,6 +1873,8 @@ def register_chatter_routes(app, state) -> None:
                     "user_first_name": row.get("user_first_name"),
                     "user_last_name": row.get("user_last_name"),
                     "user_last_name2": row.get("user_last_name2"),
+                    "structured_payload": structured_payload,
+                    "structured_csv": structured_csv,
                 }
             )
 
@@ -3418,6 +3435,8 @@ def register_chatter_routes(app, state) -> None:
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
         chat_visible_before = False
+        structured_payload = None
+        structured_csv = None
         folio_id = None
         reservation_locator = None
         checkin = None
@@ -3659,6 +3678,19 @@ def register_chatter_routes(app, state) -> None:
                 channel="whatsapp",
                 original_chat_id=context_id or None,
             )
+            structured_payload = build_template_structured_payload(
+                template_code=template_def.code if template_def else template_code,
+                template_name=template_name,
+                language=language,
+                parameters=payload.parameters or {},
+                reservation_locator=reservation_locator,
+                folio_id=folio_id,
+                guest_name=reservation_client_name,
+                hotel_name=_extract_property_name(payload.parameters or {}),
+                checkin=checkin,
+                checkout=checkout,
+            )
+            structured_csv = extract_structured_csv(structured_payload)
             if rendered:
                 if property_id is not None:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
@@ -3668,6 +3700,7 @@ def register_chatter_routes(app, state) -> None:
                     content=rendered,
                     channel="whatsapp",
                     original_chat_id=context_id or None,
+                    structured_payload=structured_payload,
                 )
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
@@ -3779,6 +3812,8 @@ def register_chatter_routes(app, state) -> None:
                 "created_at": now_iso,
                 "template": template_name,
                 "template_language": language,
+                "structured_payload": structured_payload,
+                "structured_csv": structured_csv,
             },
         )
         await _emit(
@@ -3805,6 +3840,8 @@ def register_chatter_routes(app, state) -> None:
             "template": template_name,
             "language": language,
             "instance_id": instance_id,
+            "structured_payload": structured_payload,
+            "structured_csv": structured_csv,
         }
 
     @router.get("/chats/{chat_id}/window")

@@ -343,6 +343,7 @@ class MemoryManager:
         original_chat_id: Optional[str] = None,
         bypass_force_guest_role: bool = False,
         skip_recent_duplicate_guard: bool = False,
+        structured_payload: Optional[dict | list] = None,
     ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
@@ -476,6 +477,8 @@ class MemoryManager:
             entry["user_last_name2"] = str(user_last_name2)
         if channel_to_store:
             entry["channel"] = channel_to_store
+        if structured_payload is not None:
+            entry["structured_payload"] = structured_payload
 
         # Guardar en RAM
         self.runtime_memory.setdefault(cid, []).append(entry)
@@ -515,6 +518,7 @@ class MemoryManager:
                 channel=channel_to_store,
                 property_id=property_id,
                 original_chat_id=resolved_original or cid,
+                structured_payload=structured_payload,
                 table=self._resolve_history_table(conversation_id),
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")

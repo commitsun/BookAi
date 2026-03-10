@@ -259,7 +259,12 @@ def save_message(
             if "original_chat_id" in data:
                 data.pop("original_chat_id", None)
                 retry = True
-            if "structured_payload" in data:
+            # Solo degradar structured_payload si el error apunta a esa columna.
+            if "structured_payload" in data and "structured_payload" in err:
+                logging.warning(
+                    "⚠️ structured_payload no persistido (columna ausente/incompatible). "
+                    "Aplica ALTER TABLE ... ADD COLUMN structured_payload jsonb."
+                )
                 data.pop("structured_payload", None)
                 retry = True
             if retry:
