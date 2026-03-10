@@ -8,7 +8,7 @@ import re
 import time
 from urllib.parse import unquote
 from datetime import datetime, timezone
-from typing import Any, Dict, List, Literal, Optional, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
 from fastapi.responses import JSONResponse
@@ -17,23 +17,14 @@ from pydantic import BaseModel, Field
 from core.config import Settings, ModelConfig, ModelTier
 from core.db import supabase, is_chat_visible_in_list
 from core.escalation_db import (
-    get_escalation,
-    get_latest_escalation_for_chat,
-    get_latest_resolved_escalation_for_chat,
-    is_escalation_resolved,
     list_pending_escalations,
     list_pending_escalations_for_chat,
-    resolve_escalation_with_resolution,
     resolve_pending_escalations_for_chat,
 )
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.language_manager import language_manager
-from core.template_structured import (
-    build_template_structured_payload,
-    extract_structured_csv,
-)
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation, get_active_chat_reservation
 
@@ -109,29 +100,6 @@ class ProposedResponseRequest(BaseModel):
 
 class EscalationChatRequest(BaseModel):
     message: str = Field(..., description="Mensaje del operador hacia la IA")
-
-
-class ResolveEscalationRequest(BaseModel):
-    property_id: Optional[int | str] = Field(
-        default=None,
-        description="ID de property (numérico o string, opcional).",
-    )
-    resolution_medium: Optional[Literal["phone", "in_person", "other"]] = Field(
-        default=None,
-        description="Canal de resolución manual.",
-    )
-    resolution_notes: Optional[str] = Field(
-        default="",
-        description="Notas de resolución (puede ser vacío).",
-    )
-    resolved_by: Optional[int | str] = Field(
-        default=None,
-        description="ID del usuario que resuelve (opcional).",
-    )
-    resolved_by_name: Optional[str] = Field(
-        default=None,
-        description="Nombre visible del usuario que resuelve (opcional).",
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -360,83 +328,6 @@ def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
         return None
 
 
-def _escalation_status(escalation: Dict[str, Any]) -> str:
-    explicit = str((escalation or {}).get("status") or "").strip().lower()
-    if explicit in {"pending", "resolved"}:
-        return explicit
-    if is_escalation_resolved(escalation):
-        return "resolved"
-    return "pending"
-
-
-def _build_escalation_resolution_payload(
-    chat_id: str,
-    escalation: Dict[str, Any],
-    *,
-    fallback_property_id: Optional[str | int] = None,
-) -> Dict[str, Any]:
-    row = escalation or {}
-    notes_raw = row.get("resolution_notes")
-    if notes_raw is None:
-        notes = ""
-    elif isinstance(notes_raw, str):
-        notes = notes_raw
-    else:
-        notes = str(notes_raw)
-    resolved_by = row.get("resolved_by")
-    if resolved_by is not None and not str(resolved_by).strip():
-        resolved_by = None
-    resolved_by_name = row.get("resolved_by_name")
-    if resolved_by_name is not None and not str(resolved_by_name).strip():
-        resolved_by_name = None
-    resolved_at = row.get("resolved_at") or row.get("updated_at") or row.get("timestamp")
-    property_id = row.get("property_id")
-    if property_id is None:
-        property_id = fallback_property_id
-    return {
-        "chat_id": chat_id,
-        "escalation_id": str(row.get("escalation_id") or "").strip() or None,
-        "property_id": property_id,
-        "status": _escalation_status(row),
-        "resolved_at": resolved_at,
-        "resolution_medium": row.get("resolution_medium"),
-        "resolution_notes": notes,
-        "resolved_by": resolved_by,
-        "resolved_by_name": resolved_by_name,
-    }
-
-
-def _chat_exists_in_history(
-    chat_id: str,
-    *,
-    property_id: Optional[str | int] = None,
-    channel: str = "whatsapp",
-) -> bool:
-    decoded_id = str(chat_id or "").strip()
-    clean_id = _clean_chat_id(decoded_id) or decoded_id
-    id_candidates = {clean_id}
-    if decoded_id and decoded_id != clean_id:
-        id_candidates.add(decoded_id)
-    if ":" in decoded_id:
-        tail = decoded_id.split(":")[-1].strip()
-        tail_clean = _clean_chat_id(tail) or tail
-        if tail_clean:
-            id_candidates.add(tail_clean)
-    like_patterns = {f"%:{candidate}" for candidate in id_candidates if candidate}
-    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates if candidate]
-    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-    try:
-        query = supabase.table("chat_history").select("conversation_id").eq("channel", channel)
-        if property_id is not None:
-            query = query.eq("property_id", property_id)
-        if or_filters:
-            query = query.or_(",".join(or_filters))
-        rows = query.limit(1).execute().data or []
-        return bool(rows)
-    except Exception:
-        return False
-
-
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
     if role in {"guest", "bookai", "system", "tool"}:
@@ -642,8 +533,6 @@ def _is_internal_hidden_message(text: str) -> bool:
         return False
     lowered = content.lower()
     if lowered.startswith("[superintendente]"):
-        return True
-    if lowered.startswith("[template_sent]"):
         return True
     if lowered.startswith("contexto de propiedad actualizado"):
         return True
@@ -1446,12 +1335,7 @@ def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] 
 
     for key in dedup_keys:
         try:
-            history = memory_manager.get_memory(key, limit=40) or []
-        except TypeError:
-            try:
-                history = memory_manager.get_memory(key) or []
-            except Exception:
-                history = []
+            history = memory_manager.get_memory_as_messages(key) or []
         except Exception:
             history = []
         for msg in reversed(history):
@@ -1715,56 +1599,31 @@ def register_chatter_routes(app, state) -> None:
         pending_messages_map = _pending_messages(pending_grouped)
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
-        client_languages: Dict[str, str] = {}
-        expected_original_by_cid: Dict[str, str] = {}
         if page_keys:
             conv_ids = [
                 summaries[key].get("conversation_id")
                 for key in page_keys
                 if summaries.get(key) and summaries[key].get("conversation_id")
             ]
-            for key in page_keys:
-                summary_row = summaries.get(key) or {}
-                cid = str(summary_row.get("conversation_id") or "").strip()
-                if not cid:
-                    continue
-                expected_original_by_cid[cid] = str(summary_row.get("original_chat_id") or "").strip()
             if conv_ids:
                 try:
                     query = (
                         supabase.table("chat_history")
-                        .select("conversation_id, original_chat_id, client_name, content, created_at")
+                        .select("conversation_id, client_name, created_at")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
                         .in_("role", ["guest"])
                     )
                     if property_id is not None and not instance_id:
                         query = query.eq("property_id", property_id)
-                    resp_names = query.order("created_at", desc=True).limit(2000).execute()
+                    resp_names = query.order("created_at", desc=True).limit(500).execute()
                     for row in resp_names.data or []:
                         cid = str(row.get("conversation_id") or "").strip()
-                        if not cid:
-                            continue
-                        row_original = str(row.get("original_chat_id") or "").strip()
-                        expected_original = expected_original_by_cid.get(cid) or ""
-                        if expected_original and row_original and row_original != expected_original:
-                            continue
                         name = row.get("client_name")
                         if cid and name and cid not in client_names:
                             client_names[cid] = name
-                        if cid not in client_languages:
-                            sample = str(row.get("content") or "").strip()
-                            if not sample:
-                                continue
-                            try:
-                                # Para el listado de chats priorizamos el idioma real del último mensaje guest,
-                                # sin arrastre del idioma previo, para evitar falsos "es" en saludos tipo "hello".
-                                lang = (language_manager.detect_language(sample, prev_lang=None) or "es").strip().lower()
-                            except Exception:
-                                lang = "es"
-                            client_languages[cid] = lang
                 except Exception as exc:
-                    log.warning("No se pudo cargar client_name/client_language: %s", exc)
+                    log.warning("No se pudo cargar client_name: %s", exc)
 
         items = []
         memory_manager = getattr(state, "memory_manager", None)
@@ -1828,13 +1687,6 @@ def register_chatter_routes(app, state) -> None:
                 instance_id=instance_id,
                 default=True,
             )
-            client_language = client_languages.get(cid)
-            if not client_language:
-                context_id = str(last.get("original_chat_id") or "").strip() or None
-                try:
-                    client_language = _resolve_guest_lang_for_chat(state, cid, context_id=context_id)
-                except Exception:
-                    client_language = "es"
             items.append(
                 {
                     "chat_id": cid,
@@ -1850,7 +1702,6 @@ def register_chatter_routes(app, state) -> None:
                     "last_message_at": last.get("created_at"),
                     "avatar": None,
                     "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
-                    "client_language": client_language,
                     "client_phone": phone or cid,
                     "whatsapp_phone_number": instance_whatsapp_phone_number,
                     "bookai_enabled": bool(bookai_resolution.get("value")),
@@ -1915,7 +1766,7 @@ def register_chatter_routes(app, state) -> None:
         offset = (page - 1) * page_size
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
-        base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id, structured_payload"
+        base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
         extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
         try:
             query = supabase.table("chat_history").select(extended_fields)
@@ -1931,8 +1782,7 @@ def register_chatter_routes(app, state) -> None:
             ).execute()
         except Exception:
             try:
-                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
+                fallback_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
                 query = supabase.table("chat_history").select(fallback_fields)
                 if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
@@ -1945,8 +1795,7 @@ def register_chatter_routes(app, state) -> None:
                     offset + page_size - 1,
                 ).execute()
             except Exception:
-                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                query = supabase.table("chat_history").select(fallback_base_fields)
+                query = supabase.table("chat_history").select(base_fields)
                 if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
                 else:
@@ -1994,13 +1843,6 @@ def register_chatter_routes(app, state) -> None:
 
         items = []
         for row in rows:
-            structured_payload = row.get("structured_payload")
-            if isinstance(structured_payload, str):
-                try:
-                    structured_payload = json.loads(structured_payload)
-                except Exception:
-                    structured_payload = None
-            structured_csv = extract_structured_csv(structured_payload)
             items.append(
                 {
                     "message_id": row.get("id") or row.get("message_id"),
@@ -2016,8 +1858,6 @@ def register_chatter_routes(app, state) -> None:
                     "user_first_name": row.get("user_first_name"),
                     "user_last_name": row.get("user_last_name"),
                     "user_last_name2": row.get("user_last_name2"),
-                    "structured_payload": structured_payload,
-                    "structured_csv": structured_csv,
                 }
             )
 
@@ -2919,191 +2759,6 @@ def register_chatter_routes(app, state) -> None:
             "pending_summary": _pending_escalations_summary(pending_escalations),
         }
 
-    @router.post("/chats/{chat_id}/resolve-escalation")
-    async def resolve_escalation(
-        chat_id: str,
-        payload: ResolveEscalationRequest,
-        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
-    ):
-        clean_id = _clean_chat_id(chat_id) or chat_id
-        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
-        requested_property_id = _normalize_property_id(payload.property_id)
-        if requested_property_id is None:
-            requested_property_id = _normalize_property_id(_resolve_property_id_from_history(clean_id))
-        if requested_property_id is None and getattr(state, "memory_manager", None):
-            for mem_id in _related_memory_ids(state, clean_id) or []:
-                try:
-                    candidate = state.memory_manager.get_flag(mem_id, "property_id")
-                except Exception:
-                    candidate = None
-                if candidate is not None:
-                    requested_property_id = _normalize_property_id(candidate)
-                    break
-
-        pending_for_property = []
-        if requested_property_id is not None:
-            pending_for_property = list_pending_escalations_for_chat(
-                clean_id,
-                limit=100,
-                property_id=requested_property_id,
-            ) or []
-        pending_any = list_pending_escalations_for_chat(
-            clean_id,
-            limit=100,
-            property_id=None,
-        ) or []
-
-        target_pending = pending_for_property[-1] if pending_for_property else None
-        if target_pending is None and pending_any:
-            if requested_property_id is None:
-                target_pending = pending_any[-1]
-            else:
-                legacy_matches = [
-                    esc
-                    for esc in pending_any
-                    if _normalize_property_id((esc or {}).get("property_id")) is None
-                ]
-                if legacy_matches:
-                    target_pending = legacy_matches[-1]
-                else:
-                    raise HTTPException(status_code=422, detail="property_id no coincide con la escalación pendiente")
-
-        if target_pending is None:
-            latest_any = get_latest_escalation_for_chat(clean_id, property_id=requested_property_id)
-            if latest_any and is_escalation_resolved(latest_any):
-                raise HTTPException(status_code=409, detail="La escalación ya está resuelta")
-            if _chat_exists_in_history(clean_id, property_id=requested_property_id, channel="whatsapp"):
-                raise HTTPException(status_code=404, detail="No hay escalación pendiente")
-            raise HTTPException(status_code=404, detail="Chat no encontrado")
-
-        escalation_id = str((target_pending or {}).get("escalation_id") or "").strip()
-        if not escalation_id:
-            raise HTTPException(status_code=404, detail="Escalación inválida")
-
-        current = get_escalation(escalation_id) or target_pending
-        if is_escalation_resolved(current):
-            raise HTTPException(status_code=409, detail="La escalación ya está resuelta")
-
-        resolved_by = None
-        if payload.resolved_by is not None and str(payload.resolved_by).strip():
-            resolved_by = str(payload.resolved_by).strip()
-        resolved_by_name = str(payload.resolved_by_name or "").strip() or None
-        resolved_at = datetime.now(timezone.utc).isoformat()
-        resolution_notes = payload.resolution_notes if payload.resolution_notes is not None else ""
-
-        updated = resolve_escalation_with_resolution(
-            escalation_id,
-            property_id=requested_property_id if requested_property_id is not None else target_pending.get("property_id"),
-            resolution_medium=payload.resolution_medium,
-            resolution_notes=resolution_notes,
-            resolved_at=resolved_at,
-            resolved_by=resolved_by,
-            resolved_by_name=resolved_by_name,
-        )
-        if not updated:
-            raise HTTPException(status_code=500, detail="No se pudo resolver la escalación")
-        if not is_escalation_resolved(updated):
-            raise HTTPException(status_code=500, detail="No se pudo confirmar la resolución de la escalación")
-
-        resolved_property_id = _normalize_property_id(updated.get("property_id"))
-        if resolved_property_id is None:
-            resolved_property_id = requested_property_id
-        if resolved_property_id is None:
-            resolved_property_id = _normalize_property_id((target_pending or {}).get("property_id"))
-
-        if getattr(state, "memory_manager", None):
-            related_ids = _related_memory_ids(state, clean_id) or []
-            if clean_id not in related_ids:
-                related_ids.append(clean_id)
-            for mem_id in related_ids:
-                try:
-                    state.memory_manager.clear_flag(mem_id, "escalation_in_progress")
-                    state.memory_manager.clear_flag(mem_id, "last_escalation_followup_message")
-                    state.memory_manager.clear_flag(mem_id, "escalation_confirmation_pending")
-                    if resolved_property_id is not None:
-                        state.memory_manager.set_flag(mem_id, "property_id", resolved_property_id)
-                except Exception:
-                    continue
-
-        rooms = _rooms(clean_id, resolved_property_id, "whatsapp")
-        resolution_payload = _build_escalation_resolution_payload(
-            clean_id,
-            updated,
-            fallback_property_id=resolved_property_id,
-        )
-
-        await _emit(
-            "escalation.resolved",
-            {
-                "event": "escalation.resolved",
-                "rooms": rooms,
-                **resolution_payload,
-            },
-        )
-        await _emit(
-            "chat.updated",
-            {
-                "rooms": rooms,
-                "chat_id": clean_id,
-                "property_id": resolved_property_id,
-                "channel": "whatsapp",
-                **_pending_snapshot_for_chat(
-                    clean_id,
-                    resolved_property_id,
-                    instance_id=instance_id,
-                    memory_manager=getattr(state, "memory_manager", None),
-                ),
-                "escalation_resolution": resolution_payload,
-            },
-        )
-
-        return resolution_payload
-
-    @router.get("/chats/{chat_id}/escalation-resolution")
-    async def get_escalation_resolution(
-        chat_id: str,
-        property_id: Optional[str] = Query(default=None),
-        _: None = Depends(_verify_bearer),
-    ):
-        clean_id = _clean_chat_id(chat_id) or chat_id
-        resolved_property_id = _normalize_property_id(property_id)
-        if resolved_property_id is None:
-            resolved_property_id = _normalize_property_id(_resolve_property_id_from_history(clean_id))
-        if resolved_property_id is None and getattr(state, "memory_manager", None):
-            for mem_id in _related_memory_ids(state, clean_id) or []:
-                try:
-                    candidate = state.memory_manager.get_flag(mem_id, "property_id")
-                except Exception:
-                    candidate = None
-                if candidate is not None:
-                    resolved_property_id = _normalize_property_id(candidate)
-                    break
-
-        latest = get_latest_resolved_escalation_for_chat(clean_id, property_id=resolved_property_id)
-        if not latest and resolved_property_id is not None:
-            # Compatibilidad para escalaciones legacy con property_id NULL.
-            latest = get_latest_resolved_escalation_for_chat(clean_id, property_id=None)
-        latest_any = get_latest_escalation_for_chat(clean_id, property_id=resolved_property_id)
-        if not latest_any and resolved_property_id is not None:
-            latest_any = get_latest_escalation_for_chat(clean_id, property_id=None)
-        if not latest:
-            if _chat_exists_in_history(clean_id, property_id=resolved_property_id, channel="whatsapp"):
-                raise HTTPException(status_code=404, detail="No hay resolución de escalación")
-            raise HTTPException(status_code=404, detail="Chat no encontrado")
-        if latest_any and not is_escalation_resolved(latest_any):
-            latest_any_id = str((latest_any or {}).get("escalation_id") or "").strip()
-            latest_resolved_id = str((latest or {}).get("escalation_id") or "").strip()
-            if latest_any_id and latest_any_id != latest_resolved_id:
-                raise HTTPException(status_code=404, detail="No hay resolución de escalación")
-        if not is_escalation_resolved(latest):
-            raise HTTPException(status_code=404, detail="No hay resolución de escalación")
-
-        return _build_escalation_resolution_payload(
-            clean_id,
-            latest,
-            fallback_property_id=resolved_property_id,
-        )
-
     @router.patch("/chats/{chat_id}/bookai")
     async def toggle_bookai(
         chat_id: str,
@@ -3763,8 +3418,6 @@ def register_chatter_routes(app, state) -> None:
         context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
         session_id = context_id or chat_id
         chat_visible_before = False
-        structured_payload = None
-        structured_csv = None
         folio_id = None
         reservation_locator = None
         checkin = None
@@ -4006,19 +3659,6 @@ def register_chatter_routes(app, state) -> None:
                 channel="whatsapp",
                 original_chat_id=context_id or None,
             )
-            structured_payload = build_template_structured_payload(
-                template_code=template_def.code if template_def else template_code,
-                template_name=template_name,
-                language=language,
-                parameters=payload.parameters or {},
-                reservation_locator=reservation_locator,
-                folio_id=folio_id,
-                guest_name=reservation_client_name,
-                hotel_name=_extract_property_name(payload.parameters or {}),
-                checkin=checkin,
-                checkout=checkout,
-            )
-            structured_csv = extract_structured_csv(structured_payload)
             if rendered:
                 if property_id is not None:
                     state.memory_manager.set_flag(chat_id, "property_id", property_id)
@@ -4028,7 +3668,6 @@ def register_chatter_routes(app, state) -> None:
                     content=rendered,
                     channel="whatsapp",
                     original_chat_id=context_id or None,
-                    structured_payload=structured_payload,
                 )
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
@@ -4140,8 +3779,6 @@ def register_chatter_routes(app, state) -> None:
                 "created_at": now_iso,
                 "template": template_name,
                 "template_language": language,
-                "structured_payload": structured_payload,
-                "structured_csv": structured_csv,
             },
         )
         await _emit(
@@ -4168,8 +3805,6 @@ def register_chatter_routes(app, state) -> None:
             "template": template_name,
             "language": language,
             "instance_id": instance_id,
-            "structured_payload": structured_payload,
-            "structured_csv": structured_csv,
         }
 
     @router.get("/chats/{chat_id}/window")

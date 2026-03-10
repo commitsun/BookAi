@@ -26,10 +26,6 @@ from core.db import is_chat_visible_in_list, supabase
 from core.template_registry import TemplateRegistry
 from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
-from core.template_structured import (
-    build_template_structured_payload,
-    extract_structured_csv,
-)
 from tools.superintendente_tool import create_consulta_reserva_persona_tool
 from core.db import upsert_chat_reservation
 
@@ -842,8 +838,6 @@ def register_template_routes(app, state) -> None:
             session_id = context_id or chat_id
             chat_visible_before = False
             rendered = None
-            structured_payload = None
-            structured_csv = None
             log.info(
                 "[TEMPLATE_SEND] request chat_id=%s property_id=%s instance_id=%s context_id=%s session_id=%s template=%s",
                 chat_id,
@@ -955,7 +949,6 @@ def register_template_routes(app, state) -> None:
                     log.warning("No se pudo persistir reserva en tabla: %s", exc)
 
             outbound_parameters = parameters
-            button_url_value = None
             if template_def:
                 url_button_indexes = _extract_url_button_indexes(template_def.components)
                 # Fallback: algunas tablas legacy no guardan `components` en Supabase.
@@ -967,6 +960,7 @@ def register_template_routes(app, state) -> None:
                     and reservation_locator
                 ):
                     url_button_indexes = [0]
+                button_url_value = None
                 if folio_details_url_raw:
                     base_url = _sanitize_base_url(folio_base_url_raw)
                     button_url_value = _to_folio_dynamic_part(folio_details_url_raw, base_url)
@@ -1103,27 +1097,6 @@ def register_template_routes(app, state) -> None:
                     channel="whatsapp",
                     original_chat_id=context_id or None,
                 )
-                resolved_cta_url = _build_folio_details_url(
-                    _sanitize_base_url(folio_base_url_raw),
-                    folio_details_url_raw,
-                )
-                cta_action = "open_url" if resolved_cta_url else None
-                structured_payload = build_template_structured_payload(
-                    template_code=template_def.code if template_def else template_code,
-                    template_name=wa_template,
-                    language=language,
-                    parameters=payload.template.parameters or {},
-                    reservation_locator=reservation_locator,
-                    folio_id=folio_id,
-                    guest_name=reservation_client_name or (payload.recipient.display_name or "").strip() or None,
-                    hotel_name=payload.source.hotel.name or property_code,
-                    checkin=checkin,
-                    checkout=checkout,
-                    cta_action=cta_action,
-                    cta_url=resolved_cta_url,
-                    trigger=(payload.meta.trigger if payload.meta else None),
-                )
-                structured_csv = extract_structured_csv(structured_payload)
                 log.info(
                     "[TEMPLATE_SEND] visibility.before chat_id=%s property_id=%s channel=whatsapp original_chat_id=%s visible=%s",
                     chat_id,
@@ -1140,7 +1113,6 @@ def register_template_routes(app, state) -> None:
                         content=rendered,
                         channel="whatsapp",
                         original_chat_id=context_id or None,
-                        structured_payload=structured_payload,
                     )
                 meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
                 source_tag = instance_id or payload.source.instance_url or property_code
@@ -1292,8 +1264,6 @@ def register_template_routes(app, state) -> None:
                     "created_at": now_iso,
                     "template": wa_template,
                     "template_language": language,
-                    "structured_payload": structured_payload,
-                    "structured_csv": structured_csv,
                 },
             )
             log.info(
@@ -1332,8 +1302,6 @@ def register_template_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "instance_id": instance_id,
                 "language": language,
-                "structured_payload": structured_payload,
-                "structured_csv": structured_csv,
             }
         except HTTPException:
             raise
