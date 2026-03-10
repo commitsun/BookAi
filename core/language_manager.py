@@ -338,6 +338,12 @@ class LanguageManager:
         if normalized in _ack_tokens():
             return base_lang
 
+        # Saludos cortos explícitos (hola/hello/hi/...) deben prevalecer
+        # sobre el idioma previo para evitar arrastre entre turnos.
+        direct_short = _short_greeting_lang(text)
+        if direct_short:
+            return direct_short
+
         # Si ya hay idioma previo, no lo cambies por mensajes "de dato corto"
         # (cantidades, fechas, respuestas telegráficas típicas de reservas).
         if prev_lang and _is_low_information_followup(text):
@@ -346,9 +352,6 @@ class LanguageManager:
         # Mensajes de una sola palabra y cortos (saludos/acuses)
         words = text.split()
         if len(words) == 1 and len(text) <= 10:
-            direct = _short_greeting_lang(text)
-            if direct:
-                return direct
             guess = _langdetect_guess(text)
             if guess:
                 code, prob = guess
