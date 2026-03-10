@@ -1463,7 +1463,7 @@ def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] 
             if not sample:
                 continue
             try:
-                return (language_manager.detect_language(sample, prev_lang="es") or "es").strip().lower()
+                return (language_manager.detect_language(sample, prev_lang=None) or "es").strip().lower()
             except Exception:
                 return "es"
 
@@ -1731,17 +1731,45 @@ def register_chatter_routes(app, state) -> None:
                 expected_original_by_cid[cid] = str(summary_row.get("original_chat_id") or "").strip()
             if conv_ids:
                 try:
-                    query = (
+                    base_query = (
                         supabase.table("chat_history")
                         .select("conversation_id, original_chat_id, client_name, content, created_at")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
                         .in_("role", ["guest"])
                     )
+                    resp_names_rows: List[Dict[str, Any]] = []
                     if property_id is not None and not instance_id:
-                        query = query.eq("property_id", property_id)
-                    resp_names = query.order("created_at", desc=True).limit(2000).execute()
-                    for row in resp_names.data or []:
+                        resp_with_property = (
+                            base_query
+                            .eq("property_id", property_id)
+                            .order("created_at", desc=True)
+                            .limit(2000)
+                            .execute()
+                        )
+                        resp_names_rows = resp_with_property.data or []
+                        # Compatibilidad: algunos mensajes guest legacy no tienen property_id.
+                        if not resp_names_rows:
+                            resp_without_property = (
+                                supabase.table("chat_history")
+                                .select("conversation_id, original_chat_id, client_name, content, created_at")
+                                .in_("conversation_id", conv_ids)
+                                .eq("channel", channel)
+                                .in_("role", ["guest"])
+                                .order("created_at", desc=True)
+                                .limit(2000)
+                                .execute()
+                            )
+                            resp_names_rows = resp_without_property.data or []
+                    else:
+                        resp_without_property = (
+                            base_query
+                            .order("created_at", desc=True)
+                            .limit(2000)
+                            .execute()
+                        )
+                        resp_names_rows = resp_without_property.data or []
+                    for row in resp_names_rows:
                         cid = str(row.get("conversation_id") or "").strip()
                         if not cid:
                             continue
@@ -1828,7 +1856,17 @@ def register_chatter_routes(app, state) -> None:
                 instance_id=instance_id,
                 default=True,
             )
-            client_language = client_languages.get(cid)
+            client_language = None
+            last_message_text = str(last.get("content") or "").strip()
+            if last_message_text:
+                try:
+                    client_language = (
+                        language_manager.detect_language(last_message_text, prev_lang=None) or "es"
+                    ).strip().lower()
+                except Exception:
+                    client_language = None
+            if not client_language:
+                client_language = client_languages.get(cid)
             if not client_language:
                 context_id = str(last.get("original_chat_id") or "").strip() or None
                 try:
