@@ -2593,12 +2593,13 @@ class MainAgent:
                     )
 
                 self.memory_manager.save(chat_id, "user", user_input)
-                self.memory_manager.save(chat_id, "assistant", response)
+                final_response = self._localize(chat_id, response)
+                self.memory_manager.save(chat_id, "assistant", final_response)
 
                 self.memory_manager.clear_flag(chat_id, "inciso_enviado")
                 self.memory_manager.clear_flag(chat_id, "consulta_base_realizada")
 
-                return response
+                return final_response
 
             except Exception as e:
                 log.error(f"❌ Error en MainAgent ({chat_id}): {e}", exc_info=True)
