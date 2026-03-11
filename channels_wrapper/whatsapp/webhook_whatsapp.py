@@ -96,7 +96,7 @@ def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | Non
         log.debug("No se pudo enviar read receipt: %s", exc)
 
 
-def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | None:
+def _resolve_property_id_fallback(memory_id: str, sender_phone_id: str) -> str | int | None:
     """Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook."""
     try:
         from core.db import supabase
@@ -105,7 +105,7 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
         return None
 
     raw_memory = str(memory_id or "").strip()
-    raw_sender = str(sender or "").strip()
+    raw_sender = str(sender_phone_id or "").strip()
     clean_sender = re.sub(r"\D", "", raw_sender).strip()
 
     # 1) Preferir contexto compuesto exacto (original_chat_id = instancia:telefono)
@@ -199,22 +199,80 @@ def register_whatsapp_routes(app, state):
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
             msg = value.get("messages", [{}])[0]
             metadata = value.get("metadata", {}) or {}
-            contacts = value.get("contacts", [])
-            profile = contacts[0].get("profile", {}) if contacts else {}
+            contacts_raw = value.get("contacts", [])
+            contacts = contacts_raw if isinstance(contacts_raw, list) else []
+            message_from = str(msg.get("from") or "").strip()
+            profile: dict = {}
+            sender_source = "missing"
+            sender_phone_id = ""
+
+            # En payloads de Meta el remitente canónico llega en contacts[].wa_id.
+            if message_from:
+                for contact in contacts:
+                    if not isinstance(contact, dict):
+                        continue
+                    wa_id = str(contact.get("wa_id") or "").strip()
+                    if wa_id and wa_id == message_from:
+                        sender_phone_id = wa_id
+                        sender_source = "contacts.wa_id"
+                        candidate_profile = contact.get("profile")
+                        if isinstance(candidate_profile, dict):
+                            profile = candidate_profile
+                        break
+            if not sender_phone_id:
+                for contact in contacts:
+                    if not isinstance(contact, dict):
+                        continue
+                    wa_id = str(contact.get("wa_id") or "").strip()
+                    if wa_id:
+                        sender_phone_id = wa_id
+                        sender_source = "contacts.wa_id"
+                        candidate_profile = contact.get("profile")
+                        if isinstance(candidate_profile, dict):
+                            profile = candidate_profile
+                        break
+            if not sender_phone_id and message_from:
+                sender_phone_id = message_from
+                sender_source = "messages.from_fallback"
+
+            if not profile and contacts and isinstance(contacts[0], dict):
+                candidate_profile = contacts[0].get("profile")
+                if isinstance(candidate_profile, dict):
+                    profile = candidate_profile
+
             client_name = profile.get("name")
-            sender = msg.get("from")
-            msg_type = msg.get("type")
+            msg_type = str(msg.get("type") or "").strip()
             msg_id = msg.get("id")
 
             text = ""
-            instance_number = metadata.get("display_phone_number") or ""
-            normalized_instance_number = re.sub(r"\D", "", str(instance_number or "")).strip() or instance_number
-            instance_phone_id = metadata.get("phone_number_id") or ""
-            memory_id = f"{normalized_instance_number}:{sender}" if normalized_instance_number and sender else sender
+            unsupported_message_type = ""
+            instance_display_phone_number = metadata.get("display_phone_number") or ""
+            normalized_instance_number = (
+                re.sub(r"\D", "", str(instance_display_phone_number or "")).strip()
+                or str(instance_display_phone_number or "").strip()
+            )
+            instance_phone_id = str(metadata.get("phone_number_id") or "").strip()
+            instance_context_key = normalized_instance_number or instance_phone_id
+            memory_id = (
+                f"{instance_context_key}:{sender_phone_id}"
+                if instance_context_key and sender_phone_id
+                else sender_phone_id
+            )
             instance_token = None
-            if sender and instance_number:
+            log.info(
+                "[WA_WEBHOOK] msg_id=%s type=%s sender_source=%s sender_phone_id=%s display_phone_number=%s phone_number_id=%s",
+                msg_id or "",
+                msg_type or "unknown",
+                sender_source,
+                sender_phone_id or "",
+                normalized_instance_number or "",
+                instance_phone_id or "",
+            )
+
+            # display_phone_number se mantiene para contexto de instancia; si falta, usamos phone_number_id.
+            if sender_phone_id and (normalized_instance_number or instance_phone_id):
                 try:
-                    from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
+                    from core.instance_context import hydrate_dynamic_context
 
                     # Guarda identificadores crudos para fallback posterior.
                     if state.memory_manager:
@@ -226,35 +284,27 @@ def register_whatsapp_routes(app, state):
                     hydrate_dynamic_context(
                         state=state,
                         chat_id=memory_id,
-                        instance_number=normalized_instance_number,
+                        instance_number=normalized_instance_number or None,
                         instance_phone_id=instance_phone_id or None,
                     )
-                    # Fallback duro: si no quedó instance_id, resolver directo por phone_id.
+                    mm = state.memory_manager
+                    if mm:
+                        resolved_instance_id = (
+                            mm.get_flag(memory_id, "instance_id")
+                            or mm.get_flag(memory_id, "instance_hotel_code")
+                        )
+                        if not resolved_instance_id:
+                            log.info(
+                                "[WA_WEBHOOK] contexto de instancia no resuelto via hydrate; se mantiene metadata directa (phone_number_id=%s, display_phone_number=%s)",
+                                instance_phone_id or "",
+                                normalized_instance_number or "",
+                            )
+                        instance_phone_id = str(mm.get_flag(memory_id, "whatsapp_phone_id") or instance_phone_id or "").strip()
+                        instance_token = mm.get_flag(memory_id, "whatsapp_token")
                     if instance_phone_id:
-                        mm = state.memory_manager
-                        if mm and not (mm.get_flag(memory_id, "instance_id") or mm.get_flag(memory_id, "instance_hotel_code")):
-                            payload = fetch_instance_by_phone_id(instance_phone_id)
-                            if payload:
-                                inst_id = payload.get("instance_id") or payload.get("instance_url")
-                                if inst_id:
-                                    mm.set_flag(memory_id, "instance_id", inst_id)
-                                    mm.set_flag(memory_id, "instance_hotel_code", inst_id)
-                                inst_url = payload.get("instance_url")
-                                if inst_url:
-                                    mm.set_flag(memory_id, "instance_url", inst_url)
-                                table = _resolve_property_table(payload)
-                                if table:
-                                    mm.set_flag(memory_id, "property_table", table)
-                                for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
-                                    val = payload.get(key)
-                                    if val:
-                                        mm.set_flag(memory_id, key, val)
-                    instance_phone_id = state.memory_manager.get_flag(memory_id, "whatsapp_phone_id")
-                    instance_token = state.memory_manager.get_flag(memory_id, "whatsapp_token")
-                    if instance_phone_id:
-                        state.memory_manager.set_flag(sender, "whatsapp_phone_id", instance_phone_id)
+                        state.memory_manager.set_flag(sender_phone_id, "whatsapp_phone_id", instance_phone_id)
                     if instance_token:
-                        state.memory_manager.set_flag(sender, "whatsapp_token", instance_token)
+                        state.memory_manager.set_flag(sender_phone_id, "whatsapp_token", instance_token)
                 except Exception as exc:
                     log.warning("No se pudo hidratar contexto en webhook: %s", exc)
 
@@ -281,20 +331,43 @@ def register_whatsapp_routes(app, state):
                     openai_key = os.getenv("OPENAI_API_KEY", "")
                     text = transcribe_audio(media_id, whatsapp_token, openai_key)
                     log.info("📝 Transcripción completada: %s", text)
+            else:
+                unsupported_message_type = msg_type or "unknown"
+                unsupported_message_labels = {
+                    "image": "una imagen",
+                    "video": "un video",
+                    "document": "un documento",
+                    "sticker": "un sticker",
+                    "location": "una ubicación",
+                    "contacts": "contactos",
+                    "interactive": "un mensaje interactivo",
+                    "button": "una respuesta de botón",
+                    "reaction": "una reacción",
+                }
+                human_label = unsupported_message_labels.get(
+                    unsupported_message_type,
+                    f"un mensaje de tipo {unsupported_message_type}",
+                )
+                text = f"El huésped envió {human_label}."
+                log.info(
+                    "📎 Mensaje WhatsApp no soportado funcionalmente: type=%s sender=%s (se registra nota).",
+                    unsupported_message_type,
+                    sender_phone_id or "",
+                )
 
-            if not sender or not text:
+            if not sender_phone_id or not text:
                 return JSONResponse({"status": "ignored"})
 
-            log.info("💬 WhatsApp %s: %s", sender, text)
+            log.info("💬 WhatsApp %s: %s", sender_phone_id, text)
             chat_visible_before = False
             if client_name:
                 state.memory_manager.set_flag(memory_id, "client_name", client_name)
-            state.memory_manager.set_flag(memory_id, "guest_number", sender)
+            state.memory_manager.set_flag(memory_id, "guest_number", sender_phone_id)
             state.memory_manager.set_flag(memory_id, "force_guest_role", True)
-            if sender and sender != memory_id:
-                state.memory_manager.set_flag(sender, "force_guest_role", True)
+            if sender_phone_id and sender_phone_id != memory_id:
+                state.memory_manager.set_flag(sender_phone_id, "force_guest_role", True)
                 # Alias para que el chatter pueda ubicar el memory_id compuesto.
-                state.memory_manager.set_flag(sender, "last_memory_id", memory_id)
+                state.memory_manager.set_flag(sender_phone_id, "last_memory_id", memory_id)
 
             try:
                 property_id = state.memory_manager.get_flag(memory_id, "property_id")
@@ -322,27 +395,31 @@ def register_whatsapp_routes(app, state):
                             property_id = next(iter(prop_ids))
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
                 if property_id is None:
-                    property_id = _resolve_property_id_fallback(memory_id, sender)
+                    property_id = _resolve_property_id_fallback(memory_id, sender_phone_id)
                     if property_id is not None:
                         state.memory_manager.set_flag(memory_id, "property_id", property_id)
                 # Limpiar cualquier property_id heredado del sender global para evitar mezcla.
-                if sender:
-                    state.memory_manager.clear_flag(sender, "property_id")
+                if sender_phone_id:
+                    state.memory_manager.clear_flag(sender_phone_id, "property_id")
                 for key in ("folio_id", "checkin", "checkout"):
                     if state.memory_manager.get_flag(memory_id, key) is None:
-                        val = state.memory_manager.get_flag(sender, key)
+                        val = state.memory_manager.get_flag(sender_phone_id, key)
                         if val is not None:
                             state.memory_manager.set_flag(memory_id, key, val)
             except Exception:
                 property_id = None
-            if property_id is not None and sender:
+            if property_id is not None and sender_phone_id:
                 try:
-                    state.memory_manager.set_flag(sender, "property_id", property_id)
+                    state.memory_manager.set_flag(sender_phone_id, "property_id", property_id)
                 except Exception:
                     pass
-            clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
-            context_id = str(memory_id or sender or "").strip()
-            clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            clean_sender = re.sub(r"\D", "", str(sender_phone_id or "")).strip() or str(sender_phone_id or "")
+            context_id = str(memory_id or sender_phone_id or "").strip()
+            clean_chat_id = (
+                re.sub(r"\D", "", str(sender_phone_id or "")).strip()
+                or str(sender_phone_id or "").strip()
+                or context_id
+            )
             chat_visible_before = is_chat_visible_in_list(
                 clean_chat_id,
                 property_id=property_id,
@@ -352,11 +429,147 @@ def register_whatsapp_routes(app, state):
             socket_mgr = getattr(state, "socket_manager", None)
             bookai_enabled = _resolve_bookai_enabled(
                 state,
-                chat_id=str(sender or ""),
+                chat_id=str(sender_phone_id or ""),
                 mem_id=str(memory_id or ""),
                 clean_id=clean_sender,
                 property_id=property_id,
             )
+
+            def _resolve_property_id_with_fallback(current_property_id):
+                resolved_property_id = current_property_id
+                if resolved_property_id is None:
+                    try:
+                        resolved_property_id = state.memory_manager.get_flag(memory_id, "property_id")
+                    except Exception:
+                        resolved_property_id = None
+                if resolved_property_id is None:
+                    try:
+                        resolved_property_id = _resolve_property_id_fallback(memory_id, sender_phone_id)
+                        if resolved_property_id is not None:
+                            state.memory_manager.set_flag(memory_id, "property_id", resolved_property_id)
+                    except Exception:
+                        resolved_property_id = None
+                return resolved_property_id
+
+            def _build_chat_list_chat_payload(
+                *,
+                property_id_value,
+                now_iso: str,
+                bookai_enabled_value: bool,
+            ) -> dict:
+                return {
+                    "chat_id": clean_chat_id,
+                    "property_id": property_id_value,
+                    "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
+                    "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
+                    "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
+                    "checkin": state.memory_manager.get_flag(memory_id, "checkin"),
+                    "checkout": state.memory_manager.get_flag(memory_id, "checkout"),
+                    "channel": "whatsapp",
+                    "last_message": text,
+                    "last_message_at": now_iso,
+                    "avatar": None,
+                    "client_name": client_name,
+                    "client_phone": clean_chat_id,
+                    "whatsapp_phone_number": normalized_instance_number or None,
+                    "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                    "bookai_enabled": bool(bookai_enabled_value),
+                    "unread_count": 1,
+                    "needs_action": None,
+                    "needs_action_type": None,
+                    "needs_action_reason": None,
+                    "proposed_response": None,
+                    "is_final_response": False,
+                    "escalation_messages": None,
+                    "folio_id": state.memory_manager.get_flag(memory_id, "folio_id"),
+                }
+
+            def _build_pending_chat_list_updated_payload(*, bookai_enabled_value: bool) -> dict:
+                return {
+                    "property_id": None,
+                    "action": "created",
+                    "_original_chat_id": context_id,
+                    "chat": _build_chat_list_chat_payload(
+                        property_id_value=None,
+                        now_iso=datetime.now(timezone.utc).isoformat(),
+                        bookai_enabled_value=bookai_enabled_value,
+                    ),
+                }
+
+            def _build_incoming_message_payload(*, property_id_value, now_iso: str) -> dict:
+                return {
+                    "chat_id": clean_chat_id,
+                    "guest_chat_id": clean_chat_id,
+                    "context_id": context_id,
+                    "property_id": property_id_value,
+                    "channel": "whatsapp",
+                    "sender": "guest",
+                    "message": text,
+                    "created_at": now_iso,
+                    "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                }
+
+            async def _emit_chat_list_updated_if_needed(
+                *,
+                property_id_value,
+                now_iso: str,
+                bookai_enabled_value: bool,
+                require_visibility_after_check: bool,
+            ) -> None:
+                if property_id_value is None or chat_visible_before:
+                    return
+                if require_visibility_after_check:
+                    chat_visible_after = is_chat_visible_in_list(
+                        clean_chat_id,
+                        property_id=property_id_value,
+                        channel="whatsapp",
+                        original_chat_id=context_id,
+                    )
+                    if not chat_visible_after:
+                        return
+                await socket_mgr.emit(
+                    "chat.list.updated",
+                    {
+                        "property_id": property_id_value,
+                        "action": "created",
+                        "chat": _build_chat_list_chat_payload(
+                            property_id_value=property_id_value,
+                            now_iso=now_iso,
+                            bookai_enabled_value=bookai_enabled_value,
+                        ),
+                    },
+                    rooms=f"property:{property_id_value}",
+                    instance_id=instance_id,
+                )
+
+            async def _emit_incoming_message_events(*, rooms, property_id_value, now_iso: str) -> None:
+                incoming_message_payload = _build_incoming_message_payload(
+                    property_id_value=property_id_value,
+                    now_iso=now_iso,
+                )
+                await socket_mgr.emit(
+                    "chat.message.created",
+                    incoming_message_payload,
+                    rooms=rooms,
+                )
+                await socket_mgr.emit(
+                    "chat.message.new",
+                    incoming_message_payload,
+                    rooms=rooms,
+                )
+                await socket_mgr.emit(
+                    "chat.updated",
+                    {
+                        "chat_id": clean_chat_id,
+                        "guest_chat_id": clean_chat_id,
+                        "context_id": context_id,
+                        "property_id": property_id_value,
+                        "channel": "whatsapp",
+                        "last_message": text,
+                        "last_message_at": now_iso,
+                    },
+                    rooms=rooms,
+                )
             if bookai_enabled is False:
                 try:
                     if property_id is not None:
@@ -368,15 +581,7 @@ def register_whatsapp_routes(app, state):
                         channel="whatsapp",
                         original_chat_id=memory_id,
                     )
-                    if property_id is None:
-                        try:
-                            property_id = state.memory_manager.get_flag(memory_id, "property_id")
-                        except Exception:
-                            property_id = None
-                    if property_id is None:
-                        property_id = _resolve_property_id_fallback(memory_id, sender)
-                        if property_id is not None:
-                            state.memory_manager.set_flag(memory_id, "property_id", property_id)
+                    property_id = _resolve_property_id_with_fallback(property_id)
                     if property_id is not None and not chat_visible_before:
                         chat_visible_before = is_chat_visible_in_list(
                             clean_chat_id,
@@ -404,129 +609,28 @@ def register_whatsapp_routes(app, state):
                             state.memory_manager.set_flag(
                                 memory_id,
                                 "pending_property_room_chat_list_updated",
-                                {
-                                "property_id": None,
-                                "action": "created",
-                                "_original_chat_id": context_id,
-                                "chat": {
-                                        "chat_id": clean_chat_id,
-                                        "property_id": None,
-                                        "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
-                                        "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
-                                        "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
-                                        "checkin": state.memory_manager.get_flag(memory_id, "checkin"),
-                                        "checkout": state.memory_manager.get_flag(memory_id, "checkout"),
-                                        "channel": "whatsapp",
-                                        "last_message": text,
-                                        "last_message_at": datetime.now(timezone.utc).isoformat(),
-                                        "avatar": None,
-                                        "client_name": client_name,
-                                        "client_phone": clean_chat_id,
-                                        "whatsapp_phone_number": normalized_instance_number or None,
-                                        "whatsapp_window": _build_active_whatsapp_window(),
-                                        "bookai_enabled": False,
-                                        "unread_count": 1,
-                                        "needs_action": None,
-                                        "needs_action_type": None,
-                                        "needs_action_reason": None,
-                                        "proposed_response": None,
-                                        "is_final_response": False,
-                                        "escalation_messages": None,
-                                        "folio_id": state.memory_manager.get_flag(memory_id, "folio_id"),
-                                    },
-                                },
+                                _build_pending_chat_list_updated_payload(bookai_enabled_value=False),
                             )
                             log.info("[chat.list.updated] deferred — property_id not yet resolved for %s", clean_chat_id)
                 except Exception as exc:
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
                 try:
                     if socket_mgr and getattr(socket_mgr, "enabled", False):
-                        rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
+                        rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender_phone_id, clean_chat_id)]
                         if property_id is not None:
                             rooms.append(f"property:{property_id}")
                         rooms.append("channel:whatsapp")
                         now_iso = datetime.now(timezone.utc).isoformat()
-                        chat_visible_after = is_chat_visible_in_list(
-                            clean_chat_id,
-                            property_id=property_id,
-                            channel="whatsapp",
-                            original_chat_id=context_id,
+                        await _emit_chat_list_updated_if_needed(
+                            property_id_value=property_id,
+                            now_iso=now_iso,
+                            bookai_enabled_value=False,
+                            require_visibility_after_check=True,
                         )
-                        if property_id is not None and not chat_visible_before and chat_visible_after:
-                            folio_id = state.memory_manager.get_flag(memory_id, "folio_id")
-                            reservation_locator = state.memory_manager.get_flag(memory_id, "reservation_locator")
-                            checkin = state.memory_manager.get_flag(memory_id, "checkin")
-                            checkout = state.memory_manager.get_flag(memory_id, "checkout")
-                            reservation_status = state.memory_manager.get_flag(memory_id, "reservation_status")
-                            room_number = state.memory_manager.get_flag(memory_id, "room_number")
-                            await socket_mgr.emit(
-                                "chat.list.updated",
-                                {
-                                    "property_id": property_id,
-                                    "action": "created",
-                                    "chat": {
-                                        "chat_id": clean_chat_id,
-                                        "property_id": property_id,
-                                        "reservation_locator": reservation_locator,
-                                        "reservation_status": reservation_status,
-                                        "room_number": room_number,
-                                        "checkin": checkin,
-                                        "checkout": checkout,
-                                        "channel": "whatsapp",
-                                        "last_message": text,
-                                        "last_message_at": now_iso,
-                                        "avatar": None,
-                                        "client_name": client_name,
-                                        "client_phone": clean_chat_id,
-                                        "whatsapp_phone_number": normalized_instance_number or None,
-                                        "whatsapp_window": _build_active_whatsapp_window(now_iso),
-                                        "bookai_enabled": False,
-                                        "unread_count": 1,
-                                        "needs_action": None,
-                                        "needs_action_type": None,
-                                        "needs_action_reason": None,
-                                        "proposed_response": None,
-                                        "is_final_response": False,
-                                        "escalation_messages": None,
-                                        "folio_id": folio_id,
-                                    },
-                                },
-                                rooms=f"property:{property_id}",
-                                instance_id=instance_id,
-                            )
-                        incoming_message_payload = {
-                            "chat_id": clean_chat_id,
-                            "guest_chat_id": clean_chat_id,
-                            "context_id": context_id,
-                            "property_id": property_id,
-                            "channel": "whatsapp",
-                            "sender": "guest",
-                            "message": text,
-                            "created_at": now_iso,
-                            "whatsapp_window": _build_active_whatsapp_window(now_iso),
-                        }
-                        await socket_mgr.emit(
-                            "chat.message.created",
-                            incoming_message_payload,
+                        await _emit_incoming_message_events(
                             rooms=rooms,
-                        )
-                        await socket_mgr.emit(
-                            "chat.message.new",
-                            incoming_message_payload,
-                            rooms=rooms,
-                        )
-                        await socket_mgr.emit(
-                            "chat.updated",
-                            {
-                                "chat_id": clean_chat_id,
-                                "guest_chat_id": clean_chat_id,
-                                "context_id": context_id,
-                                "property_id": property_id,
-                                "channel": "whatsapp",
-                                "last_message": text,
-                                "last_message_at": now_iso,
-                            },
-                            rooms=rooms,
+                            property_id_value=property_id,
+                            now_iso=now_iso,
                         )
                 except Exception as exc:
                     log.warning("No se pudo emitir mensaje entrante con BookAI apagado: %s", exc)
@@ -537,34 +641,32 @@ def register_whatsapp_routes(app, state):
                 )
                 return JSONResponse({"status": "bookai_disabled"})
             # Registrar en RAM el mensaje entrante en el contexto compuesto de instancia.
-            # La persistencia en DB la hará el flujo normal del agente para evitar duplicados.
+            # La persistencia en DB la hace el flujo normal para text/audio.
+            # Para tipos no soportados se persiste aquí para no perder trazabilidad.
             try:
                 if property_id is not None:
                     state.memory_manager.set_flag(memory_id, "property_id", property_id)
-                state.memory_manager.add_runtime_message(
-                    conversation_id=memory_id,
-                    role="user",
-                    content=text,
-                    channel="whatsapp",
-                    original_chat_id=memory_id,
-                )
+                if unsupported_message_type:
+                    state.memory_manager.save(
+                        conversation_id=memory_id,
+                        role="user",
+                        content=text,
+                        channel="whatsapp",
+                        original_chat_id=memory_id,
+                        skip_recent_duplicate_guard=True,
+                    )
+                else:
+                    state.memory_manager.add_runtime_message(
+                        conversation_id=memory_id,
+                        role="user",
+                        content=text,
+                        channel="whatsapp",
+                        original_chat_id=memory_id,
+                    )
             except Exception as exc:
-                    log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
+                log.warning("No se pudo guardar mensaje entrante en RAM (webhook): %s", exc)
             if socket_mgr and getattr(socket_mgr, "enabled", False):
-                current_property_id = property_id
-                if current_property_id is None:
-                    try:
-                        current_property_id = state.memory_manager.get_flag(memory_id, "property_id")
-                    except Exception:
-                        current_property_id = None
-                if current_property_id is None:
-                    try:
-                        current_property_id = _resolve_property_id_fallback(memory_id, sender)
-                        if current_property_id is not None:
-                            state.memory_manager.set_flag(memory_id, "property_id", current_property_id)
-                    except Exception:
-                        current_property_id = None
-                property_id = current_property_id
+                property_id = _resolve_property_id_with_fallback(property_id)
                 if property_id is not None and not chat_visible_before:
                     chat_visible_before = is_chat_visible_in_list(
                         clean_chat_id,
@@ -576,118 +678,36 @@ def register_whatsapp_routes(app, state):
                     state.memory_manager.set_flag(
                         memory_id,
                         "pending_property_room_chat_list_updated",
-                        {
-                            "property_id": None,
-                            "action": "created",
-                            "_original_chat_id": context_id,
-                            "chat": {
-                                "chat_id": clean_chat_id,
-                                "property_id": None,
-                                "reservation_locator": state.memory_manager.get_flag(memory_id, "reservation_locator"),
-                                "reservation_status": state.memory_manager.get_flag(memory_id, "reservation_status"),
-                                "room_number": state.memory_manager.get_flag(memory_id, "room_number"),
-                                "checkin": state.memory_manager.get_flag(memory_id, "checkin"),
-                                "checkout": state.memory_manager.get_flag(memory_id, "checkout"),
-                                "channel": "whatsapp",
-                                "last_message": text,
-                                "last_message_at": datetime.now(timezone.utc).isoformat(),
-                                "avatar": None,
-                                "client_name": client_name,
-                                "client_phone": clean_chat_id,
-                                "whatsapp_phone_number": normalized_instance_number or None,
-                                "whatsapp_window": _build_active_whatsapp_window(),
-                                "bookai_enabled": True,
-                                "unread_count": 1,
-                                "needs_action": None,
-                                "needs_action_type": None,
-                                "needs_action_reason": None,
-                                "proposed_response": None,
-                                "is_final_response": False,
-                                "escalation_messages": None,
-                                "folio_id": state.memory_manager.get_flag(memory_id, "folio_id"),
-                            },
-                        },
+                        _build_pending_chat_list_updated_payload(bookai_enabled_value=True),
                     )
-                rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
+                rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender_phone_id, clean_chat_id)]
                 if property_id is not None:
                     rooms.append(f"property:{property_id}")
                 rooms.append("channel:whatsapp")
                 now_iso = datetime.now(timezone.utc).isoformat()
-                if property_id is not None and not chat_visible_before:
-                    folio_id = state.memory_manager.get_flag(memory_id, "folio_id")
-                    reservation_locator = state.memory_manager.get_flag(memory_id, "reservation_locator")
-                    checkin = state.memory_manager.get_flag(memory_id, "checkin")
-                    checkout = state.memory_manager.get_flag(memory_id, "checkout")
-                    reservation_status = state.memory_manager.get_flag(memory_id, "reservation_status")
-                    room_number = state.memory_manager.get_flag(memory_id, "room_number")
-                    await socket_mgr.emit(
-                        "chat.list.updated",
-                        {
-                            "property_id": property_id,
-                            "action": "created",
-                            "chat": {
-                                "chat_id": clean_chat_id,
-                                "property_id": property_id,
-                                "reservation_locator": reservation_locator,
-                                "reservation_status": reservation_status,
-                                "room_number": room_number,
-                                "checkin": checkin,
-                                "checkout": checkout,
-                                "channel": "whatsapp",
-                                "last_message": text,
-                                "last_message_at": now_iso,
-                                "avatar": None,
-                                "client_name": client_name,
-                                "client_phone": clean_chat_id,
-                                "whatsapp_phone_number": normalized_instance_number or None,
-                                "whatsapp_window": _build_active_whatsapp_window(now_iso),
-                                "bookai_enabled": True,
-                                "unread_count": 1,
-                                "needs_action": None,
-                                "needs_action_type": None,
-                                "needs_action_reason": None,
-                                "proposed_response": None,
-                                "is_final_response": False,
-                                "escalation_messages": None,
-                                "folio_id": folio_id,
-                            },
-                        },
-                        rooms=f"property:{property_id}",
-                        instance_id=instance_id,
-                    )
-                incoming_message_payload = {
-                    "chat_id": clean_chat_id,
-                    "guest_chat_id": clean_chat_id,
-                    "context_id": context_id,
-                    "property_id": property_id,
-                    "channel": "whatsapp",
-                    "sender": "guest",
-                    "message": text,
-                    "created_at": now_iso,
-                    "whatsapp_window": _build_active_whatsapp_window(now_iso),
-                }
-                await socket_mgr.emit(
-                    "chat.message.created",
-                    incoming_message_payload,
-                    rooms=rooms,
+                await _emit_chat_list_updated_if_needed(
+                    property_id_value=property_id,
+                    now_iso=now_iso,
+                    bookai_enabled_value=True,
+                    require_visibility_after_check=False,
                 )
-                await socket_mgr.emit(
-                    "chat.message.new",
-                    incoming_message_payload,
+                await _emit_incoming_message_events(
                     rooms=rooms,
+                    property_id_value=property_id,
+                    now_iso=now_iso,
                 )
-                await socket_mgr.emit(
-                    "chat.updated",
+
+            if unsupported_message_type:
+                log.info(
+                    "ℹ️ Mensaje WhatsApp tipo=%s registrado como nota en hilo (sender=%s) sin encolar al agente.",
+                    unsupported_message_type,
+                    sender_phone_id,
+                )
+                return JSONResponse(
                     {
-                        "chat_id": clean_chat_id,
-                        "guest_chat_id": clean_chat_id,
-                        "context_id": context_id,
-                        "property_id": property_id,
-                        "channel": "whatsapp",
-                        "last_message": text,
-                        "last_message_at": now_iso,
-                    },
-                    rooms=rooms,
+                        "status": "unsupported_type_logged",
+                        "message_type": unsupported_message_type,
+                    }
                 )
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
@@ -699,7 +719,7 @@ def register_whatsapp_routes(app, state):
                 )
                 resp = await process_user_message(
                     combined_text,
-                    sender,
+                    sender_phone_id,
                     state=state,
                     channel="whatsapp",
                     instance_number=normalized_instance_number,
@@ -721,20 +741,20 @@ def register_whatsapp_routes(app, state):
 
                 final_bookai_enabled = _resolve_bookai_enabled(
                     state,
-                    chat_id=str(sender or ""),
+                    chat_id=str(sender_phone_id or ""),
                     mem_id=str(cid or ""),
-                    clean_id=re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                    clean_id=re.sub(r"\D", "", str(sender_phone_id or "")).strip() or str(sender_phone_id or ""),
                     property_id=property_id,
                 )
                 if final_bookai_enabled is False:
                     log.info(
                         "🤫 BookAI desactivado antes del envio para %s (property_id=%s); respuesta descartada.",
-                        re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                        re.sub(r"\D", "", str(sender_phone_id or "")).strip() or str(sender_phone_id or ""),
                         property_id,
                     )
                     return
 
-                await send_fragmented_async(send_to_channel, sender, resp)
+                await send_fragmented_async(send_to_channel, sender_phone_id, resp)
 
             await state.buffer_manager.add_message(memory_id, text, _process_buffered)
 
