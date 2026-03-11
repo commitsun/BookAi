@@ -7,7 +7,7 @@ import logging
 import re
 import time
 from urllib.parse import unquote
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Dict, List, Literal, Optional, Tuple
 
 from fastapi import APIRouter, Depends, Header, HTTPException, Query
@@ -1248,6 +1248,76 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+def _to_utc_z(value: datetime) -> str:
+    dt = value.astimezone(timezone.utc).replace(microsecond=0)
+    return dt.isoformat().replace("+00:00", "Z")
+
+
+def _build_whatsapp_window(last_guest_message_at: Optional[str]) -> Dict[str, Any]:
+    last_dt = _parse_ts(last_guest_message_at)
+    if last_dt and last_dt.tzinfo is None:
+        last_dt = last_dt.replace(tzinfo=timezone.utc)
+    if not last_dt:
+        return {
+            "status": "expired",
+            "remaining_hours": 0.0,
+            "expires_at": None,
+        }
+    now = datetime.now(timezone.utc)
+    expires_at = last_dt + timedelta(hours=24)
+    remaining_hours = (expires_at - now).total_seconds() / 3600.0
+    if remaining_hours <= 0:
+        return {
+            "status": "expired",
+            "remaining_hours": 0.0,
+            "expires_at": _to_utc_z(expires_at),
+        }
+    return {
+        "status": "active" if remaining_hours > 8 else "expiring",
+        "remaining_hours": round(remaining_hours, 2),
+        "expires_at": _to_utc_z(expires_at),
+    }
+
+
+def _resolve_last_guest_message_at(
+    chat_id: str,
+    *,
+    property_id: Optional[str | int] = None,
+    channel: str = "whatsapp",
+    original_chat_id: Optional[str] = None,
+) -> Optional[str]:
+    decoded_id = str(chat_id or "").strip()
+    clean_id = _clean_chat_id(decoded_id) or decoded_id
+    id_candidates = {clean_id}
+    if decoded_id and decoded_id != clean_id:
+        id_candidates.add(decoded_id)
+    tail = decoded_id.split(":")[-1] if ":" in decoded_id else ""
+    tail_clean = _clean_chat_id(tail) or tail
+    if tail_clean:
+        id_candidates.add(tail_clean)
+    like_patterns = {f"%:{candidate}" for candidate in id_candidates if candidate}
+    filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates if candidate]
+    filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+    original_clean = str(original_chat_id or "").strip()
+    if original_clean:
+        filters.append(f"original_chat_id.eq.{original_clean}")
+    if not filters:
+        return None
+    try:
+        query = (
+            supabase.table("chat_history")
+            .select("created_at")
+            .eq("channel", str(channel or "whatsapp").strip() or "whatsapp")
+            .in_("role", ["guest"])
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        rows = query.or_(",".join(filters)).order("created_at", desc=True).limit(1).execute().data or []
+        return rows[0].get("created_at") if rows else None
+    except Exception:
+        return None
+
+
 def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -> Optional[str | int]:
     """Busca el ultimo property_id no nulo para el chat en DB."""
     decoded_id = str(chat_id or "").strip()
@@ -1595,6 +1665,7 @@ def register_chatter_routes(app, state) -> None:
         if channel not in {"whatsapp", "telegram"}:
             raise HTTPException(status_code=422, detail="Canal no soportado")
         property_id = _normalize_property_id(property_id)
+        requested_page_size = 50
         instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         allowed_chat_ids: Optional[set[str]] = None
         allowed_original_chat_ids: Optional[set[str]] = None
@@ -1603,7 +1674,7 @@ def register_chatter_routes(app, state) -> None:
             allowed_chat_ids = chat_ids
             allowed_original_chat_ids = original_chat_ids
             if not allowed_chat_ids and not allowed_original_chat_ids:
-                return {"page": page, "page_size": page_size, "items": []}
+                return {"page": page, "page_size": requested_page_size, "items": []}
         instance_whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
@@ -1613,15 +1684,14 @@ def register_chatter_routes(app, state) -> None:
             except Exception:
                 instance_whatsapp_phone_number = None
 
-        target = page * page_size
-        batch_size = max(200, page_size * 10)
+        target = page * requested_page_size
+        batch_size = max(200, requested_page_size * 10)
         offset = 0
         ordered_keys: List[str] = []
         summaries: Dict[str, Dict[str, Any]] = {}
 
 
         while len(ordered_keys) < target:
-            page_size=50
             query = (
                 supabase.table("chat_last_message")
                 .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
@@ -1632,7 +1702,8 @@ def register_chatter_routes(app, state) -> None:
             if property_id is not None and not instance_id:
                 query = query.eq("property_id", property_id)
             resp = query.order("created_at", desc=True).range(
-                (page-1)*page_size, page*page_size - 1 
+                offset,
+                offset + batch_size - 1,
             ).execute()
             rows = resp.data or []
             if not rows:
@@ -1707,7 +1778,7 @@ def register_chatter_routes(app, state) -> None:
                 break
             offset += batch_size
 
-        page_keys = ordered_keys[(page - 1) * page_size:page * page_size]
+        page_keys = ordered_keys[(page - 1) * requested_page_size:page * requested_page_size]
         pending_grouped = _pending_by_chat(property_id=property_id)
         pending_grouped = _filter_pending_by_instance(
             pending_grouped,
@@ -1728,6 +1799,7 @@ def register_chatter_routes(app, state) -> None:
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
         client_languages: Dict[str, str] = {}
+        last_guest_message_at_by_cid: Dict[str, Optional[str]] = {}
         expected_original_by_cid: Dict[str, str] = {}
         if page_keys:
             conv_ids = [
@@ -1789,6 +1861,8 @@ def register_chatter_routes(app, state) -> None:
                         expected_original = expected_original_by_cid.get(cid) or ""
                         if expected_original and row_original and row_original != expected_original:
                             continue
+                        if cid not in last_guest_message_at_by_cid:
+                            last_guest_message_at_by_cid[cid] = row.get("created_at")
                         name = row.get("client_name")
                         if cid and name and cid not in client_names:
                             client_names[cid] = name
@@ -1885,39 +1959,50 @@ def register_chatter_routes(app, state) -> None:
                     client_language = _resolve_guest_lang_for_chat(state, cid, context_id=context_id)
                 except Exception:
                     client_language = "es"
-            items.append(
-                {
-                    "chat_id": cid,
-                    "property_id": prop_id,
-                    "reservation_id": folio_id,
-                    "reservation_locator": reservation_locator,
-                    "reservation_status": reservation_status,
-                    "room_number": room_number,
-                    "checkin": checkin,
-                    "checkout": checkout,
-                    "channel": last.get("channel") or "whatsapp",
-                    "last_message": last.get("content"),
-                    "last_message_at": last.get("created_at"),
-                    "avatar": None,
-                    "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
-                    "client_language": client_language,
-                    "client_phone": phone or cid,
-                    "whatsapp_phone_number": instance_whatsapp_phone_number,
-                    "bookai_enabled": bool(bookai_resolution.get("value")),
-                    "unread_count": 0,
-                    "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
-                    "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
-                    "needs_action_reason": _pending_value_with_fallback(pending_reason_map, cid, prop_id),
-                    "proposed_response": _pending_value_with_fallback(proposed_map, cid, prop_id),
-                    "is_final_response": bool(_pending_value_with_fallback(proposed_map, cid, prop_id)),
-                    "escalation_messages": _pending_value_with_fallback(pending_messages_map, cid, prop_id),
-                    "folio_id": folio_id,
-                }
-            )
+            chat_channel = str(last.get("channel") or "whatsapp").strip() or "whatsapp"
+            chat_channel_norm = chat_channel.lower()
+            chat_payload = {
+                "chat_id": cid,
+                "property_id": prop_id,
+                "reservation_id": folio_id,
+                "reservation_locator": reservation_locator,
+                "reservation_status": reservation_status,
+                "room_number": room_number,
+                "checkin": checkin,
+                "checkout": checkout,
+                "channel": chat_channel,
+                "last_message": last.get("content"),
+                "last_message_at": last.get("created_at"),
+                "avatar": None,
+                "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
+                "client_language": client_language,
+                "client_phone": phone or cid,
+                "whatsapp_phone_number": instance_whatsapp_phone_number,
+                "bookai_enabled": bool(bookai_resolution.get("value")),
+                "unread_count": 0,
+                "needs_action": _pending_value_with_fallback(pending_map, cid, prop_id),
+                "needs_action_type": _pending_value_with_fallback(pending_type_map, cid, prop_id),
+                "needs_action_reason": _pending_value_with_fallback(pending_reason_map, cid, prop_id),
+                "proposed_response": _pending_value_with_fallback(proposed_map, cid, prop_id),
+                "is_final_response": bool(_pending_value_with_fallback(proposed_map, cid, prop_id)),
+                "escalation_messages": _pending_value_with_fallback(pending_messages_map, cid, prop_id),
+                "folio_id": folio_id,
+            }
+            if chat_channel_norm == "whatsapp":
+                last_guest_message_at = last_guest_message_at_by_cid.get(cid)
+                if not last_guest_message_at:
+                    last_guest_message_at = _resolve_last_guest_message_at(
+                        cid,
+                        property_id=prop_id,
+                        channel=chat_channel,
+                        original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
+                    )
+                chat_payload["whatsapp_window"] = _build_whatsapp_window(last_guest_message_at)
+            items.append(chat_payload)
 
         return {
             "page": page,
-            "page_size": page_size,
+            "page_size": requested_page_size,
             "items": items,
         }
 
@@ -2512,6 +2597,14 @@ def register_chatter_routes(app, state) -> None:
                 instance_id=instance_id,
                 default=True,
             )
+            whatsapp_window = _build_whatsapp_window(
+                _resolve_last_guest_message_at(
+                    chat_id,
+                    property_id=property_id,
+                    channel="whatsapp",
+                    original_chat_id=session_id,
+                )
+            )
             await socket_mgr.emit(
                 "chat.list.updated",
                 {
@@ -2533,6 +2626,7 @@ def register_chatter_routes(app, state) -> None:
                         "client_name": client_name,
                         "client_phone": _extract_guest_phone(chat_id) or chat_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
+                        "whatsapp_window": whatsapp_window,
                         "bookai_enabled": bool(bookai_resolution.get("value")),
                         "unread_count": 0,
                         **_pending_snapshot_for_chat(
@@ -3477,6 +3571,14 @@ def register_chatter_routes(app, state) -> None:
             instance_id=instance_id,
             default=True,
         )
+        whatsapp_window = _build_whatsapp_window(
+            _resolve_last_guest_message_at(
+                clean_id,
+                property_id=prop_id,
+                channel=channel,
+                original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
+            )
+        )
         socket_mgr = getattr(state, "socket_manager", None)
         if socket_mgr and getattr(socket_mgr, "enabled", False):
             await socket_mgr.emit(
@@ -3500,6 +3602,7 @@ def register_chatter_routes(app, state) -> None:
                         "client_name": reservation_client_name or last.get("client_name"),
                         "client_phone": phone or clean_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
+                        "whatsapp_window": whatsapp_window,
                         "bookai_enabled": bool(bookai_resolution.get("value")),
                         "unread_count": 0,
                         **_pending_snapshot_for_chat(
@@ -3678,6 +3781,14 @@ def register_chatter_routes(app, state) -> None:
             instance_id=instance_id,
             default=True,
         )
+        whatsapp_window = _build_whatsapp_window(
+            _resolve_last_guest_message_at(
+                clean_id,
+                property_id=prop_id,
+                channel=channel,
+                original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
+            )
+        )
         socket_mgr = getattr(state, "socket_manager", None)
         if socket_mgr and getattr(socket_mgr, "enabled", False):
             await socket_mgr.emit(
@@ -3701,6 +3812,7 @@ def register_chatter_routes(app, state) -> None:
                         "client_name": reservation_client_name or last.get("client_name"),
                         "client_phone": phone or clean_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
+                        "whatsapp_window": whatsapp_window,
                         "bookai_enabled": bool(bookai_resolution.get("value")),
                         "unread_count": 0,
                         **_pending_snapshot_for_chat(
@@ -4206,6 +4318,14 @@ def register_chatter_routes(app, state) -> None:
                 instance_id=instance_id,
                 default=True,
             )
+            whatsapp_window = _build_whatsapp_window(
+                _resolve_last_guest_message_at(
+                    chat_id,
+                    property_id=property_id,
+                    channel="whatsapp",
+                    original_chat_id=context_id or None,
+                )
+            )
             await socket_mgr.emit(
                 "chat.list.updated",
                 {
@@ -4227,6 +4347,7 @@ def register_chatter_routes(app, state) -> None:
                         "client_name": reservation_client_name,
                         "client_phone": _extract_guest_phone(chat_id) or chat_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
+                        "whatsapp_window": whatsapp_window,
                         "bookai_enabled": bool(bookai_resolution.get("value")),
                         "unread_count": 0,
                         **_pending_snapshot_for_chat(

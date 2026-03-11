@@ -6,7 +6,7 @@ import asyncio
 import json
 import logging
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from typing import Any, Optional
 
 from core.config import ModelConfig, ModelTier, Settings
@@ -23,6 +23,18 @@ _HUMAN_ESCALATION_COOLDOWN_MIN = 15
 
 def _clean_chat_id(value: str) -> str:
     return re.sub(r"\D", "", str(value or "")).strip()
+
+
+def _build_active_whatsapp_window(created_at: datetime | None = None) -> dict:
+    base_dt = created_at or datetime.now(timezone.utc)
+    if base_dt.tzinfo is None:
+        base_dt = base_dt.replace(tzinfo=timezone.utc)
+    expires_at = (base_dt + timedelta(hours=24)).astimezone(timezone.utc).replace(microsecond=0)
+    return {
+        "status": "active",
+        "remaining_hours": 24.0,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def _chat_room_aliases(*values: str) -> list[str]:
@@ -732,6 +744,7 @@ async def process_user_message(
                                 )
                             except Exception:
                                 pending_list_payload = None
+                        guest_created_at = datetime.now(timezone.utc)
                         payload = {
                             "chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
                             "guest_chat_id": _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or ""),
@@ -740,7 +753,8 @@ async def process_user_message(
                             "channel": channel,
                             "sender": "guest",
                             "message": user_message,
-                            "created_at": datetime.now(timezone.utc).isoformat(),
+                            "created_at": guest_created_at.isoformat(),
+                            "whatsapp_window": _build_active_whatsapp_window(guest_created_at),
                         }
                         socket_mgr = getattr(state, "socket_manager", None)
                         resolved_instance_id = None
@@ -764,6 +778,14 @@ async def process_user_message(
                                 loop.create_task(
                                     socket_mgr.emit(
                                         "chat.message.created",
+                                        payload,
+                                        rooms=f"property:{resolved_property_id}",
+                                        instance_id=resolved_instance_id,
+                                    )
+                                )
+                                loop.create_task(
+                                    socket_mgr.emit(
+                                        "chat.message.new",
                                         payload,
                                         rooms=f"property:{resolved_property_id}",
                                         instance_id=resolved_instance_id,

@@ -5,7 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import re
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import requests
 from fastapi import Request
@@ -43,6 +43,25 @@ def _chat_room_aliases(*values: str) -> list[str]:
             seen.add(c)
             aliases.append(c)
     return aliases
+
+
+def _build_active_whatsapp_window(created_at: str | None = None) -> dict:
+    base_dt = None
+    if created_at:
+        try:
+            base_dt = datetime.fromisoformat(str(created_at).replace("Z", "+00:00"))
+        except Exception:
+            base_dt = None
+    if base_dt is None:
+        base_dt = datetime.now(timezone.utc)
+    if base_dt.tzinfo is None:
+        base_dt = base_dt.replace(tzinfo=timezone.utc)
+    expires_at = (base_dt + timedelta(hours=24)).astimezone(timezone.utc).replace(microsecond=0)
+    return {
+        "status": "active",
+        "remaining_hours": 24.0,
+        "expires_at": expires_at.isoformat().replace("+00:00", "Z"),
+    }
 
 
 def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | None = None):
@@ -378,6 +397,7 @@ def register_whatsapp_routes(app, state):
                                 "sender": "guest",
                                 "message": text,
                                 "created_at": datetime.now(timezone.utc).isoformat(),
+                                "whatsapp_window": _build_active_whatsapp_window(),
                             },
                         )
                         if not chat_visible_before:
@@ -403,6 +423,7 @@ def register_whatsapp_routes(app, state):
                                         "client_name": client_name,
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
+                                        "whatsapp_window": _build_active_whatsapp_window(),
                                         "bookai_enabled": False,
                                         "unread_count": 1,
                                         "needs_action": None,
@@ -458,6 +479,7 @@ def register_whatsapp_routes(app, state):
                                         "client_name": client_name,
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
+                                        "whatsapp_window": _build_active_whatsapp_window(now_iso),
                                         "bookai_enabled": False,
                                         "unread_count": 1,
                                         "needs_action": None,
@@ -472,18 +494,25 @@ def register_whatsapp_routes(app, state):
                                 rooms=f"property:{property_id}",
                                 instance_id=instance_id,
                             )
+                        incoming_message_payload = {
+                            "chat_id": clean_chat_id,
+                            "guest_chat_id": clean_chat_id,
+                            "context_id": context_id,
+                            "property_id": property_id,
+                            "channel": "whatsapp",
+                            "sender": "guest",
+                            "message": text,
+                            "created_at": now_iso,
+                            "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                        }
                         await socket_mgr.emit(
                             "chat.message.created",
-                            {
-                                "chat_id": clean_chat_id,
-                                "guest_chat_id": clean_chat_id,
-                                "context_id": context_id,
-                                "property_id": property_id,
-                                "channel": "whatsapp",
-                                "sender": "guest",
-                                "message": text,
-                                "created_at": now_iso,
-                            },
+                            incoming_message_payload,
+                            rooms=rooms,
+                        )
+                        await socket_mgr.emit(
+                            "chat.message.new",
+                            incoming_message_payload,
                             rooms=rooms,
                         )
                         await socket_mgr.emit(
@@ -566,6 +595,7 @@ def register_whatsapp_routes(app, state):
                                 "client_name": client_name,
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
+                                "whatsapp_window": _build_active_whatsapp_window(),
                                 "bookai_enabled": True,
                                 "unread_count": 1,
                                 "needs_action": None,
@@ -610,6 +640,7 @@ def register_whatsapp_routes(app, state):
                                 "client_name": client_name,
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
+                                "whatsapp_window": _build_active_whatsapp_window(now_iso),
                                 "bookai_enabled": True,
                                 "unread_count": 1,
                                 "needs_action": None,
@@ -624,18 +655,25 @@ def register_whatsapp_routes(app, state):
                         rooms=f"property:{property_id}",
                         instance_id=instance_id,
                     )
+                incoming_message_payload = {
+                    "chat_id": clean_chat_id,
+                    "guest_chat_id": clean_chat_id,
+                    "context_id": context_id,
+                    "property_id": property_id,
+                    "channel": "whatsapp",
+                    "sender": "guest",
+                    "message": text,
+                    "created_at": now_iso,
+                    "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                }
                 await socket_mgr.emit(
                     "chat.message.created",
-                    {
-                        "chat_id": clean_chat_id,
-                        "guest_chat_id": clean_chat_id,
-                        "context_id": context_id,
-                        "property_id": property_id,
-                        "channel": "whatsapp",
-                        "sender": "guest",
-                        "message": text,
-                        "created_at": now_iso,
-                    },
+                    incoming_message_payload,
+                    rooms=rooms,
+                )
+                await socket_mgr.emit(
+                    "chat.message.new",
+                    incoming_message_payload,
                     rooms=rooms,
                 )
                 await socket_mgr.emit(
