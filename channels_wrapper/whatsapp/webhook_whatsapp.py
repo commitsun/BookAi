@@ -216,7 +216,7 @@ def register_whatsapp_routes(app, state):
                 try:
                     from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
 
-                    # Guarda identificadores crudos para fallback posterior.
+                    # Guarda identificadores  crudos para fallback posterior.
                     if state.memory_manager:
                         if normalized_instance_number:
                             state.memory_manager.set_flag(memory_id, "instance_number", normalized_instance_number)
