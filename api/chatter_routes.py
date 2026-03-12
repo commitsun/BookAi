@@ -2921,7 +2921,7 @@ def register_chatter_routes(app, state) -> None:
         if property_id is None:
             property_id = _resolve_property_id_from_history(clean_id)
 
-        from core.escalation_db import append_escalation_message
+        from core.escalation_db import append_escalation_message, update_escalation
 
         pending_escalations = list_pending_escalations_for_chat(
             clean_id,
