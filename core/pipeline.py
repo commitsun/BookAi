@@ -799,6 +799,7 @@ async def process_user_message(
         mem_id = memory_id or chat_id
         escalation_chat_id = mem_id or chat_id
         guest_message_persisted = False
+        guest_message_db_ref: Optional[dict[str, Any]] = None
         initial_property_id = property_id
         chat_list_chat_id = _clean_chat_id(chat_id) or str(chat_id or "") or str(mem_id or "")
         chat_list_original_id = str(mem_id or chat_id or "").strip() or None
@@ -852,11 +853,11 @@ async def process_user_message(
                 return text
 
         def _persist_guest_message() -> None:
-            nonlocal guest_message_persisted, property_id
+            nonlocal guest_message_persisted, property_id, guest_message_db_ref
             if guest_message_persisted:
                 return
             try:
-                state.memory_manager.save(
+                saved_ref = state.memory_manager.save(
                     mem_id,
                     role="user",
                     content=user_message,
@@ -864,6 +865,14 @@ async def process_user_message(
                     original_chat_id=mem_id,
                     skip_recent_duplicate_guard=True,
                 )
+                if isinstance(saved_ref, dict):
+                    row_id = saved_ref.get("id")
+                    row_message_id = saved_ref.get("message_id")
+                    if row_id is not None or row_message_id is not None:
+                        guest_message_db_ref = {
+                            "id": row_id,
+                            "message_id": row_message_id,
+                        }
                 guest_message_persisted = True
                 if channel == "whatsapp":
                     resolved_property_id = property_id
@@ -990,6 +999,55 @@ async def process_user_message(
             except Exception as exc:
                 log.warning("No se pudo persistir mensaje del huésped en pipeline: %s", exc)
 
+        def _trigger_message_identifier() -> tuple[Optional[str], Optional[str]]:
+            if not isinstance(guest_message_db_ref, dict):
+                return None, None
+            row_id = guest_message_db_ref.get("id")
+            if row_id is not None and str(row_id).strip() != "":
+                return str(row_id).strip(), "id"
+            row_message_id = guest_message_db_ref.get("message_id")
+            if row_message_id is not None and str(row_message_id).strip() != "":
+                return str(row_message_id).strip(), "message_id"
+            return None, None
+
+        def _latest_pending_escalation_meta() -> tuple[Optional[str], Optional[str], Optional[str]]:
+            latest = None
+            try:
+                latest = get_latest_pending_escalation(mem_id, property_id=property_id)
+            except Exception:
+                latest = None
+            if not latest and property_id is not None:
+                try:
+                    latest = get_latest_pending_escalation(mem_id, property_id=None)
+                except Exception:
+                    latest = None
+            if not latest:
+                return None, None, None
+            escalation_id = str((latest or {}).get("escalation_id") or "").strip() or None
+            escalation_type = str((latest or {}).get("escalation_type") or (latest or {}).get("type") or "").strip() or None
+            escalation_reason = str((latest or {}).get("escalation_reason") or (latest or {}).get("reason") or "").strip() or None
+            return escalation_id, escalation_type, escalation_reason
+
+        async def _escalate_with_message_link(
+            *,
+            escalation_type: str,
+            reason: str,
+            context: str,
+        ) -> Optional[str]:
+            trigger_message_id, trigger_message_id_field = _trigger_message_identifier()
+            await state.interno_agent.escalate(
+                guest_chat_id=escalation_chat_id,
+                guest_message=user_message,
+                escalation_type=escalation_type,
+                reason=reason,
+                context=context,
+                property_id=property_id,
+                trigger_message_id=trigger_message_id,
+                trigger_message_id_field=trigger_message_id_field,
+            )
+            escalation_id, _, _ = _latest_pending_escalation_meta()
+            return escalation_id
+
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_enabled = _resolve_bookai_enabled(
             state,
@@ -1013,13 +1071,10 @@ async def process_user_message(
         if estado_in.lower() not in ["aprobado", "ok", "aceptable"]:
             _persist_guest_message()
             log.warning("🚨 Mensaje rechazado por Supervisor Input: %s", motivo_in)
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
+            await _escalate_with_message_link(
                 escalation_type="inappropriate",
                 reason=motivo_in,
                 context="Rechazado por Supervisor Input",
-                property_id=property_id,
             )
             return None
 
@@ -1193,9 +1248,8 @@ async def process_user_message(
                 offer_type = _humanize_offer_type(pending_offer.get("type"))
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
                 original_text = str(pending_offer.get("original_text") or "").strip()
-                await state.interno_agent.escalate(
-                    guest_chat_id=escalation_chat_id,
-                    guest_message=user_message,
+                _persist_guest_message()
+                escalation_id_for_response = await _escalate_with_message_link(
                     escalation_type="offer_details_missing",
                     reason=(
                         f"Oferta pendiente sin datos confirmados: {offer_type}. "
@@ -1210,7 +1264,6 @@ async def process_user_message(
                         f"original_offer_text={original_text}\n"
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}"
                     ),
-                    property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
                     "Gracias por escribirnos. Estamos validando con recepción el horario, lugar y condiciones "
@@ -1218,27 +1271,38 @@ async def process_user_message(
                 )
                 forced_offer_escalation = True
                 try:
-                    _persist_guest_message()
-                    state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+                    state.memory_manager.save(
+                        mem_id,
+                        role="assistant",
+                        content=response_raw,
+                        channel=channel,
+                        escalation_id=escalation_id_for_response,
+                    )
                 except Exception as exc:
                     log.warning("No se pudo guardar respuesta de escalación por oferta pendiente: %s", exc)
 
         if not response_raw and _message_requests_human_intervention(user_message):
+            _persist_guest_message()
+            escalation_id_for_response = None
             if not _has_recent_pending_escalation(mem_id, state):
-                await state.interno_agent.escalate(
-                    guest_chat_id=escalation_chat_id,
-                    guest_message=user_message,
+                escalation_id_for_response = await _escalate_with_message_link(
                     escalation_type="info_not_found",
                     reason="El huésped solicita consulta/intervención de personal humano.",
                     context="Escalación forzada por petición explícita de manager/recepción/humano.",
-                    property_id=property_id,
                 )
+            if not escalation_id_for_response:
+                escalation_id_for_response, _, _ = _latest_pending_escalation_meta()
             response_raw = _ensure_guest_language(
                 "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
             )
             try:
-                _persist_guest_message()
-                state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+                state.memory_manager.save(
+                    mem_id,
+                    role="assistant",
+                    content=response_raw,
+                    channel=channel,
+                    escalation_id=escalation_id_for_response,
+                )
             except Exception as exc:
                 log.warning("No se pudo guardar respuesta de escalación forzada: %s", exc)
 
@@ -1261,13 +1325,10 @@ async def process_user_message(
                 return None
 
         if not response_raw:
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
+            await _escalate_with_message_link(
                 escalation_type="info_not_found",
                 reason="Main Agent no devolvió respuesta",
                 context="Respuesta vacía o nula",
-                property_id=property_id,
             )
             return None
 
@@ -1280,13 +1341,10 @@ async def process_user_message(
         response_raw = _ensure_guest_language(response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
         if not response_raw:
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
+            await _escalate_with_message_link(
                 escalation_type="error",
                 reason="Respuesta interna filtrada antes de salir al huésped",
                 context="La salida del agente contenía un mensaje interno/no apto para cliente y fue bloqueada.",
-                property_id=property_id,
             )
             return None
         if pending_offer and response_raw and not forced_offer_escalation:
@@ -1302,9 +1360,7 @@ async def process_user_message(
             ):
                 offer_type = _humanize_offer_type(pending_offer.get("type"))
                 missing_human = _humanize_missing_fields(pending_offer.get("missing_fields"))
-                await state.interno_agent.escalate(
-                    guest_chat_id=escalation_chat_id,
-                    guest_message=user_message,
+                escalation_id_for_response = await _escalate_with_message_link(
                     escalation_type="offer_consistency_guard",
                     reason=(
                         consistency.get("reason")
@@ -1317,14 +1373,19 @@ async def process_user_message(
                         f"pending_offer={json.dumps(pending_offer, ensure_ascii=False)}\n"
                         f"proposed_response={response_raw}"
                     ),
-                    property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
                     "Estamos revisando con recepción los detalles exactos de esta cortesía para darte una "
                     "confirmación correcta en breve."
                 )
                 try:
-                    state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
+                    state.memory_manager.save(
+                        mem_id,
+                        role="assistant",
+                        content=response_raw,
+                        channel=channel,
+                        escalation_id=escalation_id_for_response,
+                    )
                 except Exception as exc:
                     log.warning("No se pudo guardar fallback por guardrail de oferta: %s", exc)
         aligned_response, was_rewritten = await _align_response_with_human_escalation_state(
@@ -1343,13 +1404,10 @@ async def process_user_message(
         response_raw = _ensure_guest_language(aligned_response or response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
         if not response_raw:
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
+            await _escalate_with_message_link(
                 escalation_type="error",
                 reason="La respuesta quedó vacía tras alinear promesas humanas con backend.",
                 context="Guardrail de promesas humanas bloqueó salida sin contenido.",
-                property_id=property_id,
             )
             return None
         log.info("🤖 Respuesta del MainAgent: %s", response_raw[:300])
@@ -1390,13 +1448,10 @@ async def process_user_message(
                 f"🧠 Historial reciente:\n{hist_text}"
             )
 
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
+            await _escalate_with_message_link(
                 escalation_type="bad_response",
                 reason=motivo_out,
                 context=context_full,
-                property_id=property_id,
             )
             return None
 
@@ -1444,12 +1499,20 @@ async def process_user_message(
 
     except Exception as exc:
         log.error("💥 Error crítico en pipeline: %s", exc, exc_info=True)
-        await state.interno_agent.escalate(
-            guest_chat_id=escalation_chat_id,
-            guest_message=user_message,
-            escalation_type="info_not_found",
-            reason=f"Error crítico: {str(exc)}",
-            context="Excepción general en process_user_message",
-            property_id=property_id,
-        )
+        escalate_helper = locals().get("_escalate_with_message_link")
+        if callable(escalate_helper):
+            await escalate_helper(
+                escalation_type="info_not_found",
+                reason=f"Error crítico: {str(exc)}",
+                context="Excepción general en process_user_message",
+            )
+        else:
+            await state.interno_agent.escalate(
+                guest_chat_id=escalation_chat_id,
+                guest_message=user_message,
+                escalation_type="info_not_found",
+                reason=f"Error crítico: {str(exc)}",
+                context="Excepción general en process_user_message",
+                property_id=property_id,
+            )
         return None

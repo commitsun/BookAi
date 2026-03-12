@@ -131,7 +131,7 @@ def save_message(
     original_chat_id: str | None = None,
     structured_payload: dict | list | None = None,
     table: str = "chat_history",
-) -> None:
+) -> dict | None:
     """
     Guarda un mensaje en la base de datos relacional de Supabase.
     - conversation_id: número del usuario sin '+'
@@ -229,8 +229,9 @@ def save_message(
         except Exception:
             pass
 
+        insert_response = None
         try:
-            supabase.table(table).insert(data).execute()
+            insert_response = supabase.table(table).insert(data).execute()
         except Exception as exc:
             err = str(exc).lower()
             retry = False
@@ -268,13 +269,28 @@ def save_message(
                 data.pop("structured_payload", None)
                 retry = True
             if retry:
-                supabase.table(table).insert(data).execute()
+                insert_response = supabase.table(table).insert(data).execute()
             else:
                 raise
         logging.info(f"💾 Mensaje guardado correctamente en conversación {clean_id}")
+        inserted = None
+        try:
+            inserted_rows = (insert_response.data or []) if insert_response else []
+            if inserted_rows:
+                inserted = inserted_rows[0]
+        except Exception:
+            inserted = None
+
+        if isinstance(inserted, dict):
+            return {
+                "id": inserted.get("id"),
+                "message_id": inserted.get("message_id"),
+            }
+        return None
 
     except Exception as e:
         logging.error(f"⚠️ Error guardando mensaje en Supabase: {e}", exc_info=True)
+        return None
 
 
 def is_chat_visible_in_list(

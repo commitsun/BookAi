@@ -2102,6 +2102,14 @@ def register_chatter_routes(app, state) -> None:
 
         base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id, structured_payload"
         extended_fields = (
+            f"{base_fields}, escalation_id, ai_request_type, escalation_reason, help_needed, "
+            "user_id, user_first_name, user_last_name, user_last_name2, id"
+        )
+        extended_fields_no_help_needed = (
+            f"{base_fields}, escalation_id, ai_request_type, escalation_reason, "
+            "user_id, user_first_name, user_last_name, user_last_name2, id"
+        )
+        extended_fields_no_row_escalation_meta = (
             f"{base_fields}, escalation_id, user_id, user_first_name, user_last_name, user_last_name2, id"
         )
         extended_fields_no_escalation = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
@@ -2125,6 +2133,8 @@ def register_chatter_routes(app, state) -> None:
         last_error = None
         for select_fields in [
             extended_fields,
+            extended_fields_no_help_needed,
+            extended_fields_no_row_escalation_meta,
             extended_fields_no_escalation,
             fallback_fields,
             fallback_base_fields,
@@ -2207,41 +2217,14 @@ def register_chatter_routes(app, state) -> None:
             structured_csv = extract_structured_csv(structured_payload)
             escalation_id = str(row.get("escalation_id") or "").strip()
             escalation_meta = escalation_meta_by_id.get(escalation_id, {}) if escalation_id else {}
-
-            payload_ai_request_type = None
-            payload_escalation_reason = None
-            if isinstance(structured_payload, dict):
-                payload_meta = structured_payload.get("metadata")
-                payload_ai_request_type = _first_text(
-                    structured_payload.get("ai_request_type"),
-                    structured_payload.get("request_type"),
-                    structured_payload.get("escalation_type"),
-                )
-                payload_escalation_reason = _first_text(
-                    structured_payload.get("escalation_reason"),
-                    structured_payload.get("reason"),
-                )
-                if isinstance(payload_meta, dict):
-                    payload_ai_request_type = _first_text(
-                        payload_ai_request_type,
-                        payload_meta.get("ai_request_type"),
-                        payload_meta.get("request_type"),
-                        payload_meta.get("escalation_type"),
-                    )
-                    payload_escalation_reason = _first_text(
-                        payload_escalation_reason,
-                        payload_meta.get("escalation_reason"),
-                        payload_meta.get("reason"),
-                    )
-
-            ai_request_type = _first_text(
-                escalation_meta.get("type"),
-                payload_ai_request_type,
+            row_ai_request_type = _first_text(
+                row.get("ai_request_type"),
+                row.get("help_needed"),
             )
-            escalation_reason = _first_text(
-                escalation_meta.get("reason"),
-                payload_escalation_reason,
-            )
+            row_escalation_reason = _first_text(row.get("escalation_reason"))
+            ai_request_type = _first_text(row_ai_request_type, escalation_meta.get("type"))
+            escalation_reason = _first_text(row_escalation_reason, escalation_meta.get("reason"))
+            help_needed = _first_text(row.get("help_needed"), ai_request_type)
             items.append(
                 {
                     "message_id": row.get("id") or row.get("message_id"),
@@ -2259,6 +2242,7 @@ def register_chatter_routes(app, state) -> None:
                     "user_last_name2": row.get("user_last_name2"),
                     "structured_payload": structured_payload,
                     "structured_csv": structured_csv,
+                    "help_needed": help_needed,
                     "ai_request_type": ai_request_type,
                     "escalation_reason": escalation_reason,
                 }
