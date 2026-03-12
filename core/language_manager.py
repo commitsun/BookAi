@@ -279,6 +279,18 @@ class LanguageManager:
     def __init__(self, model: Optional[str] = None, temperature: float = 0.0):
         self.llm = ChatOpenAI(model=model or OPENAI_MODEL, temperature=temperature)
 
+    @staticmethod
+    def _normalize_confidence(value: float, default: float = 0.0) -> float:
+        try:
+            confidence = float(value)
+        except Exception:
+            confidence = float(default)
+        if confidence < 0.0:
+            return 0.0
+        if confidence > 1.0:
+            return 1.0
+        return confidence
+
     def _llm_detect_lang_code(self, text: str, fallback: str = "es") -> str:
         prompt = [
             {
@@ -410,6 +422,44 @@ class LanguageManager:
         except Exception as e:
             print(f"⚠️ Error detectando idioma: {e}")
             return base_lang
+
+    def detect_language_with_confidence(self, text: str, prev_lang: Optional[str] = None) -> Tuple[str, float]:
+        """
+        Detecta idioma reutilizando `detect_language` (incluye fallback LLM) y
+        devuelve una confianza [0,1] basada en langdetect cuando está disponible.
+        """
+        detected = (
+            self.detect_language(text, prev_lang=prev_lang)
+            or _normalize_iso_lang_code(prev_lang or "")
+            or "es"
+        ).strip().lower()
+
+        raw = (text or "").strip()
+        if not raw:
+            return detected, 0.0
+
+        guess = _langdetect_guess(raw)
+        if guess:
+            code, prob = guess
+            normalized_guess = _normalize_iso_lang_code(code)
+            if normalized_guess and normalized_guess == detected:
+                return detected, self._normalize_confidence(prob, default=0.0)
+            return detected, self._normalize_confidence(prob * 0.5, default=0.0)
+
+        explicit = _explicit_language_request(raw)
+        if explicit and _normalize_iso_lang_code(explicit) == detected:
+            return detected, 0.98
+
+        greeting_lang = _short_greeting_lang(raw)
+        if greeting_lang and greeting_lang == detected:
+            return detected, 0.95
+
+        if _has_strong_spanish_signal(raw) and detected == "es":
+            return detected, 0.92
+        if _has_strong_english_signal(raw) and detected == "en":
+            return detected, 0.92
+
+        return detected, 0.8
 
     def ensure_language(self, text: str, lang_code: str) -> str:
         if not text:

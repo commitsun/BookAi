@@ -1492,11 +1492,27 @@ def _resolve_whatsapp_context_id(
     return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
 
 
-def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] = None) -> str:
-    """Resuelve idioma huésped priorizando flags de memoria y aliases del chat."""
+def _normalize_language_confidence(value: Any, default: float = 0.0) -> float:
+    try:
+        confidence = float(value)
+    except Exception:
+        confidence = float(default)
+    if confidence < 0.0:
+        return 0.0
+    if confidence > 1.0:
+        return 1.0
+    return confidence
+
+
+def _resolve_guest_lang_meta_for_chat(
+    state,
+    chat_id: str,
+    context_id: Optional[str] = None,
+) -> Tuple[str, float]:
+    """Resuelve idioma huésped + confianza priorizando flags de memoria y aliases."""
     memory_manager = getattr(state, "memory_manager", None)
     if not memory_manager:
-        return "es"
+        return "es", 0.0
 
     clean = _clean_chat_id(chat_id) or str(chat_id or "").strip()
     keys: list[str] = []
@@ -1522,7 +1538,11 @@ def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] 
         try:
             lang = memory_manager.get_flag(key, "guest_lang")
             if isinstance(lang, str) and lang.strip():
-                return lang.strip().lower()
+                confidence = _normalize_language_confidence(
+                    memory_manager.get_flag(key, "guest_lang_confidence"),
+                    default=1.0,
+                )
+                return lang.strip().lower(), confidence
         except Exception:
             continue
 
@@ -1545,11 +1565,29 @@ def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] 
             if not sample:
                 continue
             try:
-                return (language_manager.detect_language(sample, prev_lang=None) or "es").strip().lower()
+                lang, confidence = language_manager.detect_language_with_confidence(
+                    sample,
+                    prev_lang=None,
+                )
+                resolved_lang = (lang or "es").strip().lower() or "es"
+                resolved_conf = _normalize_language_confidence(confidence, default=0.0)
+                for persist_key in dedup_keys:
+                    try:
+                        memory_manager.set_flag(persist_key, "guest_lang", resolved_lang)
+                        memory_manager.set_flag(persist_key, "guest_lang_confidence", resolved_conf)
+                    except Exception:
+                        continue
+                return resolved_lang, resolved_conf
             except Exception:
-                return "es"
+                return "es", 0.0
 
-    return "es"
+    return "es", 0.0
+
+
+def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] = None) -> str:
+    """Resuelve idioma huésped priorizando flags de memoria y aliases del chat."""
+    lang, _ = _resolve_guest_lang_meta_for_chat(state, chat_id, context_id=context_id)
+    return lang
 
 
 def _ensure_guest_language_for_outgoing(state, chat_id: str, text: str, context_id: Optional[str] = None) -> str:
@@ -1798,7 +1836,7 @@ def register_chatter_routes(app, state) -> None:
         pending_messages_map = _pending_messages(pending_grouped)
         bookai_flags = _bookai_settings(state)
         client_names: Dict[str, str] = {}
-        client_languages: Dict[str, str] = {}
+        client_languages: Dict[str, Tuple[str, float]] = {}
         last_guest_message_at_by_cid: Dict[str, Optional[str]] = {}
         expected_original_by_cid: Dict[str, str] = {}
         if page_keys:
@@ -1873,10 +1911,16 @@ def register_chatter_routes(app, state) -> None:
                             try:
                                 # Para el listado de chats priorizamos el idioma real del último mensaje guest,
                                 # sin arrastre del idioma previo, para evitar falsos "es" en saludos tipo "hello".
-                                lang = (language_manager.detect_language(sample, prev_lang=None) or "es").strip().lower()
+                                lang, confidence = language_manager.detect_language_with_confidence(
+                                    sample,
+                                    prev_lang=None,
+                                )
+                                lang = (lang or "es").strip().lower() or "es"
+                                confidence = _normalize_language_confidence(confidence, default=0.0)
                             except Exception:
                                 lang = "es"
-                            client_languages[cid] = lang
+                                confidence = 0.0
+                            client_languages[cid] = (lang, confidence)
                 except Exception as exc:
                     log.warning("No se pudo cargar client_name/client_language: %s", exc)
 
@@ -1942,23 +1986,25 @@ def register_chatter_routes(app, state) -> None:
                 instance_id=instance_id,
                 default=True,
             )
-            client_language = None
-            last_message_text = str(last.get("content") or "").strip()
-            if last_message_text:
-                try:
-                    client_language = (
-                        language_manager.detect_language(last_message_text, prev_lang=None) or "es"
-                    ).strip().lower()
-                except Exception:
-                    client_language = None
-            if not client_language:
-                client_language = client_languages.get(cid)
-            if not client_language:
-                context_id = str(last.get("original_chat_id") or "").strip() or None
-                try:
-                    client_language = _resolve_guest_lang_for_chat(state, cid, context_id=context_id)
-                except Exception:
-                    client_language = "es"
+            context_id = str(last.get("original_chat_id") or "").strip() or None
+            client_language = "es"
+            client_language_confidence = 0.0
+            try:
+                client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
+                    state,
+                    cid,
+                    context_id=context_id,
+                )
+            except Exception:
+                client_language = "es"
+                client_language_confidence = 0.0
+            fallback_lang_meta = client_languages.get(cid)
+            if (
+                fallback_lang_meta
+                and client_language == "es"
+                and _normalize_language_confidence(client_language_confidence, default=0.0) <= 0.0
+            ):
+                client_language, client_language_confidence = fallback_lang_meta
             chat_channel = str(last.get("channel") or "whatsapp").strip() or "whatsapp"
             chat_channel_norm = chat_channel.lower()
             chat_payload = {
@@ -1976,6 +2022,10 @@ def register_chatter_routes(app, state) -> None:
                 "avatar": None,
                 "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
                 "client_language": client_language,
+                "client_language_confidence": _normalize_language_confidence(
+                    client_language_confidence,
+                    default=0.0,
+                ),
                 "client_phone": phone or cid,
                 "whatsapp_phone_number": instance_whatsapp_phone_number,
                 "bookai_enabled": bool(bookai_resolution.get("value")),
@@ -2555,6 +2605,14 @@ def register_chatter_routes(app, state) -> None:
             sender_for_ui = "guest"
         else:
             sender_for_ui = "bookai"
+        try:
+            client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
+                state,
+                chat_id,
+                context_id=session_id,
+            )
+        except Exception:
+            client_language, client_language_confidence = "es", 0.0
         socket_mgr = getattr(state, "socket_manager", None)
         if (
             socket_mgr
@@ -2624,6 +2682,11 @@ def register_chatter_routes(app, state) -> None:
                         "last_message_at": now_iso,
                         "avatar": None,
                         "client_name": client_name,
+                        "client_language": client_language,
+                        "client_language_confidence": _normalize_language_confidence(
+                            client_language_confidence,
+                            default=0.0,
+                        ),
                         "client_phone": _extract_guest_phone(chat_id) or chat_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
                         "whatsapp_window": whatsapp_window,
@@ -2665,6 +2728,11 @@ def register_chatter_routes(app, state) -> None:
                 "sender": sender_for_ui,
                 "message": outgoing_message,
                 "created_at": now_iso,
+                "client_language": client_language,
+                "client_language_confidence": _normalize_language_confidence(
+                    client_language_confidence,
+                    default=0.0,
+                ),
             },
         )
         log.info(
@@ -3579,6 +3647,14 @@ def register_chatter_routes(app, state) -> None:
                 original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
             )
         )
+        try:
+            client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
+                state,
+                clean_id,
+                context_id=str(last.get("original_chat_id") or "").strip() or None,
+            )
+        except Exception:
+            client_language, client_language_confidence = "es", 0.0
         socket_mgr = getattr(state, "socket_manager", None)
         if socket_mgr and getattr(socket_mgr, "enabled", False):
             await socket_mgr.emit(
@@ -3600,6 +3676,11 @@ def register_chatter_routes(app, state) -> None:
                         "last_message_at": last.get("created_at"),
                         "avatar": None,
                         "client_name": reservation_client_name or last.get("client_name"),
+                        "client_language": client_language,
+                        "client_language_confidence": _normalize_language_confidence(
+                            client_language_confidence,
+                            default=0.0,
+                        ),
                         "client_phone": phone or clean_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
                         "whatsapp_window": whatsapp_window,
@@ -3789,6 +3870,14 @@ def register_chatter_routes(app, state) -> None:
                 original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
             )
         )
+        try:
+            client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
+                state,
+                clean_id,
+                context_id=str(last.get("original_chat_id") or "").strip() or None,
+            )
+        except Exception:
+            client_language, client_language_confidence = "es", 0.0
         socket_mgr = getattr(state, "socket_manager", None)
         if socket_mgr and getattr(socket_mgr, "enabled", False):
             await socket_mgr.emit(
@@ -3810,6 +3899,11 @@ def register_chatter_routes(app, state) -> None:
                         "last_message_at": last.get("created_at"),
                         "avatar": None,
                         "client_name": reservation_client_name or last.get("client_name"),
+                        "client_language": client_language,
+                        "client_language_confidence": _normalize_language_confidence(
+                            client_language_confidence,
+                            default=0.0,
+                        ),
                         "client_phone": phone or clean_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
                         "whatsapp_window": whatsapp_window,
@@ -4286,6 +4380,14 @@ def register_chatter_routes(app, state) -> None:
             channel="whatsapp",
             original_chat_id=context_id or None,
         )
+        try:
+            client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
+                state,
+                chat_id,
+                context_id=context_id or None,
+            )
+        except Exception:
+            client_language, client_language_confidence = "es", 0.0
         socket_mgr = getattr(state, "socket_manager", None)
         if (
             socket_mgr
@@ -4345,6 +4447,11 @@ def register_chatter_routes(app, state) -> None:
                         "last_message_at": now_iso,
                         "avatar": None,
                         "client_name": reservation_client_name,
+                        "client_language": client_language,
+                        "client_language_confidence": _normalize_language_confidence(
+                            client_language_confidence,
+                            default=0.0,
+                        ),
                         "client_phone": _extract_guest_phone(chat_id) or chat_id,
                         "whatsapp_phone_number": whatsapp_phone_number,
                         "whatsapp_window": whatsapp_window,
@@ -4377,6 +4484,11 @@ def register_chatter_routes(app, state) -> None:
                 "button_base_url": button_base_url,
                 "structured_payload": structured_payload,
                 "structured_csv": structured_csv,
+                "client_language": client_language,
+                "client_language_confidence": _normalize_language_confidence(
+                    client_language_confidence,
+                    default=0.0,
+                ),
             },
         )
         await _emit(

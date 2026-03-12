@@ -14,6 +14,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 from channels_wrapper.utils.text_utils import send_fragmented_async
 from core.db import is_chat_visible_in_list
 from core.pipeline import process_user_message, _resolve_bookai_enabled
+from core.language_manager import language_manager
 
 log = logging.getLogger("WhatsAppWebhook")
 
@@ -343,6 +344,31 @@ def register_whatsapp_routes(app, state):
             clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
             context_id = str(memory_id or sender or "").strip()
             clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            guest_lang = "es"
+            guest_lang_confidence = 0.0
+            try:
+                prev_lang = (
+                    state.memory_manager.get_flag(memory_id, "guest_lang")
+                    or state.memory_manager.get_flag(clean_chat_id, "guest_lang")
+                    or state.memory_manager.get_flag(sender, "guest_lang")
+                )
+                detected_lang, detected_confidence = language_manager.detect_language_with_confidence(
+                    text,
+                    prev_lang=prev_lang,
+                )
+                guest_lang = (detected_lang or prev_lang or "es").strip().lower() or "es"
+                try:
+                    guest_lang_confidence = float(detected_confidence or 0.0)
+                except Exception:
+                    guest_lang_confidence = 0.0
+                guest_lang_confidence = max(0.0, min(1.0, guest_lang_confidence))
+                for lang_key in {memory_id, context_id, clean_chat_id, sender}:
+                    if not lang_key:
+                        continue
+                    state.memory_manager.set_flag(lang_key, "guest_lang", guest_lang)
+                    state.memory_manager.set_flag(lang_key, "guest_lang_confidence", guest_lang_confidence)
+            except Exception as exc:
+                log.debug("No se pudo detectar/guardar guest_lang en webhook: %s", exc)
             chat_visible_before = is_chat_visible_in_list(
                 clean_chat_id,
                 property_id=property_id,
@@ -398,6 +424,8 @@ def register_whatsapp_routes(app, state):
                                 "message": text,
                                 "created_at": datetime.now(timezone.utc).isoformat(),
                                 "whatsapp_window": _build_active_whatsapp_window(),
+                                "client_language": guest_lang,
+                                "client_language_confidence": guest_lang_confidence,
                             },
                         )
                         if not chat_visible_before:
@@ -421,6 +449,8 @@ def register_whatsapp_routes(app, state):
                                         "last_message_at": datetime.now(timezone.utc).isoformat(),
                                         "avatar": None,
                                         "client_name": client_name,
+                                        "client_language": guest_lang,
+                                        "client_language_confidence": guest_lang_confidence,
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
                                         "whatsapp_window": _build_active_whatsapp_window(),
@@ -477,6 +507,8 @@ def register_whatsapp_routes(app, state):
                                         "last_message_at": now_iso,
                                         "avatar": None,
                                         "client_name": client_name,
+                                        "client_language": guest_lang,
+                                        "client_language_confidence": guest_lang_confidence,
                                         "client_phone": clean_chat_id,
                                         "whatsapp_phone_number": normalized_instance_number or None,
                                         "whatsapp_window": _build_active_whatsapp_window(now_iso),
@@ -504,6 +536,8 @@ def register_whatsapp_routes(app, state):
                             "message": text,
                             "created_at": now_iso,
                             "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                            "client_language": guest_lang,
+                            "client_language_confidence": guest_lang_confidence,
                         }
                         await socket_mgr.emit(
                             "chat.message.created",
@@ -593,6 +627,8 @@ def register_whatsapp_routes(app, state):
                                 "last_message_at": datetime.now(timezone.utc).isoformat(),
                                 "avatar": None,
                                 "client_name": client_name,
+                                "client_language": guest_lang,
+                                "client_language_confidence": guest_lang_confidence,
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
                                 "whatsapp_window": _build_active_whatsapp_window(),
@@ -638,6 +674,8 @@ def register_whatsapp_routes(app, state):
                                 "last_message_at": now_iso,
                                 "avatar": None,
                                 "client_name": client_name,
+                                "client_language": guest_lang,
+                                "client_language_confidence": guest_lang_confidence,
                                 "client_phone": clean_chat_id,
                                 "whatsapp_phone_number": normalized_instance_number or None,
                                 "whatsapp_window": _build_active_whatsapp_window(now_iso),
@@ -665,6 +703,8 @@ def register_whatsapp_routes(app, state):
                     "message": text,
                     "created_at": now_iso,
                     "whatsapp_window": _build_active_whatsapp_window(now_iso),
+                    "client_language": guest_lang,
+                    "client_language_confidence": guest_lang_confidence,
                 }
                 await socket_mgr.emit(
                     "chat.message.created",
