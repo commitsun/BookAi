@@ -2101,47 +2101,42 @@ def register_chatter_routes(app, state) -> None:
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
         base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id, structured_payload"
-        extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
-        try:
-            query = supabase.table("chat_history").select(extended_fields)
+        extended_fields = (
+            f"{base_fields}, escalation_id, user_id, user_first_name, user_last_name, user_last_name2, id"
+        )
+        extended_fields_no_escalation = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
+        fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
+        fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
+
+        def _execute_history_query(select_fields: str):
+            query = supabase.table("chat_history").select(select_fields)
             if property_id is not None and not instance_id:
                 query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
             else:
                 or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
                 or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
                 query = query.or_(",".join(or_filters))
-            resp = query.order("created_at", desc=True).range(
+            return query.order("created_at", desc=True).range(
                 offset,
                 offset + page_size - 1,
             ).execute()
-        except Exception:
+
+        resp = None
+        last_error = None
+        for select_fields in [
+            extended_fields,
+            extended_fields_no_escalation,
+            fallback_fields,
+            fallback_base_fields,
+        ]:
             try:
-                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
-                query = supabase.table("chat_history").select(fallback_fields)
-                if property_id is not None and not instance_id:
-                    query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-                else:
-                    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
-                    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-                    query = query.or_(",".join(or_filters))
-                resp = query.order("created_at", desc=True).range(
-                    offset,
-                    offset + page_size - 1,
-                ).execute()
-            except Exception:
-                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                query = supabase.table("chat_history").select(fallback_base_fields)
-                if property_id is not None and not instance_id:
-                    query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-                else:
-                    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
-                    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-                    query = query.or_(",".join(or_filters))
-                resp = query.order("created_at", desc=True).range(
-                    offset,
-                    offset + page_size - 1,
-                ).execute()
+                resp = _execute_history_query(select_fields)
+                break
+            except Exception as exc:
+                last_error = exc
+                continue
+        if resp is None:
+            raise last_error or RuntimeError("No se pudieron recuperar mensajes")
 
         rows = resp.data or []
         if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
@@ -2177,6 +2172,30 @@ def register_chatter_routes(app, state) -> None:
         ]
         rows.reverse()
 
+        def _first_text(*values: Any) -> Optional[str]:
+            for value in values:
+                if value is None:
+                    continue
+                text = str(value).strip()
+                if text:
+                    return text
+            return None
+
+        escalation_meta_by_id: Dict[str, Dict[str, Any]] = {}
+        escalation_ids = {
+            str((row or {}).get("escalation_id") or "").strip()
+            for row in rows
+            if str((row or {}).get("escalation_id") or "").strip()
+        }
+        if escalation_ids:
+            from core.message_utils import get_escalation_metadata
+
+            for escalation_id in escalation_ids:
+                try:
+                    escalation_meta_by_id[escalation_id] = get_escalation_metadata(escalation_id) or {}
+                except Exception:
+                    escalation_meta_by_id[escalation_id] = {}
+
         items = []
         for row in rows:
             structured_payload = row.get("structured_payload")
@@ -2186,6 +2205,43 @@ def register_chatter_routes(app, state) -> None:
                 except Exception:
                     structured_payload = None
             structured_csv = extract_structured_csv(structured_payload)
+            escalation_id = str(row.get("escalation_id") or "").strip()
+            escalation_meta = escalation_meta_by_id.get(escalation_id, {}) if escalation_id else {}
+
+            payload_ai_request_type = None
+            payload_escalation_reason = None
+            if isinstance(structured_payload, dict):
+                payload_meta = structured_payload.get("metadata")
+                payload_ai_request_type = _first_text(
+                    structured_payload.get("ai_request_type"),
+                    structured_payload.get("request_type"),
+                    structured_payload.get("escalation_type"),
+                )
+                payload_escalation_reason = _first_text(
+                    structured_payload.get("escalation_reason"),
+                    structured_payload.get("reason"),
+                )
+                if isinstance(payload_meta, dict):
+                    payload_ai_request_type = _first_text(
+                        payload_ai_request_type,
+                        payload_meta.get("ai_request_type"),
+                        payload_meta.get("request_type"),
+                        payload_meta.get("escalation_type"),
+                    )
+                    payload_escalation_reason = _first_text(
+                        payload_escalation_reason,
+                        payload_meta.get("escalation_reason"),
+                        payload_meta.get("reason"),
+                    )
+
+            ai_request_type = _first_text(
+                escalation_meta.get("type"),
+                payload_ai_request_type,
+            )
+            escalation_reason = _first_text(
+                escalation_meta.get("reason"),
+                payload_escalation_reason,
+            )
             items.append(
                 {
                     "message_id": row.get("id") or row.get("message_id"),
@@ -2203,6 +2259,8 @@ def register_chatter_routes(app, state) -> None:
                     "user_last_name2": row.get("user_last_name2"),
                     "structured_payload": structured_payload,
                     "structured_csv": structured_csv,
+                    "ai_request_type": ai_request_type,
+                    "escalation_reason": escalation_reason,
                 }
             )
 
