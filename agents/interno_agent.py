@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import asyncio
 import inspect
+import json
 import logging
 import re
 from datetime import datetime
@@ -303,6 +304,183 @@ class InternoAgent:
                     aliases.append(c)
             return aliases
 
+        def _build_escalation_structured_payload(
+            current_payload: Any,
+            *,
+            ai_request_type: str,
+            escalation_reason: str,
+            escalation_id: str,
+        ) -> dict[str, Any]:
+            payload: dict[str, Any]
+            if isinstance(current_payload, dict):
+                payload = dict(current_payload)
+            elif isinstance(current_payload, str):
+                try:
+                    parsed = json.loads(current_payload)
+                    payload = dict(parsed) if isinstance(parsed, dict) else {}
+                except Exception:
+                    payload = {}
+            else:
+                payload = {}
+
+            metadata = payload.get("metadata")
+            if not isinstance(metadata, dict):
+                metadata = {}
+            metadata["ai_request_type"] = ai_request_type
+            metadata["escalation_reason"] = escalation_reason
+            metadata["escalation_type"] = ai_request_type
+            metadata["reason"] = escalation_reason
+            metadata["escalation_id"] = escalation_id
+            payload["metadata"] = metadata
+
+            payload["ai_request_type"] = ai_request_type
+            payload["escalation_reason"] = escalation_reason
+            payload["escalation_type"] = ai_request_type
+            payload["reason"] = escalation_reason
+            payload["escalation_id"] = escalation_id
+            return payload
+
+        def _link_trigger_message_to_escalation(
+            *,
+            escalation_id: str,
+            resolved_property_id: Optional[str | int],
+        ) -> None:
+            message_text = str(guest_message or "").strip()
+            if not escalation_id or not message_text:
+                return
+            try:
+                from core.db import supabase
+            except Exception:
+                return
+
+            clean_value = _clean_chat_id(guest_chat_id) or _clean_chat_id(clean_chat_id)
+            if not clean_value:
+                return
+
+            context_id = str(guest_chat_id or "").strip()
+            has_context_id = ":" in context_id
+            candidate_chat_ids: list[str] = []
+            for alias in _chat_aliases(guest_chat_id, clean_chat_id):
+                normalized = _clean_chat_id(alias) or str(alias or "").strip()
+                if not normalized or normalized in candidate_chat_ids:
+                    continue
+                candidate_chat_ids.append(normalized)
+            if clean_value and clean_value not in candidate_chat_ids:
+                candidate_chat_ids.append(clean_value)
+            if not candidate_chat_ids:
+                return
+
+            select_candidates = [
+                "id, role, content, created_at, original_chat_id, property_id, structured_payload, escalation_id",
+                "id, role, content, created_at, original_chat_id, property_id, structured_payload",
+                "id, role, content, created_at, original_chat_id, property_id",
+                "message_id, role, content, created_at, original_chat_id, property_id, structured_payload, escalation_id",
+                "message_id, role, content, created_at, original_chat_id, property_id, structured_payload",
+                "message_id, role, content, created_at, original_chat_id, property_id",
+            ]
+
+            matched_row: Optional[dict[str, Any]] = None
+            for chat_candidate in candidate_chat_ids:
+                for strict_property in (True, False):
+                    if strict_property and resolved_property_id is None:
+                        continue
+                    for strict_context in (True, False):
+                        if strict_context and not has_context_id:
+                            continue
+                        rows = None
+                        for select_fields in select_candidates:
+                            try:
+                                query = (
+                                    supabase.table("chat_history")
+                                    .select(select_fields)
+                                    .eq("conversation_id", chat_candidate)
+                                    .in_("role", ["guest", "user"])
+                                    .eq("content", message_text)
+                                )
+                                if strict_property:
+                                    query = query.eq("property_id", resolved_property_id)
+                                if strict_context:
+                                    query = query.eq("original_chat_id", context_id)
+                                rows = (
+                                    query.order("created_at", desc=True)
+                                    .limit(5)
+                                    .execute()
+                                    .data
+                                    or []
+                                )
+                                break
+                            except Exception:
+                                rows = None
+                                continue
+                        if rows:
+                            matched_row = rows[0]
+                            break
+                    if matched_row:
+                        break
+                if matched_row:
+                    break
+
+            if not matched_row:
+                log.info(
+                    "No se encontró mensaje disparador para enlazar escalación %s (chat=%s).",
+                    escalation_id,
+                    guest_chat_id,
+                )
+                return
+
+            row_id = matched_row.get("id")
+            row_id_field = "id"
+            if row_id is None:
+                row_id = matched_row.get("message_id")
+                row_id_field = "message_id"
+            if row_id is None:
+                return
+
+            existing_escalation_id = str(matched_row.get("escalation_id") or "").strip()
+            if existing_escalation_id and existing_escalation_id != escalation_id:
+                log.info(
+                    "Se omite relink de mensaje %s=%s: ya vinculado a escalación %s.",
+                    row_id_field,
+                    row_id,
+                    existing_escalation_id,
+                )
+                return
+
+            structured_payload = _build_escalation_structured_payload(
+                matched_row.get("structured_payload"),
+                ai_request_type=str(escalation_type or "").strip(),
+                escalation_reason=str(reason or "").strip(),
+                escalation_id=escalation_id,
+            )
+
+            update_candidates = []
+            if not existing_escalation_id:
+                update_candidates.append(
+                    {"escalation_id": escalation_id, "structured_payload": structured_payload}
+                )
+                update_candidates.append({"escalation_id": escalation_id})
+            update_candidates.append({"structured_payload": structured_payload})
+
+            for updates in update_candidates:
+                if not updates:
+                    continue
+                try:
+                    (
+                        supabase.table("chat_history")
+                        .update(updates)
+                        .eq(row_id_field, row_id)
+                        .execute()
+                    )
+                    log.info(
+                        "Mensaje disparador enlazado a escalación %s (%s=%s).",
+                        escalation_id,
+                        row_id_field,
+                        row_id,
+                    )
+                    return
+                except Exception:
+                    continue
+
         escalation_flag_targets: list[str] = []
         if self.memory_manager:
             try:
@@ -438,6 +616,18 @@ class InternoAgent:
                 save_escalation(vars(esc_record))
         except Exception as exc:
             log.warning("No se pudo pre-persistir escalación %s: %s", escalation_id, exc)
+
+        try:
+            _link_trigger_message_to_escalation(
+                escalation_id=escalation_id,
+                resolved_property_id=resolved_prop_id,
+            )
+        except Exception as exc:
+            log.debug(
+                "No se pudo vincular mensaje disparador con escalación %s: %s",
+                escalation_id,
+                exc,
+            )
         if self.memory_manager and resolved_prop_id is not None:
             try:
                 for key in [str(guest_chat_id or "").strip(), str(clean_chat_id or "").strip()]:
