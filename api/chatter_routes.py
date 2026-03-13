@@ -364,6 +364,42 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
     return text or None
 
 
+def _normalize_chat_search(value: Optional[str]) -> Optional[str]:
+    if value is None:
+        return None
+    text = " ".join(str(value).strip().split())
+    return text or None
+
+
+def _build_chat_search_filters(search: str) -> List[str]:
+    text = _normalize_chat_search(search)
+    if not text:
+        return []
+    safe_text = (
+        text
+        .replace("\\", "\\\\")
+        .replace(",", " ")
+        .replace("(", " ")
+        .replace(")", " ")
+    )
+    safe_text = " ".join(safe_text.split())
+    if not safe_text:
+        return []
+
+    filters = [
+        f"client_name.ilike.%{safe_text}%",
+        f"content.ilike.%{safe_text}%",
+        f"original_chat_id.ilike.%{safe_text}%",
+    ]
+
+    digits = _clean_chat_id(safe_text)
+    if digits:
+        filters.append(f"conversation_id.ilike.%{digits}%")
+        filters.append(f"original_chat_id.ilike.%{digits}%")
+
+    return list(dict.fromkeys(filters))
+
+
 def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
     if value is None:
         return None
@@ -1718,6 +1754,21 @@ def register_chatter_routes(app, state) -> None:
             rooms.append(f"channel:{channel}")
         return rooms
 
+    def _chat_rooms(chat_id: str) -> list[str]:
+        aliases = _chat_room_aliases(chat_id) or [chat_id]
+        rooms: list[str] = []
+        seen: set[str] = set()
+        for alias in aliases:
+            clean_alias = str(alias or "").strip()
+            if not clean_alias:
+                continue
+            room = f"chat:{clean_alias}"
+            if room in seen:
+                continue
+            seen.add(room)
+            rooms.append(room)
+        return rooms
+
     async def _emit(event: str, payload: dict) -> None:
         socket_mgr = getattr(state, "socket_manager", None)
         if not socket_mgr or not getattr(socket_mgr, "enabled", False):
@@ -1726,6 +1777,68 @@ def register_chatter_routes(app, state) -> None:
             await socket_mgr.emit(event, payload, rooms=payload.get("rooms"))
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
+
+    async def _emit_escalation_resolved(
+        chat_id: str,
+        payload: dict,
+        *,
+        guest_chat_id: Optional[str] = None,
+        instance_id: Optional[str] = None,
+    ) -> None:
+        socket_mgr = getattr(state, "socket_manager", None)
+        canonical_chat_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+        room_sources = [
+            str(guest_chat_id or "").strip(),
+            str(payload.get("chat_id") or "").strip(),
+            str(chat_id or "").strip(),
+        ]
+        rooms: list[str] = []
+        seen: set[str] = set()
+        for room_source in room_sources:
+            for room in _chat_rooms(room_source):
+                if room in seen:
+                    continue
+                seen.add(room)
+                rooms.append(room)
+        if not rooms and canonical_chat_id:
+            rooms = [f"chat:{canonical_chat_id}"]
+
+        emit_payload = dict(payload)
+        emit_payload["event"] = "escalation.resolved"
+        emit_payload["rooms"] = rooms
+
+        if not socket_mgr or not getattr(socket_mgr, "enabled", False):
+            log.warning(
+                "[Socket::escalation.resolved] skipped socket_disabled chat_id=%s escalation_id=%s rooms=%s",
+                canonical_chat_id,
+                emit_payload.get("escalation_id"),
+                rooms,
+            )
+            return
+
+        try:
+            await socket_mgr.emit(
+                "escalation.resolved",
+                emit_payload,
+                rooms=rooms,
+                instance_id=instance_id,
+            )
+            log.info(
+                "[Socket::escalation.resolved] chat_id=%s escalation_id=%s rooms=%s property_id=%s",
+                canonical_chat_id,
+                emit_payload.get("escalation_id"),
+                rooms,
+                emit_payload.get("property_id"),
+            )
+        except Exception as exc:
+            log.warning(
+                "[Socket::escalation.resolved] emit_failed chat_id=%s escalation_id=%s rooms=%s error=%s",
+                canonical_chat_id,
+                emit_payload.get("escalation_id"),
+                rooms,
+                exc,
+                exc_info=True,
+            )
 
     def _restore_chat_visibility(
         chat_id: str,
@@ -1770,12 +1883,15 @@ def register_chatter_routes(app, state) -> None:
         page_size: int = Query(default=20, ge=1, le=100),
         channel: str = Query(default="whatsapp"),
         property_id: Optional[str] = Query(default=None),
+        search: Optional[str] = Query(default=None),
         auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         channel = (channel or "whatsapp").strip().lower()
         if channel not in {"whatsapp", "telegram"}:
             raise HTTPException(status_code=422, detail="Canal no soportado")
         property_id = _normalize_property_id(property_id)
+        search = _normalize_chat_search(search)
+        search_filters = _build_chat_search_filters(search or "") if search else []
         requested_page_size = 50
         instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         allowed_chat_ids: Optional[set[str]] = None
@@ -1812,6 +1928,8 @@ def register_chatter_routes(app, state) -> None:
             # Mantenemos aislamiento por instancia y dejamos pasar esos chats.
             if property_id is not None and not instance_id:
                 query = query.eq("property_id", property_id)
+            if search_filters:
+                query = query.or_(",".join(search_filters))
             resp = query.order("created_at", desc=True).range(
                 offset,
                 offset + batch_size - 1,
@@ -2730,14 +2848,26 @@ def register_chatter_routes(app, state) -> None:
                     ",".join(resolved_ids),
                 )
                 for resolved_id in resolved_ids:
-                    await _emit(
-                        "escalation.resolved",
-                        {
-                            "rooms": rooms,
-                            "chat_id": chat_id,
-                            "escalation_id": resolved_id,
-                            "final_response": outgoing_message,
-                        },
+                    resolved_row = get_escalation(resolved_id) or {}
+                    resolution_payload = _build_escalation_resolution_payload(
+                        chat_id,
+                        resolved_row,
+                        fallback_property_id=property_id,
+                    )
+                    if not resolution_payload.get("escalation_id"):
+                        resolution_payload["escalation_id"] = resolved_id
+                    if not resolution_payload.get("chat_id"):
+                        resolution_payload["chat_id"] = chat_id
+                    if resolution_payload.get("property_id") is None:
+                        resolution_payload["property_id"] = property_id
+                    if not resolution_payload.get("status"):
+                        resolution_payload["status"] = "resolved"
+                    resolution_payload["final_response"] = outgoing_message
+                    await _emit_escalation_resolved(
+                        chat_id,
+                        resolution_payload,
+                        guest_chat_id=str((resolved_row or {}).get("guest_chat_id") or "").strip() or None,
+                        instance_id=instance_id,
                     )
                 await _emit(
                     "chat.updated",
@@ -3404,21 +3534,13 @@ def register_chatter_routes(app, state) -> None:
             updated,
             fallback_property_id=resolved_property_id,
         )
-        pending_snapshot = _pending_snapshot_for_chat(
-            clean_id,
-            resolved_property_id,
-            instance_id=instance_id,
-            memory_manager=getattr(state, "memory_manager", None),
-        )
         escalation_messages = updated.get("messages") if isinstance(updated.get("messages"), list) else []
 
-        await _emit(
-            "escalation.resolved",
-            {
-                "event": "escalation.resolved",
-                "rooms": rooms,
-                **resolution_payload,
-            },
+        await _emit_escalation_resolved(
+            clean_id,
+            resolution_payload,
+            guest_chat_id=str(updated.get("guest_chat_id") or "").strip() or None,
+            instance_id=instance_id,
         )
         await _emit(
             "escalation.chat.updated",
@@ -3460,7 +3582,12 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": clean_id,
                 "property_id": resolved_property_id,
                 "channel": "whatsapp",
-                **pending_snapshot,
+                "needs_action": None,
+                "needs_action_type": None,
+                "needs_action_reason": None,
+                "proposed_response": None,
+                "is_final_response": False,
+                "escalation_messages": None,
                 "escalation_resolution": resolution_payload,
             },
         )

@@ -101,8 +101,7 @@ async def _llm_response_promises_human_escalation(
     try:
         system = (
             "Eres un clasificador binario.\n"
-            "Debes decidir si la respuesta del asistente PROMETE que va a consultar/escalar a una persona del hotel "
-            "(recepción, gerente, equipo humano).\n"
+            "Debes decidir si la respuesta del asistente PROMETE que va a consultar/escalar a una figura humana o interna.\n"
             "Responde SOLO JSON: {\"promises_human_escalation\": true|false, \"confidence\": 0..1}."
         )
         user = (
@@ -221,9 +220,9 @@ async def _llm_rewrite_honest_non_escalated_response(
             "Contexto de verdad: NO existe escalación ni gestión humana activa en backend.\n"
             "Reescribe el mensaje para que sea honesto y natural.\n"
             "Reglas:\n"
-            "- No afirmes ni insinúes que ya consultaste/consultarás internamente o con recepción, gerente, equipo o personal.\n"
+            "- No afirmes ni insinúes que ya consultaste/consultarás con una figura humana o interna.\n"
             "- No prometas confirmación futura basada en una gestión humana no ejecutada.\n"
-            "- Si aplica, puedes ofrecer la derivación en condicional (ej: 'si quieres, puedo derivarlo').\n"
+            "- Si aplica, puedes ofrecer la consulta en condicional (ej: '¿quieres que lo consulte?').\n"
             "- Mantén el sentido útil y el tono cordial.\n"
             "- Usa tuteo en español.\n"
             "- Máximo 2 frases.\n"
@@ -280,7 +279,7 @@ async def _align_response_with_human_escalation_state(
     if not rewritten:
         rewritten = (
             "Ahora mismo no tengo una gestión humana activa para confirmarte ese dato. "
-            "Si quieres, puedo consultarlo."
+            "¿Quieres que lo consulte?"
         )
     return rewritten.strip(), True
 
@@ -1213,7 +1212,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
-                    "Gracias por escribirnos. Estamos validando con recepción el horario, lugar y condiciones "
+                    "Gracias por escribirnos. Estamos revisando el horario, lugar y condiciones "
                     "de esta cortesía para confirmártelo en breve."
                 )
                 forced_offer_escalation = True
@@ -1234,7 +1233,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
             response_raw = _ensure_guest_language(
-                "Lo estoy consultando y te informaré en cuanto tenga respuesta."
+                "Voy a consultarlo y te informaré en cuanto tenga respuesta."
             )
             try:
                 _persist_guest_message()
@@ -1320,7 +1319,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
-                    "Estamos revisando con recepción los detalles exactos de esta cortesía para darte una "
+                    "Estamos revisando los detalles exactos de esta cortesía para darte una "
                     "confirmación correcta en breve."
                 )
                 try:

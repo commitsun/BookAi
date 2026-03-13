@@ -8,7 +8,7 @@ import asyncio
 import inspect
 import logging
 import re
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Any, List, Optional
 
 from langchain.agents import AgentExecutor, create_openai_tools_agent
@@ -16,7 +16,12 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
 from core.db import update_latest_bookai_escalation_metadata
-from core.escalation_db import get_latest_pending_escalation, save_escalation, update_escalation
+from core.escalation_db import (
+    get_escalation,
+    get_latest_pending_escalation,
+    save_escalation,
+    update_escalation,
+)
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
@@ -30,6 +35,51 @@ from tools.interno_tool import (
 )
 
 log = logging.getLogger("InternoAgent")
+
+
+def _to_utc_iso(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, datetime):
+        dt = value
+    else:
+        raw = str(value or "").strip()
+        if not raw:
+            return None
+        try:
+            dt = datetime.fromisoformat(raw.replace("Z", "+00:00"))
+        except ValueError:
+            return raw
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.astimezone(timezone.utc).isoformat()
+
+
+def _resolve_escalation_created_at(
+    escalation_id: str,
+    *,
+    esc_record: Optional[Escalation] = None,
+    escalation_row: Optional[dict[str, Any]] = None,
+) -> Optional[str]:
+    for candidate in (
+        (escalation_row or {}).get("created_at"),
+        (escalation_row or {}).get("timestamp"),
+        getattr(esc_record, "timestamp", None),
+    ):
+        normalized = _to_utc_iso(candidate)
+        if normalized:
+            return normalized
+    if not escalation_id:
+        return None
+    try:
+        stored = get_escalation(escalation_id) or {}
+    except Exception:
+        return None
+    for candidate in (stored.get("created_at"), stored.get("timestamp")):
+        normalized = _to_utc_iso(candidate)
+        if normalized:
+            return normalized
+    return None
 
 
 def _resolve_bookai_enabled_flag(memory_manager: Any, *keys: str) -> Optional[bool]:
@@ -378,9 +428,15 @@ class InternoAgent:
         # Persistimos la escalación antes de emitir eventos para evitar
         # parpadeos en Chatter por carreras entre socket y lectura REST.
         try:
-            now_iso = datetime.utcnow().isoformat()
+            now_iso = datetime.now(timezone.utc).isoformat()
             if reuse_existing:
-                existing_ts = str((existing_pending or {}).get("timestamp") or "").strip() or now_iso
+                existing_ts = (
+                    _to_utc_iso(
+                        (existing_pending or {}).get("created_at")
+                        or (existing_pending or {}).get("timestamp")
+                    )
+                    or now_iso
+                )
                 prev_msg = str((existing_pending or {}).get("guest_message") or "").strip()
                 prev_reason = str(
                     (existing_pending or {}).get("escalation_reason")
@@ -470,6 +526,11 @@ class InternoAgent:
                 pass
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
+            created_at = _resolve_escalation_created_at(
+                escalation_id,
+                esc_record=esc_record,
+                escalation_row=existing_pending if reuse_existing else None,
+            )
             prop_id = None
             if self.memory_manager:
                 try:
@@ -498,7 +559,7 @@ class InternoAgent:
                     "reason": reason,
                     "context": reason,
                     "timestamp": esc_record.timestamp,
-                    "created_at": esc_record.timestamp,
+                    "created_at": created_at or esc_record.timestamp,
                     "property_id": prop_id,
                     "rooms": rooms,
                 },

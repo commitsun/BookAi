@@ -2100,7 +2100,7 @@ def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = "")
         description=(
             "Obtiene los datos detallados de un folio de reserva específico usando MCP/n8n. "
             "Necesita el folio_id y busca el token automáticamente. "
-            "Incluye portalUrl si está disponible (enlace a portal/factura)."
+            "Puede devolver portalUrl si está disponible; trátalo como dato interno y no lo expongas en respuestas guest-facing."
         ),
         coroutine=_consulta_reserva_persona,
         args_schema=ConsultaReservaPersonaInput,

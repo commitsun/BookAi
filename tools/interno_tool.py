@@ -744,6 +744,9 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         "Sé breve y directo: prioriza una respuesta corta de 1 a 3 frases.\n"
         "Evita repeticiones, rodeos y detalles innecesarios.\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
+        "No menciones encargado, hotel, propietario, recepción, equipo, personal ni canales internos cuando expreses una consulta o revisión.\n"
+        "Si hace falta ofrecer una consulta o revisión, usa formulaciones neutras como "
+        "'¿quieres que lo consulte?', 'voy a consultarlo', 'si quieres, lo reviso' o 'voy a comprobarlo'.\n"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
 

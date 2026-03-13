@@ -573,7 +573,7 @@ class InfoAgent:
             "10) Si la respuesta implica una limitación (no disponible / no regulable / no permitido), "
             "mantén el dato principal y añade una frase breve de ayuda práctica.\n"
             "11) Esa frase de ayuda debe salir de la fuente; si la fuente no aporta alternativa concreta, "
-            "ofrece consultar con recepción/equipo sin prometer cambios.\n"
+            "ofrece revisarlo o consultarlo sin prometer cambios.\n"
         )
         user_prompt = (
             f"Pregunta del huésped:\n{q}\n\n"

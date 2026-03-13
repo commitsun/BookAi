@@ -133,7 +133,7 @@ class IncisoTool:
             description=(
                 "Envía un mensaje intermedio de cortesía al usuario mientras procesas su solicitud. "
                 "Úsala con moderación (máx. 2 veces por interacción), cuando necesites tiempo para "
-                "consultar información o coordinarlo internamente. "
+                "consultar información o revisar algo antes de responder. "
                 "Ejemplos: '🕓 Un momento por favor, estoy consultando...', "
                 "'⏳ Dame un segundo mientras reviso esa información...'"
             ),
