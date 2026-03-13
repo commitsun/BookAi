@@ -15,7 +15,12 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
-from core.escalation_db import get_latest_pending_escalation, save_escalation, update_escalation
+from core.escalation_db import (
+    get_latest_pending_escalation,
+    link_chat_message_to_escalation,
+    save_escalation,
+    update_escalation,
+)
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
 from core.utils.time_context import get_time_context
@@ -445,6 +450,38 @@ class InternoAgent:
                         self.memory_manager.set_flag(key, "property_id", resolved_prop_id)
             except Exception:
                 pass
+        if self.memory_manager:
+            try:
+                trigger_payload = {
+                    "escalation_id": escalation_id,
+                    "guest_message": guest_message,
+                    "created_at": datetime.utcnow().isoformat(),
+                }
+                trigger_keys = _chat_aliases(guest_chat_id, clean_chat_id)
+                try:
+                    last_mem = self.memory_manager.get_flag(guest_chat_id, "last_memory_id")
+                except Exception:
+                    last_mem = None
+                if isinstance(last_mem, str) and last_mem.strip():
+                    trigger_keys.extend(_chat_aliases(last_mem.strip()))
+                seen_keys: set[str] = set()
+                for key in trigger_keys:
+                    current = str(key or "").strip()
+                    if not current or current in seen_keys:
+                        continue
+                    seen_keys.add(current)
+                    self.memory_manager.set_flag(current, "last_triggered_escalation", trigger_payload)
+            except Exception:
+                pass
+        try:
+            link_chat_message_to_escalation(
+                guest_chat_id=str(guest_chat_id or "").strip(),
+                guest_message=guest_message,
+                escalation_id=escalation_id,
+                property_id=resolved_prop_id,
+            )
+        except Exception:
+            pass
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
             prop_id = None

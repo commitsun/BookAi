@@ -123,7 +123,6 @@ def _sanitize_guest_text(text: str) -> str:
             lines.append(current)
     return "\n".join(lines).strip()
 
-
 def _resolve_guest_lang(guest_chat_id: str, guest_message: str = "") -> str:
     base = "es"
     try:
@@ -744,6 +743,9 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         "Sé breve y directo: prioriza una respuesta corta de 1 a 3 frases.\n"
         "Evita repeticiones, rodeos y detalles innecesarios.\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
+        "No menciones al encargado, recepción, gerente, equipo, personal ni canales internos.\n"
+        "Si hace falta expresar una consulta o revisión, usa formulaciones neutras como "
+        "'si quieres, lo consulto', 'voy a consultarlo', 'lo reviso' o 'voy a comprobarlo'.\n"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
 
@@ -858,7 +860,6 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
                         ).strip() or final_text_internal
                     except Exception:
                         final_text_out = final_text_internal
-
             ChannelManager = importlib.import_module("channels_wrapper.manager").ChannelManager
             cm = ChannelManager(memory_manager=_MEMORY_MANAGER)
             await cm.send_message(esc.guest_chat_id, final_text_out, channel="whatsapp")

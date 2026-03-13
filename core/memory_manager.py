@@ -12,6 +12,7 @@ from core.db import (
     get_last_property_id_for_original_chat,
     upsert_chat_reservation,
 )
+from core.escalation_db import link_chat_message_to_escalation
 
 log = logging.getLogger("MemoryManager")
 
@@ -51,6 +52,76 @@ class MemoryManager:
             tail = str(conversation_id).split(":")[-1]
             return self._normalize_phone(tail)
         return self._normalize_phone(str(conversation_id))
+
+    @staticmethod
+    def _normalize_message_text(value: str) -> str:
+        return " ".join(str(value or "").split()).strip()
+
+    @staticmethod
+    def _parse_iso_datetime(value: Any) -> Optional[datetime]:
+        text = str(value or "").strip()
+        if not text:
+            return None
+        try:
+            return datetime.fromisoformat(text.replace("Z", "+00:00"))
+        except Exception:
+            return None
+
+    def _consume_recent_triggered_escalation(self, conversation_id: str, content: str) -> Optional[str]:
+        normalized_content = self._normalize_message_text(content)
+        if not normalized_content:
+            return None
+
+        raw = str(conversation_id or "").strip()
+        keys: list[str] = []
+        for candidate in [
+            raw,
+            self._clean_id(raw),
+            self._resolve_db_conversation_id(raw),
+            self.get_flag(raw, "last_memory_id"),
+        ]:
+            text = str(candidate or "").strip()
+            if text and text not in keys:
+                keys.append(text)
+
+        if ":" in raw:
+            tail = raw.split(":")[-1].strip()
+            tail_clean = self._normalize_phone(tail)
+            for candidate in [tail, tail_clean]:
+                text = str(candidate or "").strip()
+                if text and text not in keys:
+                    keys.append(text)
+
+        now = datetime.utcnow()
+        matched_escalation_id: Optional[str] = None
+        matched_keys: list[str] = []
+        for key in keys:
+            try:
+                payload = self.get_flag(key, "last_triggered_escalation")
+            except Exception:
+                payload = None
+            if not isinstance(payload, dict):
+                continue
+            escalation_id = str(payload.get("escalation_id") or "").strip()
+            guest_message = self._normalize_message_text(payload.get("guest_message") or "")
+            created_at = self._parse_iso_datetime(payload.get("created_at"))
+            if not escalation_id or guest_message != normalized_content:
+                continue
+            if created_at is not None and abs((now - created_at.replace(tzinfo=None)).total_seconds()) > 300:
+                continue
+            matched_escalation_id = escalation_id
+            matched_keys = keys
+            break
+
+        if not matched_escalation_id:
+            return None
+
+        for key in matched_keys:
+            try:
+                self.clear_flag(key, "last_triggered_escalation")
+            except Exception:
+                pass
+        return matched_escalation_id
 
     def _resolve_property_id(self, conversation_id: str):
         prop_id = self.get_flag(conversation_id, "property_id") or self.get_flag(
@@ -370,6 +441,13 @@ class MemoryManager:
         if not client_name and is_guest:
             client_name = self.get_flag(cid, "client_name")
 
+        resolved_escalation_id = escalation_id
+        if not resolved_escalation_id and normalized_role in {"guest", "user"}:
+            try:
+                resolved_escalation_id = self._consume_recent_triggered_escalation(conversation_id, content)
+            except Exception:
+                resolved_escalation_id = escalation_id
+
         # Guardrail: evita doble guardado consecutivo del mismo mensaje del huésped.
         if (
             not skip_recent_duplicate_guard
@@ -460,8 +538,8 @@ class MemoryManager:
             "content": content.strip(),
             "created_at": datetime.utcnow().isoformat(),
         }
-        if escalation_id:
-            entry["escalation_id"] = escalation_id
+        if resolved_escalation_id:
+            entry["escalation_id"] = resolved_escalation_id
         if client_name and is_guest:
             entry["client_name"] = client_name
         if user_id is not None and str(user_id).strip() != "":
@@ -509,7 +587,7 @@ class MemoryManager:
                 db_conversation_id,
                 normalized_role,
                 entry["content"],
-                escalation_id=escalation_id,
+                escalation_id=resolved_escalation_id,
                 client_name=client_name if is_guest else None,
                 user_id=user_id,
                 user_first_name=user_first_name,
@@ -521,6 +599,16 @@ class MemoryManager:
                 structured_payload=structured_payload,
                 table=self._resolve_history_table(conversation_id),
             )
+            if normalized_role in {"guest", "user"} and resolved_escalation_id:
+                try:
+                    link_chat_message_to_escalation(
+                        guest_chat_id=resolved_original or str(conversation_id or ""),
+                        guest_message=entry["content"],
+                        escalation_id=resolved_escalation_id,
+                        property_id=property_id,
+                    )
+                except Exception:
+                    pass
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")

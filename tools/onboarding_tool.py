@@ -328,7 +328,7 @@ def create_room_type_tool(memory_manager=None, chat_id: str = ""):
             if not items:
                 return (
                     f"⚠️ No pude obtener la lista de tipos de habitación ahora mismo. "
-                    f"Intento de nuevo o lo consulto con el encargado."
+                    f"Intento de nuevo o lo consulto."
                 )
             return (
                 f"⚠️ No encontré coincidencias para '{room_type_name}'. "

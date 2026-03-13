@@ -76,60 +76,6 @@ def _message_requests_human_intervention(text: str) -> bool:
     return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
 
 
-def _response_promises_human_escalation(text: str) -> bool:
-    raw = (text or "").strip().lower()
-    if not raw:
-        return False
-    patterns = [
-        r"\b(d[ée]jame|un momento|espera|aguarda)\b.{0,60}\b(consult|pregunt|verific|confirm)\w*\b.{0,40}\b(encargad[oa]|gerente|recepci[oó]n|equipo|personal)\b",
-        r"\b(he trasladado|voy a trasladar|escalar[eé]|derivar[eé])\b.{0,50}\b(encargad[oa]|gerente|recepci[oó]n|equipo|personal|humano)\b",
-        r"\b(te|les)\s+(confirm|avis|inform)\w*\b.{0,30}\b(breve|enseguida|en cuanto)\b.{0,40}\b(encargad[oa]|recepci[oó]n|equipo|personal|gerente)\b",
-        r"\b(consult|revis|gestion|coordinar)\w*\b.{0,30}\b(internamente|interno)\b",
-        r"\b(i'?ll|let me|one moment|hold on)\b.{0,60}\b(check|ask|confirm|consult)\b.{0,40}\b(manager|reception|staff|team|human)\b",
-    ]
-    return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
-
-
-async def _llm_response_promises_human_escalation(
-    llm: Any,
-    *,
-    user_message: str,
-    assistant_response: str,
-) -> bool:
-    if not llm:
-        return _response_promises_human_escalation(assistant_response)
-    try:
-        system = (
-            "Eres un clasificador binario.\n"
-            "Debes decidir si la respuesta del asistente PROMETE que va a consultar/escalar a una persona del hotel "
-            "(encargado, recepción, gerente, equipo humano).\n"
-            "Responde SOLO JSON: {\"promises_human_escalation\": true|false, \"confidence\": 0..1}."
-        )
-        user = (
-            f"Mensaje del huésped:\n{user_message}\n\n"
-            f"Respuesta del asistente:\n{assistant_response}\n\n"
-            "Si la respuesta indica explícita o implícitamente 'consultaré/preguntaré/verificaré con el encargado/equipo', "
-            "entonces true."
-        )
-        raw = await llm.ainvoke(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ]
-        )
-        content = (getattr(raw, "content", None) or str(raw or "")).strip()
-        data = _extract_json_object(content) or {}
-        promised = bool(data.get("promises_human_escalation", False))
-        confidence = _safe_float(data.get("confidence"), 0.0)
-        if promised and confidence >= 0.45:
-            return True
-        if promised and confidence <= 0.0:
-            return True
-        return False
-    except Exception:
-        return _response_promises_human_escalation(assistant_response)
-
-
 def _has_recent_pending_escalation(mem_id: str, state) -> bool:
     if not mem_id:
         return False
@@ -192,97 +138,6 @@ def _has_real_human_escalation(state: Any, *chat_ids: str) -> bool:
             if latest:
                 return True
     return False
-
-
-def _may_reference_human_escalation(text: str) -> bool:
-    raw = (text or "").strip().lower()
-    if not raw:
-        return False
-    patterns = [
-        r"\b(encargad[oa]|gerente|recepci[oó]n|equipo|personal|humano|manager|reception|staff|team)\b",
-        r"\b(consult|pregunt|verific|revis|coordinar|gestionar)\w*\b.{0,30}\b(internamente|interno)\b",
-        r"\b(confirm|avis|inform)\w*\b.{0,20}\b(breve|enseguida|en cuanto)\b",
-    ]
-    return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
-
-
-async def _llm_rewrite_honest_non_escalated_response(
-    llm: Any,
-    *,
-    user_message: str,
-    assistant_response: str,
-    target_lang: str,
-) -> str:
-    if not llm:
-        return ""
-    try:
-        system = (
-            "Eres un reescritor de respuestas para huéspedes de hotel.\n"
-            "Contexto de verdad: NO existe escalación ni gestión humana activa en backend.\n"
-            "Reescribe el mensaje para que sea honesto y natural.\n"
-            "Reglas:\n"
-            "- No afirmes ni insinúes que ya consultaste/consultarás con encargado, recepción, gerente, equipo o personal.\n"
-            "- No prometas confirmación futura basada en una gestión humana no ejecutada.\n"
-            "- Si aplica, puedes ofrecer la derivación en condicional (ej: 'si quieres, puedo derivarlo').\n"
-            "- Mantén el sentido útil y el tono cordial.\n"
-            "- Usa tuteo en español.\n"
-            "- Máximo 2 frases.\n"
-            f"- Idioma objetivo: {target_lang or 'es'}.\n"
-            "Devuelve SOLO el mensaje final."
-        )
-        user = (
-            f"Mensaje del huésped:\n{user_message}\n\n"
-            f"Respuesta a corregir:\n{assistant_response}"
-        )
-        raw = await llm.ainvoke(
-            [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ]
-        )
-        rewritten = (getattr(raw, "content", None) or str(raw or "")).strip()
-        return _sanitize_guest_facing_response(rewritten)
-    except Exception:
-        return ""
-
-
-async def _align_response_with_human_escalation_state(
-    llm: Any,
-    *,
-    state: Any,
-    user_message: str,
-    assistant_response: str,
-    target_lang: str,
-    chat_ids: list[str],
-) -> tuple[str, bool]:
-    candidate = _sanitize_guest_facing_response(assistant_response)
-    if not candidate:
-        return "", False
-    if _has_real_human_escalation(state, *(chat_ids or [])):
-        return candidate, False
-    if not _may_reference_human_escalation(candidate):
-        return candidate, False
-
-    promises_human = await _llm_response_promises_human_escalation(
-        llm,
-        user_message=user_message,
-        assistant_response=candidate,
-    )
-    if not promises_human and not _response_promises_human_escalation(candidate):
-        return candidate, False
-
-    rewritten = await _llm_rewrite_honest_non_escalated_response(
-        llm,
-        user_message=user_message,
-        assistant_response=candidate,
-        target_lang=target_lang,
-    )
-    if not rewritten:
-        rewritten = (
-            "Ahora mismo no tengo una gestión humana activa para confirmarte ese dato. "
-            "Si quieres, puedo derivar tu consulta al encargado."
-        )
-    return rewritten.strip(), True
 
 
 def _sanitize_guest_facing_response(text: str) -> str:
@@ -1040,20 +895,6 @@ async def process_user_message(
                 semantic_llm = ModelConfig.get_llm(ModelTier.INTERNAL)
             except Exception:
                 semantic_llm = None
-        guardrail_llm = semantic_llm
-        guardrail_llm_loaded = semantic_llm is not None
-
-        def _get_guardrail_llm():
-            nonlocal guardrail_llm, guardrail_llm_loaded
-            if guardrail_llm_loaded:
-                return guardrail_llm
-            guardrail_llm_loaded = True
-            try:
-                guardrail_llm = ModelConfig.get_llm(ModelTier.INTERNAL)
-            except Exception:
-                guardrail_llm = None
-            return guardrail_llm
-
         # Evitar duplicados: si el huésped confirma y ya se envió un resumen reciente con localizador.
         response_raw = None
         forced_offer_escalation = False
@@ -1144,20 +985,7 @@ async def process_user_message(
                 clean_msg = _sanitize_guest_facing_response(msg)
                 if not clean_msg:
                     return
-                aligned_msg, was_rewritten = await _align_response_with_human_escalation_state(
-                    _get_guardrail_llm(),
-                    state=state,
-                    user_message=user_message,
-                    assistant_response=clean_msg,
-                    target_lang=guest_lang,
-                    chat_ids=[mem_id, chat_id],
-                )
-                if was_rewritten:
-                    log.warning(
-                        "Inciso reescrito para evitar promesa humana sin escalación real (chat_id=%s).",
-                        mem_id,
-                    )
-                final_msg = _ensure_guest_language(aligned_msg or clean_msg)
+                final_msg = _ensure_guest_language(clean_msg)
                 final_msg = _sanitize_guest_facing_response(final_msg)
                 if not final_msg:
                     return
@@ -1213,7 +1041,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
-                    "Gracias por escribirnos. Estamos validando con recepción el horario, lugar y condiciones "
+                    "Gracias por escribirnos. Estamos revisando el horario, lugar y condiciones "
                     "de esta cortesía para confirmártelo en breve."
                 )
                 forced_offer_escalation = True
@@ -1234,7 +1062,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
             response_raw = _ensure_guest_language(
-                "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
+                "Voy a consultarlo y te informaré en cuanto tenga respuesta."
             )
             try:
                 _persist_guest_message()
@@ -1279,16 +1107,6 @@ async def process_user_message(
         # Evita respuestas en español cuando el huésped escribe en pt/fr/de, etc.
         response_raw = _ensure_guest_language(response_raw)
         response_raw = _sanitize_guest_facing_response(response_raw)
-        if not response_raw:
-            await state.interno_agent.escalate(
-                guest_chat_id=escalation_chat_id,
-                guest_message=user_message,
-                escalation_type="error",
-                reason="Respuesta interna filtrada antes de salir al huésped",
-                context="La salida del agente contenía un mensaje interno/no apto para cliente y fue bloqueada.",
-                property_id=property_id,
-            )
-            return None
         if pending_offer and response_raw and not forced_offer_escalation:
             consistency = await _check_offer_response_consistency(
                 semantic_llm,
@@ -1320,35 +1138,20 @@ async def process_user_message(
                     property_id=property_id,
                 )
                 response_raw = _ensure_guest_language(
-                    "Estamos revisando con recepción los detalles exactos de esta cortesía para darte una "
+                    "Estamos revisando los detalles exactos de esta cortesía para darte una "
                     "confirmación correcta en breve."
                 )
                 try:
                     state.memory_manager.save(mem_id, role="assistant", content=response_raw, channel=channel)
                 except Exception as exc:
                     log.warning("No se pudo guardar fallback por guardrail de oferta: %s", exc)
-        aligned_response, was_rewritten = await _align_response_with_human_escalation_state(
-            _get_guardrail_llm(),
-            state=state,
-            user_message=user_message,
-            assistant_response=response_raw,
-            target_lang=guest_lang,
-            chat_ids=[mem_id, chat_id],
-        )
-        if was_rewritten:
-            log.warning(
-                "Respuesta reescrita para evitar promesa humana sin respaldo backend (chat_id=%s).",
-                mem_id,
-            )
-        response_raw = _ensure_guest_language(aligned_response or response_raw)
-        response_raw = _sanitize_guest_facing_response(response_raw)
         if not response_raw:
             await state.interno_agent.escalate(
                 guest_chat_id=escalation_chat_id,
                 guest_message=user_message,
                 escalation_type="error",
-                reason="La respuesta quedó vacía tras alinear promesas humanas con backend.",
-                context="Guardrail de promesas humanas bloqueó salida sin contenido.",
+                reason="La respuesta quedó vacía antes de enviarla al huésped.",
+                context="La salida del agente quedó vacía tras el saneado final.",
                 property_id=property_id,
             )
             return None

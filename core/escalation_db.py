@@ -130,6 +130,109 @@ def append_escalation_message(
     return messages
 
 
+def link_chat_message_to_escalation(
+    *,
+    guest_chat_id: str,
+    guest_message: str,
+    escalation_id: str,
+    property_id=None,
+) -> bool:
+    """
+    Vincula el mensaje del huésped en `chat_history` con su `escalation_id`.
+
+    Estrategia:
+    - Busca primero por `conversation_id` + `original_chat_id` + `property_id`.
+    - Si no encuentra, relaja filtros para soportar datos legacy.
+    - Elige el mensaje más reciente cuyo contenido coincide exactamente tras normalizar espacios.
+    """
+    clean_escalation_id = str(escalation_id or "").strip()
+    normalized_guest_message = " ".join(str(guest_message or "").split())
+    normalized_chat_id = _normalize_guest_chat_id(guest_chat_id)
+    clean_chat_id = normalized_chat_id.split(":")[-1].strip() if normalized_chat_id else ""
+    original_chat_id = normalized_chat_id if ":" in normalized_chat_id else None
+
+    if not clean_escalation_id or not clean_chat_id or not normalized_guest_message:
+        return False
+
+    def _query_candidates(*, use_original: bool, use_property: bool):
+        query = (
+            supabase.table("chat_history")
+            .select("id, content, escalation_id, created_at")
+            .eq("conversation_id", clean_chat_id)
+            .in_("role", ["guest", "user"])
+            .order("created_at", desc=True)
+            .limit(25)
+        )
+        if use_original and original_chat_id:
+            query = query.eq("original_chat_id", original_chat_id)
+        if use_property and property_id is not None:
+            query = query.eq("property_id", property_id)
+        return query.execute().data or []
+
+    candidates = []
+    for use_original, use_property in (
+        (True, True),
+        (False, True),
+        (True, False),
+        (False, False),
+    ):
+        try:
+            candidates = _query_candidates(use_original=use_original, use_property=use_property)
+        except Exception:
+            candidates = []
+        if candidates:
+            break
+
+    if not candidates:
+        return False
+
+    target = None
+    for row in candidates:
+        row_content = " ".join(str((row or {}).get("content") or "").split())
+        if row_content == normalized_guest_message:
+            target = row
+            break
+    if target is None:
+        return False
+
+    current_escalation_id = str((target or {}).get("escalation_id") or "").strip()
+    if current_escalation_id == clean_escalation_id:
+        return True
+    if current_escalation_id and current_escalation_id != clean_escalation_id:
+        log.warning(
+            "⚠️ Mensaje chat_history id=%s ya vinculado a escalación %s; no se sobrescribe con %s.",
+            target.get("id"),
+            current_escalation_id,
+            clean_escalation_id,
+        )
+        return False
+
+    target_id = target.get("id")
+    if target_id is None:
+        return False
+
+    try:
+        supabase.table("chat_history").update(
+            {
+                "escalation_id": clean_escalation_id,
+            }
+        ).eq("id", target_id).execute()
+        log.info(
+            "🔗 Mensaje chat_history id=%s vinculado a escalación %s",
+            target_id,
+            clean_escalation_id,
+        )
+        return True
+    except Exception as exc:
+        log.error(
+            "⚠️ Error vinculando mensaje de chat a escalación %s: %s",
+            clean_escalation_id,
+            exc,
+            exc_info=True,
+        )
+        return False
+
+
 # ======================================================
 # 🧾 Listar escalaciones pendientes de confirmación
 # ======================================================
