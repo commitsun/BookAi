@@ -1114,6 +1114,11 @@ def register_template_routes(app, state) -> None:
                 pass
 
             now_iso = datetime.now(timezone.utc).isoformat()
+            whatsapp_window = {
+                "status": "waiting_for_reply",
+                "remaining_hours": 0.0,
+                "expires_at": None,
+            }
             rooms = _rooms(state, chat_id, property_id, "whatsapp", context_id=context_id)
             visibility_restored = False
             if not chat_visible_before:
@@ -1196,6 +1201,7 @@ def register_template_routes(app, state) -> None:
                             "client_name": reservation_client_name,
                             "client_phone": _extract_guest_phone(chat_id) or chat_id,
                             "whatsapp_phone_number": whatsapp_phone_number,
+                            "whatsapp_window": whatsapp_window,
                             "bookai_enabled": bool(bookai_resolution.get("value")),
                             "unread_count": 0,
                             **_pending_snapshot_for_chat(
@@ -1240,6 +1246,7 @@ def register_template_routes(app, state) -> None:
                     "button_base_url": button_base_url,
                     "structured_payload": structured_payload,
                     "structured_csv": structured_csv,
+                    "whatsapp_window": whatsapp_window,
                 },
             )
             log.info(
@@ -1257,6 +1264,7 @@ def register_template_routes(app, state) -> None:
                     "channel": "whatsapp",
                     "last_message": rendered or wa_template,
                     "last_message_at": now_iso,
+                    "whatsapp_window": whatsapp_window,
                     **_pending_snapshot_for_chat(
                         chat_id,
                         property_id,

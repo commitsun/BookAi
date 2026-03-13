@@ -323,6 +323,7 @@ def resolve_escalation_with_resolution(
     resolved_at: str | None = None,
     resolved_by: str | int | None = None,
     resolved_by_name: str | None = None,
+    resolved_by_email: str | None = None,
 ) -> dict | None:
     if not escalation_id:
         return None
@@ -340,6 +341,8 @@ def resolve_escalation_with_resolution(
         updates["resolved_by"] = str(resolved_by).strip()
     if resolved_by_name is not None and str(resolved_by_name).strip() != "":
         updates["resolved_by_name"] = str(resolved_by_name).strip()
+    if resolved_by_email is not None and str(resolved_by_email).strip() != "":
+        updates["resolved_by_email"] = str(resolved_by_email).strip()
     try:
         supabase.table("escalations").update(updates).eq("escalation_id", escalation_id).execute()
         return get_escalation(escalation_id)

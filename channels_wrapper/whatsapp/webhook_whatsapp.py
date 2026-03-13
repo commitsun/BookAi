@@ -559,6 +559,7 @@ def register_whatsapp_routes(app, state):
                                 "channel": "whatsapp",
                                 "last_message": text,
                                 "last_message_at": now_iso,
+                                "whatsapp_window": _build_active_whatsapp_window(now_iso),
                             },
                             rooms=rooms,
                         )
@@ -726,6 +727,7 @@ def register_whatsapp_routes(app, state):
                         "channel": "whatsapp",
                         "last_message": text,
                         "last_message_at": now_iso,
+                        "whatsapp_window": _build_active_whatsapp_window(now_iso),
                     },
                     rooms=rooms,
                 )

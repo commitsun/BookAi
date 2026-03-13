@@ -144,6 +144,10 @@ class ResolveEscalationRequest(BaseModel):
         default=None,
         description="Nombre visible del usuario que resuelve (opcional).",
     )
+    resolved_by_email: Optional[str] = Field(
+        default=None,
+        description="Email del usuario que resuelve (opcional).",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -401,6 +405,9 @@ def _build_escalation_resolution_payload(
     resolved_by_name = row.get("resolved_by_name")
     if resolved_by_name is not None and not str(resolved_by_name).strip():
         resolved_by_name = None
+    resolved_by_email = row.get("resolved_by_email")
+    if resolved_by_email is not None and not str(resolved_by_email).strip():
+        resolved_by_email = None
     resolved_at = row.get("resolved_at") or row.get("updated_at") or row.get("timestamp")
     property_id = row.get("property_id")
     if property_id is None:
@@ -415,6 +422,7 @@ def _build_escalation_resolution_payload(
         "resolution_notes": notes,
         "resolved_by": resolved_by,
         "resolved_by_name": resolved_by_name,
+        "resolved_by_email": resolved_by_email,
     }
 
 
@@ -1253,10 +1261,22 @@ def _to_utc_z(value: datetime) -> str:
     return dt.isoformat().replace("+00:00", "Z")
 
 
-def _build_whatsapp_window(last_guest_message_at: Optional[str]) -> Dict[str, Any]:
+def _build_whatsapp_window(
+    last_guest_message_at: Optional[str],
+    last_template_sent_at: Optional[str] = None,
+) -> Dict[str, Any]:
     last_dt = _parse_ts(last_guest_message_at)
     if last_dt and last_dt.tzinfo is None:
         last_dt = last_dt.replace(tzinfo=timezone.utc)
+    last_template_dt = _parse_ts(last_template_sent_at)
+    if last_template_dt and last_template_dt.tzinfo is None:
+        last_template_dt = last_template_dt.replace(tzinfo=timezone.utc)
+    if last_template_dt and (not last_dt or last_template_dt > last_dt):
+        return {
+            "status": "waiting_for_reply",
+            "remaining_hours": 0.0,
+            "expires_at": None,
+        }
     if not last_dt:
         return {
             "status": "expired",
@@ -1279,13 +1299,7 @@ def _build_whatsapp_window(last_guest_message_at: Optional[str]) -> Dict[str, An
     }
 
 
-def _resolve_last_guest_message_at(
-    chat_id: str,
-    *,
-    property_id: Optional[str | int] = None,
-    channel: str = "whatsapp",
-    original_chat_id: Optional[str] = None,
-) -> Optional[str]:
+def _chat_history_identity_filters(chat_id: str, original_chat_id: Optional[str] = None) -> List[str]:
     decoded_id = str(chat_id or "").strip()
     clean_id = _clean_chat_id(decoded_id) or decoded_id
     id_candidates = {clean_id}
@@ -1301,6 +1315,17 @@ def _resolve_last_guest_message_at(
     original_clean = str(original_chat_id or "").strip()
     if original_clean:
         filters.append(f"original_chat_id.eq.{original_clean}")
+    return filters
+
+
+def _resolve_last_guest_message_at(
+    chat_id: str,
+    *,
+    property_id: Optional[str | int] = None,
+    channel: str = "whatsapp",
+    original_chat_id: Optional[str] = None,
+) -> Optional[str]:
+    filters = _chat_history_identity_filters(chat_id, original_chat_id)
     if not filters:
         return None
     try:
@@ -1316,6 +1341,60 @@ def _resolve_last_guest_message_at(
         return rows[0].get("created_at") if rows else None
     except Exception:
         return None
+
+
+def _resolve_last_template_sent_at(
+    chat_id: str,
+    *,
+    property_id: Optional[str | int] = None,
+    channel: str = "whatsapp",
+    original_chat_id: Optional[str] = None,
+) -> Optional[str]:
+    filters = _chat_history_identity_filters(chat_id, original_chat_id)
+    if not filters:
+        return None
+    try:
+        query = (
+            supabase.table("chat_history")
+            .select("created_at")
+            .eq("channel", str(channel or "whatsapp").strip() or "whatsapp")
+            .eq("role", "bookai")
+            .like("content", "[TEMPLATE_SENT]%")
+        )
+        if property_id is not None:
+            query = query.eq("property_id", property_id)
+        rows = query.or_(",".join(filters)).order("created_at", desc=True).limit(1).execute().data or []
+        return rows[0].get("created_at") if rows else None
+    except Exception:
+        return None
+
+
+def _resolve_whatsapp_window_for_chat(
+    chat_id: str,
+    *,
+    property_id: Optional[str | int] = None,
+    channel: str = "whatsapp",
+    original_chat_id: Optional[str] = None,
+    last_guest_message_at: Optional[str] = None,
+    last_template_sent_at: Optional[str] = None,
+) -> Dict[str, Any]:
+    guest_message_at = last_guest_message_at
+    if not guest_message_at:
+        guest_message_at = _resolve_last_guest_message_at(
+            chat_id,
+            property_id=property_id,
+            channel=channel,
+            original_chat_id=original_chat_id,
+        )
+    template_sent_at = last_template_sent_at
+    if not template_sent_at:
+        template_sent_at = _resolve_last_template_sent_at(
+            chat_id,
+            property_id=property_id,
+            channel=channel,
+            original_chat_id=original_chat_id,
+        )
+    return _build_whatsapp_window(guest_message_at, template_sent_at)
 
 
 def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -> Optional[str | int]:
@@ -1838,6 +1917,7 @@ def register_chatter_routes(app, state) -> None:
         client_names: Dict[str, str] = {}
         client_languages: Dict[str, Tuple[str, float]] = {}
         last_guest_message_at_by_cid: Dict[str, Optional[str]] = {}
+        last_template_sent_at_by_cid: Dict[str, Optional[str]] = {}
         expected_original_by_cid: Dict[str, str] = {}
         if page_keys:
             conv_ids = [
@@ -1923,6 +2003,58 @@ def register_chatter_routes(app, state) -> None:
                             client_languages[cid] = (lang, confidence)
                 except Exception as exc:
                     log.warning("No se pudo cargar client_name/client_language: %s", exc)
+                try:
+                    template_query = (
+                        supabase.table("chat_history")
+                        .select("conversation_id, original_chat_id, created_at, content")
+                        .in_("conversation_id", conv_ids)
+                        .eq("channel", channel)
+                        .eq("role", "bookai")
+                        .like("content", "[TEMPLATE_SENT]%")
+                    )
+                    resp_template_rows: List[Dict[str, Any]] = []
+                    if property_id is not None and not instance_id:
+                        resp_with_property = (
+                            template_query
+                            .eq("property_id", property_id)
+                            .order("created_at", desc=True)
+                            .limit(2000)
+                            .execute()
+                        )
+                        resp_template_rows = resp_with_property.data or []
+                        if not resp_template_rows:
+                            resp_without_property = (
+                                supabase.table("chat_history")
+                                .select("conversation_id, original_chat_id, created_at, content")
+                                .in_("conversation_id", conv_ids)
+                                .eq("channel", channel)
+                                .eq("role", "bookai")
+                                .like("content", "[TEMPLATE_SENT]%")
+                                .order("created_at", desc=True)
+                                .limit(2000)
+                                .execute()
+                            )
+                            resp_template_rows = resp_without_property.data or []
+                    else:
+                        resp_without_property = (
+                            template_query
+                            .order("created_at", desc=True)
+                            .limit(2000)
+                            .execute()
+                        )
+                        resp_template_rows = resp_without_property.data or []
+                    for row in resp_template_rows:
+                        cid = str(row.get("conversation_id") or "").strip()
+                        if not cid:
+                            continue
+                        row_original = str(row.get("original_chat_id") or "").strip()
+                        expected_original = expected_original_by_cid.get(cid) or ""
+                        if expected_original and row_original and row_original != expected_original:
+                            continue
+                        if cid not in last_template_sent_at_by_cid:
+                            last_template_sent_at_by_cid[cid] = row.get("created_at")
+                except Exception as exc:
+                    log.warning("No se pudo cargar timestamps de plantilla whatsapp: %s", exc)
 
         items = []
         memory_manager = getattr(state, "memory_manager", None)
@@ -2047,7 +2179,18 @@ def register_chatter_routes(app, state) -> None:
                         channel=chat_channel,
                         original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
                     )
-                chat_payload["whatsapp_window"] = _build_whatsapp_window(last_guest_message_at)
+                last_template_sent_at = last_template_sent_at_by_cid.get(cid)
+                if not last_template_sent_at:
+                    last_template_sent_at = _resolve_last_template_sent_at(
+                        cid,
+                        property_id=prop_id,
+                        channel=chat_channel,
+                        original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
+                    )
+                chat_payload["whatsapp_window"] = _build_whatsapp_window(
+                    last_guest_message_at,
+                    last_template_sent_at,
+                )
             items.append(chat_payload)
 
         return {
@@ -2634,6 +2777,12 @@ def register_chatter_routes(app, state) -> None:
             )
         except Exception:
             client_language, client_language_confidence = "es", 0.0
+        whatsapp_window = _resolve_whatsapp_window_for_chat(
+            chat_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=session_id,
+        )
         socket_mgr = getattr(state, "socket_manager", None)
         if (
             socket_mgr
@@ -2675,14 +2824,6 @@ def register_chatter_routes(app, state) -> None:
                 property_id=property_id,
                 instance_id=instance_id,
                 default=True,
-            )
-            whatsapp_window = _build_whatsapp_window(
-                _resolve_last_guest_message_at(
-                    chat_id,
-                    property_id=property_id,
-                    channel="whatsapp",
-                    original_chat_id=session_id,
-                )
             )
             await socket_mgr.emit(
                 "chat.list.updated",
@@ -2754,6 +2895,7 @@ def register_chatter_routes(app, state) -> None:
                     client_language_confidence,
                     default=0.0,
                 ),
+                "whatsapp_window": whatsapp_window,
             },
         )
         log.info(
@@ -2771,6 +2913,7 @@ def register_chatter_routes(app, state) -> None:
                 "channel": payload.channel.lower(),
                 "last_message": outgoing_message,
                 "last_message_at": now_iso,
+                "whatsapp_window": whatsapp_window,
                 **_pending_snapshot_for_chat(
                     chat_id,
                     property_id,
@@ -3221,6 +3364,7 @@ def register_chatter_routes(app, state) -> None:
         if payload.resolved_by is not None and str(payload.resolved_by).strip():
             resolved_by = str(payload.resolved_by).strip()
         resolved_by_name = str(payload.resolved_by_name or "").strip() or None
+        resolved_by_email = str(payload.resolved_by_email or "").strip() or None
         resolved_at = datetime.now(timezone.utc).isoformat()
         resolution_notes = payload.resolution_notes if payload.resolution_notes is not None else ""
 
@@ -3232,6 +3376,7 @@ def register_chatter_routes(app, state) -> None:
             resolved_at=resolved_at,
             resolved_by=resolved_by,
             resolved_by_name=resolved_by_name,
+            resolved_by_email=resolved_by_email,
         )
         if not updated:
             raise HTTPException(status_code=500, detail="No se pudo resolver la escalación")
@@ -3660,13 +3805,11 @@ def register_chatter_routes(app, state) -> None:
             instance_id=instance_id,
             default=True,
         )
-        whatsapp_window = _build_whatsapp_window(
-            _resolve_last_guest_message_at(
-                clean_id,
-                property_id=prop_id,
-                channel=channel,
-                original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
-            )
+        whatsapp_window = _resolve_whatsapp_window_for_chat(
+            clean_id,
+            property_id=prop_id,
+            channel=channel,
+            original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
         )
         try:
             client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
@@ -3883,13 +4026,11 @@ def register_chatter_routes(app, state) -> None:
             instance_id=instance_id,
             default=True,
         )
-        whatsapp_window = _build_whatsapp_window(
-            _resolve_last_guest_message_at(
-                clean_id,
-                property_id=prop_id,
-                channel=channel,
-                original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
-            )
+        whatsapp_window = _resolve_whatsapp_window_for_chat(
+            clean_id,
+            property_id=prop_id,
+            channel=channel,
+            original_chat_id=str(last.get("original_chat_id") or "").strip() or None,
         )
         try:
             client_language, client_language_confidence = _resolve_guest_lang_meta_for_chat(
@@ -4409,6 +4550,12 @@ def register_chatter_routes(app, state) -> None:
             )
         except Exception:
             client_language, client_language_confidence = "es", 0.0
+        whatsapp_window = _resolve_whatsapp_window_for_chat(
+            chat_id,
+            property_id=property_id,
+            channel="whatsapp",
+            original_chat_id=context_id or None,
+        )
         socket_mgr = getattr(state, "socket_manager", None)
         if (
             socket_mgr
@@ -4440,14 +4587,6 @@ def register_chatter_routes(app, state) -> None:
                 property_id=property_id,
                 instance_id=instance_id,
                 default=True,
-            )
-            whatsapp_window = _build_whatsapp_window(
-                _resolve_last_guest_message_at(
-                    chat_id,
-                    property_id=property_id,
-                    channel="whatsapp",
-                    original_chat_id=context_id or None,
-                )
             )
             await socket_mgr.emit(
                 "chat.list.updated",
@@ -4510,6 +4649,7 @@ def register_chatter_routes(app, state) -> None:
                     client_language_confidence,
                     default=0.0,
                 ),
+                "whatsapp_window": whatsapp_window,
             },
         )
         await _emit(
@@ -4521,6 +4661,7 @@ def register_chatter_routes(app, state) -> None:
                 "channel": "whatsapp",
                 "last_message": rendered or template_name,
                 "last_message_at": now_iso,
+                "whatsapp_window": whatsapp_window,
                 **_pending_snapshot_for_chat(
                     chat_id,
                     property_id,
@@ -4549,39 +4690,49 @@ def register_chatter_routes(app, state) -> None:
     ):
         clean_id = _clean_chat_id(chat_id) or chat_id
         property_id = _normalize_property_id(property_id)
-        # Also consider compound conversation ids like "prefix:<chat_id>".
-        like_pattern = f"%:{clean_id}"
-        query = supabase.table("chat_history").select("created_at").in_("role", ["guest"])
-        if property_id is not None:
-            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+        last_guest_message_at = _resolve_last_guest_message_at(
+            clean_id,
+            property_id=property_id,
+            channel="whatsapp",
+        )
+        last_template_sent_at = _resolve_last_template_sent_at(
+            clean_id,
+            property_id=property_id,
+            channel="whatsapp",
+        )
+        whatsapp_window = _build_whatsapp_window(
+            last_guest_message_at,
+            last_template_sent_at,
+        )
+        last_guest_dt = _parse_ts(last_guest_message_at)
+        if last_guest_dt and last_guest_dt.tzinfo is None:
+            last_guest_dt = last_guest_dt.replace(tzinfo=timezone.utc)
+        hours_since_last_guest_msg = None
+        if last_guest_dt:
+            now = datetime.now(timezone.utc)
+            hours_since_last_guest_msg = round((now - last_guest_dt).total_seconds() / 3600.0, 2)
+
+        status = str(whatsapp_window.get("status") or "").strip() or "expired"
+        needs_template = status in {"expired", "waiting_for_reply"}
+        if status == "waiting_for_reply":
+            reason = "esperando_respuesta_huesped"
+        elif status in {"active", "expiring"}:
+            reason = "ventana_activa"
         else:
-            query = query.or_(
-                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
-            )
-        resp = query.order("created_at", desc=True).limit(1).execute()
-        rows = resp.data or []
-        last_ts = rows[0].get("created_at") if rows else None
-        last_dt = _parse_ts(last_ts)
+            reason = "ventana_superada"
 
-        if not last_dt:
-            return {
-                "chat_id": clean_id,
-                "needs_template": True,
-                "last_user_message_at": None,
-                "hours_since_last_user_msg": None,
-                "reason": "necesita_plantilla",
-            }
-
-        now = datetime.now(timezone.utc)
-        delta_hours = (now - last_dt).total_seconds() / 3600.0
-        needs_template = delta_hours >= 24
-
-        return {
+        payload = {
             "chat_id": clean_id,
+            "status": status,
             "needs_template": needs_template,
-            "last_user_message_at": last_dt.isoformat(),
-            "hours_since_last_user_msg": round(delta_hours, 2),
-            "reason": "ventana_superada" if needs_template else "ventana_activa",
+            "last_guest_message_at": _to_utc_z(last_guest_dt) if last_guest_dt else None,
+            "hours_since_last_guest_msg": hours_since_last_guest_msg,
+            "remaining_hours": whatsapp_window.get("remaining_hours"),
+            "expires_at": whatsapp_window.get("expires_at"),
+            "reason": reason,
         }
+        payload["last_user_message_at"] = payload["last_guest_message_at"]
+        payload["hours_since_last_user_msg"] = payload["hours_since_last_guest_msg"]
+        return payload
 
     app.include_router(router)
