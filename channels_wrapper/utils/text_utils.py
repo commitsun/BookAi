@@ -2,41 +2,21 @@ import re
 import random
 import asyncio
 import logging
-import json
 from langchain_openai import ChatOpenAI
 
 log = logging.getLogger("fragmentation")
+_CUT_MARKER = "<<BOOKAI_CUT>>"
 
-_END_PUNCTUATION_RE = re.compile(r"[.!?…:;)\]]$")
-
-
-def _normalize_fragment_punctuation(fragment: str) -> str:
-    text = (fragment or "").strip()
-    if not text:
-        return ""
-    if _END_PUNCTUATION_RE.search(text):
-        return text
-    if re.search(r"https?://|www\.", text, re.IGNORECASE):
-        return text
-    if "\n" in text:
-        return text
-    if len(text) < 18:
-        return text
-    if text.endswith((",", "-", "•")):
-        return text.rstrip(", -•") + "."
-    return text + "."
-
-
-def _split_long_unpunctuated_fragment(fragment: str) -> list[str]:
+def _split_long_fragment_preserving_text(fragment: str, hard_limit: int = 210) -> list[str]:
+    """Divide fragmentos largos sin reescribir contenido ni añadir puntuación."""
     text = (fragment or "").strip()
     if not text:
         return []
-    if len(text) < 220:
+    if len(text) <= hard_limit:
         return [text]
 
     parts: list[str] = []
     remaining = text
-    hard_limit = 210
     soft_target = 150
     break_chars = ",;:"
 
@@ -58,102 +38,121 @@ def _split_long_unpunctuated_fragment(fragment: str) -> list[str]:
 
     if remaining:
         parts.append(remaining)
-    return [_normalize_fragment_punctuation(part) for part in parts if part]
+    return [part for part in parts if part]
+
+
+def _collect_sentence_fragments(text: str) -> list[str]:
+    """Parte por frases preservando el texto original."""
+    stripped = (text or "").strip().replace("\r", "")
+    if not stripped:
+        return []
+
+    fragments: list[str] = []
+    sentence_re = re.compile(r".+?(?:[.!?…]+(?=\s|$)|$)", re.S)
+    for match in sentence_re.finditer(stripped):
+        fragment = match.group(0).strip()
+        if fragment:
+            fragments.append(fragment)
+
+    return fragments or [stripped]
+
+
+def _normalize_for_comparison(text: str) -> str:
+    return re.sub(r"\s+", " ", str(text or "").strip())
+
+
+def _fragments_preserve_source(original: str, fragments: list[str]) -> bool:
+    rebuilt = " ".join((frag or "").strip() for frag in fragments if (frag or "").strip())
+    return _normalize_for_comparison(original) == _normalize_for_comparison(rebuilt)
 
 # ============================================================
-# 🔹 Fallback clásico: fragmentación natural tipo “n8n”
+# 🔹 Fragmentación determinista sin reescritura
 # ============================================================
 def fragment_text_intelligently(text: str, max_fragments: int = 12) -> list[str]:
-    """Divide el texto en frases naturales (por puntos, exclamaciones o interrogaciones)."""
+    """Divide el texto en fragmentos naturales preservando el contenido original."""
     if not text or not isinstance(text, str):
         return []
 
-    text = text.strip().replace("\r", "")
-    text = re.sub(r'\s+', ' ', text)
+    base_fragments = _collect_sentence_fragments(text)
+    fragments: list[str] = []
+    for frag in base_fragments:
+        fragments.extend(_split_long_fragment_preserving_text(frag))
 
-    raw_fragments = re.split(r'(?<=[.!?])\s+', text)
-    fragments = []
-    for frag in raw_fragments:
-        frag = frag.strip()
-        if not frag:
-            continue
-        if fragments and len(fragments[-1]) < 60:
-            fragments[-1] = f"{fragments[-1]} {frag}"
-        else:
-            fragments.append(frag)
+    if len(fragments) > max_fragments:
+        head = fragments[: max_fragments - 1]
+        tail = " ".join(part.strip() for part in fragments[max_fragments - 1:] if part.strip())
+        fragments = head + ([tail] if tail else [])
 
-    clean = []
-    for frag in fragments:
-        if len(frag) > 400:
-            sub = re.split(r'(?<=,)\s+', frag)
-            clean.extend(sub)
-        else:
-            clean.append(frag)
-
-    if len(clean) > max_fragments:
-        clean = clean[:max_fragments - 1] + [" ".join(clean[max_fragments - 1:])]
-
-    return [f.strip() for f in clean if f.strip()]
+    return [f.strip() for f in fragments if f and f.strip()]
 
 
 # ============================================================
-# 🤖 IA Fragmentadora: GPT-4-mini
+# 🤖 IA Fragmentadora con validación estricta
 # ============================================================
 async def fragment_text_with_ai(text: str, max_fragments: int = 9) -> list[str]:
     """
-    Usa IA (GPT-4-mini) para dividir el texto en fragmentos cortos y naturales.
-    Devuelve un JSON con claves "A1", "A2", ... según la estructura del ejemplo.
+    Usa IA solo para decidir puntos de corte.
+    Si la IA altera el contenido, se descarta y se usa el fragmentador determinista.
     """
-    if not text or len(text.strip()) < 40:
-        return [text.strip()] if text else []
+    raw_text = (text or "").strip()
+    if not raw_text:
+        return []
+    if len(raw_text) < 40:
+        return [raw_text]
 
-    llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0.3)
-
+    llm = ChatOpenAI(model="gpt-4.1-mini", temperature=0)
     prompt = f"""
-Eres un experto en dividir textos largos en mensajes cortos y naturales.
+Tu única tarea es insertar el marcador {_CUT_MARKER} en el texto original para indicar cortes naturales.
 
-Sigue estas reglas:
-1. Divide el texto original en fragmentos consecutivos, sin alterar el orden.
-2. Usa un máximo de {max_fragments} fragmentos ("A1", "A2", ..., "A{max_fragments}").
-3. Conserva la puntuación original; no quites puntos, comas, dos puntos, interrogaciones ni exclamaciones.
-4. Si una frase del texto original termina en punto, interrogación o exclamación, respétalo.
-5. No borres los dos puntos ":" si hay listados.
-6. Elimina expresiones robóticas o latinoamericanas como "en qué puedo asistirte", "con gusto te ayudo", "estoy aquí para ayudarte".
-7. Si el texto es muy largo, resume sin perder lo esencial.
-8. Devuelve ÚNICAMENTE un objeto JSON válido, sin texto adicional.
+Reglas obligatorias:
+1. No cambies, corrijas, traduzcas, resumas ni reescribas nada.
+2. No añadas ni elimines ningún carácter del texto original, salvo el marcador {_CUT_MARKER}.
+3. Mantén exactamente el mismo orden, palabras y puntuación.
+4. Usa como máximo {max_fragments} fragmentos.
+5. Si no hace falta dividir, devuelve el texto original tal cual, sin marcador.
+6. Devuelve solo el texto final con los marcadores, sin comillas, sin JSON y sin explicaciones.
 
-Ejemplo de salida:
-{{
-  "A1": "Hola, muchas gracias por tus palabras!",
-  "A2": "Me alegra que te gusten mis vídeos",
-  "A3": "Estás interesado en el mundo de Amazon FBA?"
-}}
-
-Texto a fragmentar:
+Texto original:
 ---
-{text.strip()}
+{raw_text}
 ---
-"""
+""".strip()
 
     try:
         response = await llm.ainvoke(prompt)
-        raw = response.content.strip()
+        candidate = (getattr(response, "content", None) or str(response or "")).strip()
+        if not candidate:
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
 
-        try:
-            data = json.loads(raw)
-            if isinstance(data, dict):
-                base = [v.strip() for v in data.values() if isinstance(v, str) and v.strip()]
-                fixed: list[str] = []
-                for item in base:
-                    fixed.extend(_split_long_unpunctuated_fragment(item))
-                return [_normalize_fragment_punctuation(v) for v in fixed if v.strip()]
-        except json.JSONDecodeError:
-            log.warning("⚠️ No se pudo parsear JSON de la IA, usando fallback clásico.")
-            return fragment_text_intelligently(text)
+        # Tolerar code fences accidentales del modelo.
+        candidate = re.sub(r"^```(?:text)?\s*", "", candidate)
+        candidate = re.sub(r"\s*```$", "", candidate)
 
-    except Exception as e:
-        log.error(f"⚠️ Error en fragment_text_with_ai: {e}")
-        return fragment_text_intelligently(text)
+        if _CUT_MARKER not in candidate:
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
+
+        base_fragments = [frag.strip() for frag in candidate.split(_CUT_MARKER) if frag and frag.strip()]
+        if not base_fragments:
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
+
+        if not _fragments_preserve_source(raw_text, base_fragments):
+            log.warning("Fragmentador IA alteró contenido; usando fallback determinista.")
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
+
+        fragments: list[str] = []
+        for frag in base_fragments:
+            fragments.extend(_split_long_fragment_preserving_text(frag))
+
+        if not fragments or not _fragments_preserve_source(raw_text, fragments):
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
+
+        if len(fragments) > max_fragments:
+            return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
+
+        return fragments
+    except Exception as exc:
+        log.warning("Error en fragmentador IA; usando fallback determinista: %s", exc)
+        return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
 
 
 # ============================================================
@@ -173,13 +172,13 @@ async def sleep_typing_async(text: str, thoughtful: bool = False):
 
 
 # ============================================================
-# 💬 Envío fragmentado con ritmo humano (IA + fallback)
+# 💬 Envío fragmentado con ritmo humano
 # ============================================================
 async def send_fragmented_async(send_callable, user_id: str, reply: str):
     """
-    Envía la respuesta en fragmentos naturales (prioriza IA).
+    Envía la respuesta en fragmentos naturales sin reescribir el contenido.
     - Usa pausas humanas entre mensajes.
-    - Mantiene coherencia y tono cálido.
+    - Conserva el texto tal cual lo generó el agente.
     """
     if not reply or not isinstance(reply, str):
         return
@@ -190,11 +189,6 @@ async def send_fragmented_async(send_callable, user_id: str, reply: str):
             fragments = fragment_text_intelligently(reply)
     except Exception:
         fragments = fragment_text_intelligently(reply)
-
-    normalized: list[str] = []
-    for frag in fragments:
-        normalized.extend(_split_long_unpunctuated_fragment(frag))
-    fragments = [_normalize_fragment_punctuation(frag) for frag in normalized if frag and frag.strip()]
 
     total = len(fragments)
 
