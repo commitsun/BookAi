@@ -3404,11 +3404,19 @@ def register_chatter_routes(app, state) -> None:
                     continue
 
         rooms = _rooms(clean_id, resolved_property_id, "whatsapp")
+        escalation_rooms = _rooms(clean_id, None, "whatsapp")
         resolution_payload = _build_escalation_resolution_payload(
             clean_id,
             updated,
             fallback_property_id=resolved_property_id,
         )
+        pending_snapshot = _pending_snapshot_for_chat(
+            clean_id,
+            resolved_property_id,
+            instance_id=instance_id,
+            memory_manager=getattr(state, "memory_manager", None),
+        )
+        escalation_messages = updated.get("messages") if isinstance(updated.get("messages"), list) else []
 
         await _emit(
             "escalation.resolved",
@@ -3419,18 +3427,46 @@ def register_chatter_routes(app, state) -> None:
             },
         )
         await _emit(
+            "escalation.chat.updated",
+            {
+                "rooms": escalation_rooms,
+                "chat_id": clean_id,
+                "escalation_id": resolution_payload.get("escalation_id"),
+                "messages": escalation_messages,
+                "pending_escalations_count": 0,
+                "resolution": resolution_payload,
+            },
+        )
+        await _emit(
+            "escalation.updated",
+            {
+                "rooms": escalation_rooms,
+                "chat_id": clean_id,
+                "escalation_id": resolution_payload.get("escalation_id"),
+                "messages": escalation_messages,
+                "draft_response": None,
+                "pending_escalations_count": 0,
+                "status": "resolved",
+                "resolution": resolution_payload,
+            },
+        )
+        await _emit(
+            "chat.proposed_response.updated",
+            {
+                "rooms": escalation_rooms,
+                "chat_id": clean_id,
+                "proposed_response": None,
+                "is_final_response": False,
+            },
+        )
+        await _emit(
             "chat.updated",
             {
                 "rooms": rooms,
                 "chat_id": clean_id,
                 "property_id": resolved_property_id,
                 "channel": "whatsapp",
-                **_pending_snapshot_for_chat(
-                    clean_id,
-                    resolved_property_id,
-                    instance_id=instance_id,
-                    memory_manager=getattr(state, "memory_manager", None),
-                ),
+                **pending_snapshot,
                 "escalation_resolution": resolution_payload,
             },
         )
