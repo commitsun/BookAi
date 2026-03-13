@@ -15,6 +15,7 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
+from core.db import update_latest_bookai_escalation_metadata
 from core.escalation_db import get_latest_pending_escalation, save_escalation, update_escalation
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
@@ -373,6 +374,7 @@ class InternoAgent:
             else f"esc_{clean_chat_id}_{int(datetime.utcnow().timestamp())}"
         )
         guest_lang = _guest_lang()
+        needs_action_reason = None
         # Persistimos la escalación antes de emitir eventos para evitar
         # parpadeos en Chatter por carreras entre socket y lectura REST.
         try:
@@ -436,8 +438,29 @@ class InternoAgent:
                 )
                 self.escalations[escalation_id] = esc_record
                 save_escalation(vars(esc_record))
+            effective_reason = str(getattr(esc_record, "escalation_reason", "") or "").strip()
+            needs_action_reason = (
+                f"{effective_reason} (Idioma huésped: {guest_lang})"
+                if effective_reason
+                else None
+            )
         except Exception as exc:
             log.warning("No se pudo pre-persistir escalación %s: %s", escalation_id, exc)
+        try:
+            marked = update_latest_bookai_escalation_metadata(
+                guest_chat_id=str(guest_chat_id or "").strip(),
+                property_id=resolved_prop_id,
+                ai_request_type="help_needed",
+                escalation_reason=needs_action_reason,
+            )
+            if not marked:
+                log.info(
+                    "No se encontró mensaje bookai para marcar escalación en chat=%s property_id=%s",
+                    guest_chat_id,
+                    resolved_prop_id,
+                )
+        except Exception as exc:
+            log.warning("No se pudo marcar metadata de escalación en chat_history: %s", exc)
         if self.memory_manager and resolved_prop_id is not None:
             try:
                 for key in [str(guest_chat_id or "").strip(), str(clean_chat_id or "").strip()]:
@@ -487,9 +510,7 @@ class InternoAgent:
                     "chat_id": clean_chat_id,
                     "needs_action": _needs_action_es(guest_lang),
                     "needs_action_type": escalation_type,
-                    "needs_action_reason": (
-                        f"{reason} (Idioma huésped: {guest_lang})" if (reason or "").strip() else None
-                    ),
+                    "needs_action_reason": needs_action_reason,
                     "timestamp": esc_record.timestamp,
                     "proposed_response": None,
                     "escalation_id": escalation_id,

@@ -2101,7 +2101,13 @@ def register_chatter_routes(app, state) -> None:
         like_patterns = {f"%:{candidate}" for candidate in id_candidates}
 
         base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id, structured_payload"
-        extended_fields = f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
+        extended_fields = (
+            f"{base_fields}, ai_request_type, escalation_reason, "
+            "user_id, user_first_name, user_last_name, user_last_name2, id"
+        )
+        extended_fields_no_escalation_meta = (
+            f"{base_fields}, user_id, user_first_name, user_last_name, user_last_name2, id"
+        )
         try:
             query = supabase.table("chat_history").select(extended_fields)
             if property_id is not None and not instance_id:
@@ -2116,9 +2122,7 @@ def register_chatter_routes(app, state) -> None:
             ).execute()
         except Exception:
             try:
-                fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
-                query = supabase.table("chat_history").select(fallback_fields)
+                query = supabase.table("chat_history").select(extended_fields_no_escalation_meta)
                 if property_id is not None and not instance_id:
                     query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
                 else:
@@ -2131,17 +2135,32 @@ def register_chatter_routes(app, state) -> None:
                 ).execute()
             except Exception:
                 fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
-                query = supabase.table("chat_history").select(fallback_base_fields)
-                if property_id is not None and not instance_id:
-                    query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-                else:
-                    or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
-                    or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
-                    query = query.or_(",".join(or_filters))
-                resp = query.order("created_at", desc=True).range(
-                    offset,
-                    offset + page_size - 1,
-                ).execute()
+                fallback_fields = f"{fallback_base_fields}, user_id, user_first_name, user_last_name, user_last_name2, message_id"
+                try:
+                    query = supabase.table("chat_history").select(fallback_fields)
+                    if property_id is not None and not instance_id:
+                        query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+                    else:
+                        or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                        or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                        query = query.or_(",".join(or_filters))
+                    resp = query.order("created_at", desc=True).range(
+                        offset,
+                        offset + page_size - 1,
+                    ).execute()
+                except Exception:
+                    fallback_base_fields = "conversation_id, role, content, created_at, read_status, original_chat_id, property_id"
+                    query = supabase.table("chat_history").select(fallback_base_fields)
+                    if property_id is not None and not instance_id:
+                        query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
+                    else:
+                        or_filters = [f"conversation_id.eq.{candidate}" for candidate in id_candidates]
+                        or_filters += [f"conversation_id.like.{pattern}" for pattern in like_patterns]
+                        query = query.or_(",".join(or_filters))
+                    resp = query.order("created_at", desc=True).range(
+                        offset,
+                        offset + page_size - 1,
+                    ).execute()
 
         rows = resp.data or []
         if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
@@ -2203,6 +2222,8 @@ def register_chatter_routes(app, state) -> None:
                     "user_last_name2": row.get("user_last_name2"),
                     "structured_payload": structured_payload,
                     "structured_csv": structured_csv,
+                    "ai_request_type": row.get("ai_request_type"),
+                    "escalation_reason": row.get("escalation_reason"),
                 }
             )
 

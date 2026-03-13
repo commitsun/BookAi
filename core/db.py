@@ -481,6 +481,84 @@ def attach_structured_payload_to_latest_message(
         return False
 
 
+def update_latest_bookai_escalation_metadata(
+    *,
+    guest_chat_id: str,
+    property_id: str | int | None = None,
+    ai_request_type: str | None = "help_needed",
+    escalation_reason: str | None = None,
+    table: str = "chat_history",
+) -> bool:
+    """
+    Marca el último mensaje `bookai` del chat con metadatos de escalación.
+    Prioriza `original_chat_id` cuando el chat viene en formato compuesto
+    (ej: instancia:telefono) y cae a `conversation_id` limpio.
+    """
+    raw_chat_id = str(guest_chat_id or "").replace("+", "").strip()
+    if not raw_chat_id:
+        return False
+
+    clean_chat_id = raw_chat_id.split(":")[-1].strip() if ":" in raw_chat_id else raw_chat_id
+    clean_chat_id = re.sub(r"\D", "", clean_chat_id).strip() or clean_chat_id
+    if not clean_chat_id:
+        return False
+
+    ai_request_type_value = str(ai_request_type).strip() if ai_request_type is not None else None
+    escalation_reason_value = str(escalation_reason).strip() if escalation_reason is not None else None
+    updates = {
+        "ai_request_type": ai_request_type_value or None,
+        "escalation_reason": escalation_reason_value or None,
+    }
+
+    def _find_latest_id(*, use_original: bool, strict_property: bool):
+        query = (
+            supabase.table(table)
+            .select("id")
+            .eq("role", "bookai")
+        )
+        if use_original:
+            query = query.eq("original_chat_id", raw_chat_id)
+        else:
+            query = query.eq("conversation_id", clean_chat_id)
+        if strict_property and property_id is not None:
+            query = query.eq("property_id", property_id)
+        rows = query.order("created_at", desc=True).limit(1).execute().data or []
+        if not rows:
+            return None
+        return rows[0].get("id")
+
+    row_id = None
+    lookup_paths = []
+    if ":" in raw_chat_id:
+        lookup_paths.append((True, True))
+        lookup_paths.append((True, False))
+    lookup_paths.append((False, True))
+    lookup_paths.append((False, False))
+
+    for use_original, strict_property in lookup_paths:
+        try:
+            row_id = _find_latest_id(use_original=use_original, strict_property=strict_property)
+        except Exception:
+            row_id = None
+        if row_id is not None:
+            break
+
+    if row_id is None:
+        return False
+
+    try:
+        (
+            supabase.table(table)
+            .update(updates)
+            .eq("id", row_id)
+            .execute()
+        )
+        return True
+    except Exception as exc:
+        logging.warning("⚠️ No se pudo actualizar metadatos de escalación en chat_history: %s", exc)
+        return False
+
+
 def get_last_property_id_for_conversation(
     conversation_id: str,
     *,
