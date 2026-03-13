@@ -931,13 +931,6 @@ def _pending_snapshot_for_chat(
         limit=100,
         property_id=property_id,
     ) or []
-    if not pending and property_id is not None:
-        # Fallback para escalaciones legacy con property_id NULL.
-        pending = list_pending_escalations_for_chat(
-            chat_id,
-            limit=100,
-            property_id=None,
-        ) or []
     if pending and instance_id:
         key = _pending_compound_key(chat_id, property_id)
         grouped = _filter_pending_by_instance(
@@ -975,21 +968,22 @@ def _pending_snapshot_for_chat(
 
 
 def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property_id: Any) -> Any:
-    """Busca valor por key exacta y, si no existe, cae a key sin property (legacy)."""
+    """Busca valor por key exacta; solo usa fallback legacy si el chat no está acotado a una property."""
     if not isinstance(mapping, dict):
         return None
     exact = _pending_compound_key(chat_id, property_id)
     if exact in mapping and mapping.get(exact) is not None:
         return mapping.get(exact)
-    legacy = _pending_compound_key(chat_id, None)
-    if legacy in mapping and mapping.get(legacy) is not None:
-        return mapping.get(legacy)
+    target_prop = _normalize_pending_property(property_id)
+    if target_prop is None:
+        legacy = _pending_compound_key(chat_id, None)
+        if legacy in mapping and mapping.get(legacy) is not None:
+            return mapping.get(legacy)
 
     # Compat: escalaciones pueden guardarse con guest_chat_id compuesto
     # (instancia:telefono) mientras el chatter lista por telefono limpio.
     chat_norm = _normalize_pending_key(chat_id)
     chat_tail = _clean_chat_id(str(chat_norm).split(":")[-1]) if chat_norm else ""
-    target_prop = _normalize_pending_property(property_id)
 
     candidate_any_prop = None
     for key, value in mapping.items():
@@ -1003,7 +997,7 @@ def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property
                 return value
             if not target_prop and (not prop_part or prop_part == "*"):
                 return value
-            if candidate_any_prop is None:
+            if not target_prop and candidate_any_prop is None:
                 candidate_any_prop = value
             continue
         if chat_tail and guest_tail and guest_tail == chat_tail:
@@ -1011,7 +1005,7 @@ def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property
                 return value
             if not target_prop and (not prop_part or prop_part == "*"):
                 return value
-            if candidate_any_prop is None:
+            if not target_prop and candidate_any_prop is None:
                 candidate_any_prop = value
 
     return candidate_any_prop
