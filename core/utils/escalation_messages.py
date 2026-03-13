@@ -10,26 +10,26 @@ class EscalationMessages:
 
     MESSAGES: List[str] = [
         # Naturales y cercanas
-        "Un momento, estoy consultando con el encargado del hotel sobre esto...",
-        "Déjame que me ponga en contacto con el equipo para poder ayudarte mejor.",
-        "Voy a consultar esto directamente con el gerente del hotel.",
-        "Dame un segundo que me comunico con el encargado para darte la mejor respuesta.",
-        "Permíteme contactar con el hotel directamente para poder confirmarte esto.",
+        "Un momento, voy a consultarlo...",
+        "Déjame revisarlo para poder ayudarte mejor.",
+        "Voy a comprobarlo ahora mismo.",
+        "Dame un segundo, lo consulto y te digo.",
+        "Permíteme verificarlo para poder confirmártelo.",
 
         # Con emojis suaves
-        "🕐 Un momento, voy a hablar con el encargado...",
-        "⏳ Déjame contactar con el equipo del hotel, enseguida te respondo.",
-        "📞 Estoy contactando con el encargado ahora mismo.",
+        "🕐 Un momento, voy a revisarlo...",
+        "⏳ Déjame comprobarlo, enseguida te respondo.",
+        "📞 Lo estoy consultando ahora mismo.",
 
         # Más profesionales
-        "Permíteme comunicarme con nuestro equipo para ofrecerte la mejor solución.",
-        "Voy a verificar directamente con el equipo del hotel para asegurar la información.",
-        "Déjame confirmar esto con el gestor del hotel.",
+        "Permíteme revisarlo para ofrecerte la mejor solución.",
+        "Voy a verificarlo para asegurar la información.",
+        "Déjame confirmarlo y te digo.",
 
         # Variaciones con contexto de prisa
-        "Dame un momento que consulto internamente sobre esto...",
-        "Contactando con el encargado para darte la respuesta exacta...",
-        "Un segundo que me comunico directamente con el equipo...",
+        "Dame un momento que lo consulto...",
+        "Consultándolo para darte la respuesta exacta...",
+        "Un segundo que lo reviso...",
     ]
 
     @staticmethod
@@ -47,13 +47,13 @@ class EscalationMessages:
         """
         if context == "urgent":
             return random.choice([
-                "Esto requiere atención inmediata del encargado, dame un momento...",
-                "Contactando urgentemente con el equipo del hotel...",
+                "Esto requiere revisión inmediata, dame un momento...",
+                "Lo estoy revisando con prioridad...",
             ])
         elif context == "info":
             return random.choice([
-                "Voy a verificar esto con el equipo para darte datos exactos...",
-                "Permíteme confirmar los detalles con el encargado...",
+                "Voy a verificarlo para darte datos exactos...",
+                "Permíteme confirmar los detalles...",
             ])
         else:
             return EscalationMessages.get_random()

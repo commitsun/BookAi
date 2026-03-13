@@ -102,13 +102,13 @@ async def _llm_response_promises_human_escalation(
         system = (
             "Eres un clasificador binario.\n"
             "Debes decidir si la respuesta del asistente PROMETE que va a consultar/escalar a una persona del hotel "
-            "(encargado, recepción, gerente, equipo humano).\n"
+            "(recepción, gerente, equipo humano).\n"
             "Responde SOLO JSON: {\"promises_human_escalation\": true|false, \"confidence\": 0..1}."
         )
         user = (
             f"Mensaje del huésped:\n{user_message}\n\n"
             f"Respuesta del asistente:\n{assistant_response}\n\n"
-            "Si la respuesta indica explícita o implícitamente 'consultaré/preguntaré/verificaré con el encargado/equipo', "
+            "Si la respuesta indica explícita o implícitamente 'consultaré/preguntaré/verificaré o lo revisaré internamente', "
             "entonces true."
         )
         raw = await llm.ainvoke(
@@ -221,7 +221,7 @@ async def _llm_rewrite_honest_non_escalated_response(
             "Contexto de verdad: NO existe escalación ni gestión humana activa en backend.\n"
             "Reescribe el mensaje para que sea honesto y natural.\n"
             "Reglas:\n"
-            "- No afirmes ni insinúes que ya consultaste/consultarás con encargado, recepción, gerente, equipo o personal.\n"
+            "- No afirmes ni insinúes que ya consultaste/consultarás internamente o con recepción, gerente, equipo o personal.\n"
             "- No prometas confirmación futura basada en una gestión humana no ejecutada.\n"
             "- Si aplica, puedes ofrecer la derivación en condicional (ej: 'si quieres, puedo derivarlo').\n"
             "- Mantén el sentido útil y el tono cordial.\n"
@@ -280,7 +280,7 @@ async def _align_response_with_human_escalation_state(
     if not rewritten:
         rewritten = (
             "Ahora mismo no tengo una gestión humana activa para confirmarte ese dato. "
-            "Si quieres, puedo derivar tu consulta al encargado."
+            "Si quieres, puedo consultarlo."
         )
     return rewritten.strip(), True
 
@@ -1234,7 +1234,7 @@ async def process_user_message(
                     property_id=property_id,
                 )
             response_raw = _ensure_guest_language(
-                "He trasladado tu consulta al encargado del hotel y te informaré en cuanto tenga respuesta."
+                "Lo estoy consultando y te informaré en cuanto tenga respuesta."
             )
             try:
                 _persist_guest_message()

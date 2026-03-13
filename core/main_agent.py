@@ -204,13 +204,13 @@ class MainAgent:
             self.memory_manager.clear_flag(chat_id, "consulta_base_realizada")
             reply = self._generate_reply(chat_id=chat_id, intent="escalation_declined")
             text = reply or (
-                "Perfecto, seguimos buscando alternativas sin molestar al encargado. "
-                "Si quieres que lo contacte luego, solo dímelo."
+                "Perfecto, seguimos buscando alternativas sin consultarlo por ahora. "
+                "Si quieres que lo consulte luego, solo dímelo."
             )
             return self._localize(chat_id, text)
 
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
-        text = reply or "Solo para confirmar: ¿quieres que contacte con el encargado? Responde con 'sí' o 'no'."
+        text = reply or "Solo para confirmar: ¿quieres que lo consulte? Responde con 'sí' o 'no'."
         return self._localize(chat_id, text)
 
     def _interpret_confirmation(self, text: str) -> Optional[bool]:
@@ -221,10 +221,10 @@ class MainAgent:
         try:
             llm = ModelConfig.get_llm(ModelTier.INTERNAL)
             system_prompt = (
-                "Clasifica la respuesta del huésped sobre si autoriza contactar con el encargado.\n"
+                "Clasifica la respuesta del huésped sobre si autoriza que lo consultemos.\n"
                 "Responde SOLO con una etiqueta exacta: yes, no, unclear.\n"
-                "- yes: confirma explícitamente que se contacte al encargado.\n"
-                "- no: rechaza explícitamente contactar al encargado.\n"
+                "- yes: confirma explícitamente que lo consultemos.\n"
+                "- no: rechaza explícitamente que lo consultemos.\n"
                 "- unclear: cualquier otro caso ambiguo o tema distinto."
             )
             user_prompt = f"Respuesta del huésped:\n{t}\n\nEtiqueta:"
@@ -257,7 +257,7 @@ class MainAgent:
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
         text = reply or (
             "Ahora mismo no tengo ese dato confirmado. "
-            "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
+            "¿Quieres que lo consulte? Responde con 'sí' o 'no'."
         )
         return self._localize(chat_id, text)
 
@@ -1730,7 +1730,7 @@ class MainAgent:
                                 "last_escalation_followup_message",
                                 candidate,
                             )
-                        return self._localize(chat_id, "Un momento, sigo verificando tu solicitud con el encargado.")
+                        return self._localize(chat_id, "Un momento, sigo consultándolo.")
 
                 pending = await self._handle_pending_confirmation(chat_id, user_input)
                 if pending is not None:
@@ -2613,7 +2613,7 @@ class MainAgent:
                 )
                 fallback_msg = self._localize(
                     chat_id,
-                    "Ha ocurrido un problema interno y ya lo estoy revisando con el encargado. "
+                    "Ha ocurrido un problema interno y ya lo estoy revisando. "
                     "Te aviso en breve."
                 )
 
