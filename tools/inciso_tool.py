@@ -3,7 +3,7 @@
 =====================================================
 Esta herramienta permite al agente Main enviar mensajes de cortesía
 o actualizaciones de estado al usuario mientras procesa su solicitud
-en segundo plano (por ejemplo, mientras revisa una consulta).
+en segundo plano (por ejemplo, mientras consulta con el encargado).
 """
 
 import logging
@@ -21,7 +21,7 @@ class IncisoInput(BaseModel):
     mensaje: str = Field(
         description=(
             "Mensaje intermedio a enviar al usuario "
-            "(ej: 'Un momento, lo estoy revisando...')"
+            "(ej: 'Un momento, estoy consultando con el encargado...')"
         )
     )
 
@@ -29,7 +29,7 @@ class IncisoInput(BaseModel):
 class IncisoTool:
     """
     Herramienta que permite enviar mensajes intermedios al usuario.
-    Se usa cuando el agente necesita tiempo para procesar una consulta.
+    Se usa cuando el agente necesita tiempo para procesar (ej: consulta con encargado).
     """
 
     def __init__(self, send_callback=None, cooldown_seconds: int = 15):
@@ -133,7 +133,7 @@ class IncisoTool:
             description=(
                 "Envía un mensaje intermedio de cortesía al usuario mientras procesas su solicitud. "
                 "Úsala con moderación (máx. 2 veces por interacción), cuando necesites tiempo para "
-                "consultar información o revisar algo antes de responder. "
+                "consultar información o coordinar con el encargado. "
                 "Ejemplos: '🕓 Un momento por favor, estoy consultando...', "
                 "'⏳ Dame un segundo mientras reviso esa información...'"
             ),

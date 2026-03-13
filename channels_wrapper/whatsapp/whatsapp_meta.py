@@ -128,14 +128,7 @@ class WhatsAppChannel(BaseChannel):
             # ===========================================================
             if any(
                 p in response.lower()
-                for p in [
-                    "consultarlo",
-                    "lo consulto",
-                    "lo reviso",
-                    "voy a comprobarlo",
-                    "si quieres, lo consulto",
-                    "no dispongo",
-                ]
+                for p in ["encargado", "consultarlo", "permíteme contactar", "no dispongo"]
             ):
                 log.info(f"🚨 Escalación detectada automáticamente para {cid}")
                 asyncio.create_task(

@@ -14,7 +14,7 @@ Analiza la respuesta generada por el sistema principal del hotel siguiendo este 
 4. **Concisión:** Revisa que la respuesta no incluya información de más ni explicaciones excesivas que puedan confundir al usuario.  
 5. **Seguridad:** Comprueba que no comparta datos internos del sistema, información confidencial o suposiciones sobre el cliente.  
 6. **Coherencia conversacional:** Analiza si la respuesta corresponde lógicamente a la conversación previa.  
-   - Solo marca **Rechazada** si detectas un bucle real de mensajes de espera o escalación (por ejemplo, “Lo estoy revisando...” repetido más de dos veces).  
+   - Solo marca **Rechazada** si detectas un bucle real de mensajes de espera o escalación (por ejemplo, “Estoy consultando con el encargado...” repetido más de dos veces).  
    - Si la respuesta repite bloques por efecto de buffer o formato (confirmaciones de reserva duplicadas, listados repetidos), **NO** la rechaces: apruébala si el contenido es correcto y seguro.
 
 ***
@@ -87,7 +87,7 @@ Aprueba directamente (Estado: Aprobado) en estos casos, siempre que el contenido
   Ejemplo: “El check-in es a partir de las 14:00.”
 - Respuestas que dan la fecha u hora actual cuando el huésped pregunta por la fecha/hora.
 - Mensajes intermedios o de cortesía que informan al huésped que se está consultando algo (sin afirmar que ya se hizo).  
-  Ejemplo: “Un momento, lo estoy revisando.”  
+  Ejemplo: “Un momento, estoy verificando con el encargado.”  
 - Respuestas breves tipo *inciso* que mantienen la comunicación activa mientras se procesa la solicitud.
 - Confirmaciones de reserva completas, aunque estén duplicadas o incluyan el mismo bloque repetido.
 - Preguntas de desambiguación de hotel/property (ej: “Tengo más de un hotel con ese código. ¿A cuál te refieres?”).
@@ -194,5 +194,5 @@ Sugerencia: Ninguna.
 - En caso de duda, **marca como Revisión Necesaria** para asegurar control de calidad humano.  
 - No añadas respuestas nuevas al usuario; solo evalúa las existentes.  
 - Asegúrate de que la salida siga exactamente el formato de cuatro campos: Estado, Motivo, Prueba y Sugerencia.  
-- Marca como **Rechazado** si la respuesta afirma como hecho consumado que "ya se consultó", "ya se envió" o "ya se gestionó" algo sin evidencia operativa en el flujo.
+- Marca como **Rechazado** si la respuesta afirma como hecho consumado que "ya se contactó" o "ya se envió" algo al encargado sin evidencia operativa en el flujo.
 - Repite: si la respuesta del agente es adecuada para el huésped, responde con Estado: Aprobado.

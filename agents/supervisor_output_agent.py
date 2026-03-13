@@ -122,7 +122,7 @@ class SupervisorOutputAgent:
                     return {
                         "estado": "Rechazado",
                         "motivo": (
-                            "La respuesta afirma que ya se hizo una consulta o gestión manual, "
+                            "La respuesta afirma que ya se contactó al encargado, "
                             "pero no hay escalación activa verificable."
                         ),
                         "sugerencia": (
@@ -135,9 +135,7 @@ class SupervisorOutputAgent:
             # 🚨 DETECCIÓN DE BUCLES DE INCISOS / REPETICIÓN
             # =====================================================
             inciso_pattern = re.compile(
-                r"(estoy consultando|voy a consultar|lo consulto|lo reviso|voy a comprobarlo|"
-                r"un momento|permíteme|déjame).*(encargado|equipo|gerente|hotel)?",
-                re.IGNORECASE,
+                r"(estoy consultando|voy a consultar|un momento|permíteme|déjame).*encargado", re.IGNORECASE
             )
             repetitions = len(re.findall(inciso_pattern, agent_response))
 
@@ -146,7 +144,7 @@ class SupervisorOutputAgent:
                 return {
                     "estado": "Rechazado",
                     "motivo": "Loop detectado (repetición excesiva de incisos)",
-                    "sugerencia": "Detener ejecución y revisar la respuesta antes de escalar",
+                    "sugerencia": "Detener ejecución y escalar al encargado",
                 }
 
             # =====================================================
@@ -156,9 +154,6 @@ class SupervisorOutputAgent:
                 r"(un momento|déjame|voy a|permíteme|contactando|consultando).*(encargado|equipo|gerente|hotel)",
                 r"(estoy|comunicando|contactar).*(encargado|equipo|hotel)",
                 r"(dame|dame un).*(momento|segundo|instante).*consult",
-                r"(si quieres,\s*)?lo consulto",
-                r"(voy a|permíteme|déjame).*(consultarlo|revisarlo|comprobarlo|mirarlo)",
-                r"(lo estoy|sigo).*(revisando|comprobando)",
             ]
 
             for pattern in ESCALATION_PATTERNS:

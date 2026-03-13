@@ -204,13 +204,13 @@ class MainAgent:
             self.memory_manager.clear_flag(chat_id, "consulta_base_realizada")
             reply = self._generate_reply(chat_id=chat_id, intent="escalation_declined")
             text = reply or (
-                "Perfecto, seguimos buscando alternativas. "
-                "Si quieres que lo consulte luego, solo dímelo."
+                "Perfecto, seguimos buscando alternativas sin molestar al encargado. "
+                "Si quieres que lo contacte luego, solo dímelo."
             )
             return self._localize(chat_id, text)
 
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
-        text = reply or "Solo para confirmar: ¿quieres que lo consulte? Responde con 'sí' o 'no'."
+        text = reply or "Solo para confirmar: ¿quieres que contacte con el encargado? Responde con 'sí' o 'no'."
         return self._localize(chat_id, text)
 
     def _interpret_confirmation(self, text: str) -> Optional[bool]:
@@ -257,7 +257,7 @@ class MainAgent:
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
         text = reply or (
             "Ahora mismo no tengo ese dato confirmado. "
-            "¿Quieres que lo consulte? Responde con 'sí' o 'no'."
+            "¿Quieres que consulte al encargado? Responde con 'sí' o 'no'."
         )
         return self._localize(chat_id, text)
 
@@ -1657,13 +1657,16 @@ class MainAgent:
                 return
 
             try:
-                await self.interno_agent.handle_guest_escalation(
-                    chat_id=chat_id,
-                    guest_message=user_input,
-                    reason=motivo,
-                    escalation_type=escalation_type,
-                    context=context,
+                query = (
+                    f"[ESCALATION REQUEST]\n"
+                    f"Motivo: {motivo}\n"
+                    f"Mensaje del huésped: {user_input}\n"
+                    f"Tipo: {escalation_type}\n"
+                    f"Contexto: {context}\n"
+                    f"Chat ID: {chat_id}"
                 )
+
+                await self.interno_agent.ainvoke(user_input=query, chat_id=chat_id)
                 if self.memory_manager:
                     # Marca hilo activo para anidar nuevas consultas del huésped
                     # en la escalación pendiente del mismo chat.
@@ -1715,10 +1718,6 @@ class MainAgent:
                             else None
                         )
                         if candidate and candidate != str(last_forwarded or "").strip():
-                            try:
-                                self.memory_manager.save(chat_id, "user", candidate)
-                            except Exception:
-                                log.debug("No se pudo guardar follow-up antes de escalar", exc_info=True)
                             await self._delegate_escalation_to_interno(
                                 user_input=candidate,
                                 chat_id=chat_id,
@@ -1731,7 +1730,7 @@ class MainAgent:
                                 "last_escalation_followup_message",
                                 candidate,
                             )
-                        return self._localize(chat_id, "Un momento, sigo revisando tu solicitud.")
+                        return self._localize(chat_id, "Un momento, sigo verificando tu solicitud con el encargado.")
 
                 pending = await self._handle_pending_confirmation(chat_id, user_input)
                 if pending is not None:
@@ -2614,7 +2613,7 @@ class MainAgent:
                 )
                 fallback_msg = self._localize(
                     chat_id,
-                    "Ha ocurrido un problema interno y ya lo estoy revisando. "
+                    "Ha ocurrido un problema interno y ya lo estoy revisando con el encargado. "
                     "Te aviso en breve."
                 )
 
