@@ -344,7 +344,7 @@ class MemoryManager:
         bypass_force_guest_role: bool = False,
         skip_recent_duplicate_guard: bool = False,
         structured_payload: Optional[dict | list] = None,
-    ) -> Optional[Dict[str, Any]]:
+    ) -> None:
         """
         Guarda un mensaje tanto en memoria local como en Supabase.
         Roles base: user/assistant/system/tool. Se mapean a guest/bookai para persistencia.
@@ -382,7 +382,7 @@ class MemoryManager:
             )
         ):
             log.info("↩️ Duplicado reciente ignorado chat_id=%s role=%s", cid, normalized_role)
-            return None
+            return
 
         # Si el mensaje trae datos de reserva, actualiza flags (sobrescribe con lo mas reciente).
         try:
@@ -505,7 +505,7 @@ class MemoryManager:
         try:
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             property_id = self._resolve_property_id(conversation_id)
-            saved_ref = save_message(
+            save_message(
                 db_conversation_id,
                 normalized_role,
                 entry["content"],
@@ -522,10 +522,8 @@ class MemoryManager:
                 table=self._resolve_history_table(conversation_id),
             )
             log.debug(f"💾 Guardado en Supabase: ({cid}, {normalized_role})")
-            return saved_ref if isinstance(saved_ref, dict) else None
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
-            return None
 
     # ----------------------------------------------------------------------
     def add_runtime_message(
