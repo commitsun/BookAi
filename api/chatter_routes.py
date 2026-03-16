@@ -1320,7 +1320,7 @@ def _build_whatsapp_window(
     last_template_dt = _parse_ts(last_template_sent_at)
     if last_template_dt and last_template_dt.tzinfo is None:
         last_template_dt = last_template_dt.replace(tzinfo=timezone.utc)
-    if last_template_dt and (not last_dt or last_template_dt > last_dt):
+    if last_template_dt and not last_dt:
         return {
             "status": "pending_reply",
             "remaining_hours": 0.0,
