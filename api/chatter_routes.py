@@ -462,6 +462,25 @@ def _build_escalation_resolution_payload(
     }
 
 
+def _build_empty_escalation_resolution_payload(
+    chat_id: str,
+    *,
+    property_id: Optional[str | int] = None,
+) -> Dict[str, Any]:
+    return {
+        "chat_id": chat_id,
+        "escalation_id": None,
+        "property_id": property_id,
+        "status": "pending",
+        "resolved_at": None,
+        "resolution_medium": None,
+        "resolution_notes": "",
+        "resolved_by": None,
+        "resolved_by_name": None,
+        "resolved_by_email": None,
+    }
+
+
 def _chat_exists_in_history(
     chat_id: str,
     *,
@@ -3623,15 +3642,24 @@ def register_chatter_routes(app, state) -> None:
             latest_any = get_latest_escalation_for_chat(clean_id, property_id=None)
         if not latest:
             if _chat_exists_in_history(clean_id, property_id=resolved_property_id, channel="whatsapp"):
-                raise HTTPException(status_code=404, detail="No hay resolución de escalación")
+                return _build_empty_escalation_resolution_payload(
+                    clean_id,
+                    property_id=resolved_property_id,
+                )
             raise HTTPException(status_code=404, detail="Chat no encontrado")
         if latest_any and not is_escalation_resolved(latest_any):
             latest_any_id = str((latest_any or {}).get("escalation_id") or "").strip()
             latest_resolved_id = str((latest or {}).get("escalation_id") or "").strip()
             if latest_any_id and latest_any_id != latest_resolved_id:
-                raise HTTPException(status_code=404, detail="No hay resolución de escalación")
+                return _build_empty_escalation_resolution_payload(
+                    clean_id,
+                    property_id=resolved_property_id,
+                )
         if not is_escalation_resolved(latest):
-            raise HTTPException(status_code=404, detail="No hay resolución de escalación")
+            return _build_empty_escalation_resolution_payload(
+                clean_id,
+                property_id=resolved_property_id,
+            )
 
         return _build_escalation_resolution_payload(
             clean_id,
