@@ -1303,7 +1303,7 @@ def _build_whatsapp_window(
         last_template_dt = last_template_dt.replace(tzinfo=timezone.utc)
     if last_template_dt and (not last_dt or last_template_dt > last_dt):
         return {
-            "status": "waiting_for_reply",
+            "status": "pending_reply",
             "remaining_hours": 0.0,
             "expires_at": None,
         }
@@ -4870,8 +4870,8 @@ def register_chatter_routes(app, state) -> None:
             hours_since_last_guest_msg = round((now - last_guest_dt).total_seconds() / 3600.0, 2)
 
         status = str(whatsapp_window.get("status") or "").strip() or "expired"
-        needs_template = status in {"expired", "waiting_for_reply"}
-        if status == "waiting_for_reply":
+        needs_template = status in {"expired", "pending_reply"}
+        if status == "pending_reply":
             reason = "esperando_respuesta_huesped"
         elif status in {"active", "expiring"}:
             reason = "ventana_activa"

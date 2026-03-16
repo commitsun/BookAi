@@ -1115,7 +1115,7 @@ def register_template_routes(app, state) -> None:
 
             now_iso = datetime.now(timezone.utc).isoformat()
             whatsapp_window = {
-                "status": "waiting_for_reply",
+                "status": "pending_reply",
                 "remaining_hours": 0.0,
                 "expires_at": None,
             }
