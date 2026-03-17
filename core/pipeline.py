@@ -922,12 +922,31 @@ async def process_user_message(
                             and getattr(socket_mgr, "enabled", False)
                         ):
                             try:
+                                deferred_rooms = [f"chat:{alias}" for alias in _chat_room_aliases(
+                                    str(payload.get("context_id") or ""),
+                                    str(payload.get("guest_chat_id") or ""),
+                                    str(payload.get("chat_id") or ""),
+                                )]
+                                deferred_rooms.append(f"property:{resolved_property_id}")
+                                if channel:
+                                    deferred_rooms.append(f"channel:{channel}")
+                                deferred_rooms = list(dict.fromkeys(room for room in deferred_rooms if room))
+                                updated_payload = {
+                                    "chat_id": payload.get("chat_id"),
+                                    "guest_chat_id": payload.get("guest_chat_id"),
+                                    "context_id": payload.get("context_id"),
+                                    "property_id": resolved_property_id,
+                                    "channel": channel,
+                                    "last_message": user_message,
+                                    "last_message_at": payload.get("created_at"),
+                                    "whatsapp_window": payload.get("whatsapp_window"),
+                                }
                                 loop = asyncio.get_running_loop()
                                 loop.create_task(
                                     socket_mgr.emit(
                                         "chat.message.created",
                                         payload,
-                                        rooms=f"property:{resolved_property_id}",
+                                        rooms=deferred_rooms,
                                         instance_id=resolved_instance_id,
                                     )
                                 )
@@ -935,9 +954,23 @@ async def process_user_message(
                                     socket_mgr.emit(
                                         "chat.message.new",
                                         payload,
-                                        rooms=f"property:{resolved_property_id}",
+                                        rooms=deferred_rooms,
                                         instance_id=resolved_instance_id,
                                     )
+                                )
+                                loop.create_task(
+                                    socket_mgr.emit(
+                                        "chat.updated",
+                                        updated_payload,
+                                        rooms=deferred_rooms,
+                                        instance_id=resolved_instance_id,
+                                    )
+                                )
+                                log.info(
+                                    "[chat.conversation.deferred] chat_id=%s property_id=%s rooms=%s",
+                                    payload.get("chat_id"),
+                                    resolved_property_id,
+                                    deferred_rooms,
                                 )
                                 if isinstance(pending_list_payload, dict):
                                     list_payload = dict(pending_list_payload)
@@ -976,7 +1009,7 @@ async def process_user_message(
                                             )
                             except Exception as exc:
                                 logging.getLogger("Pipeline").error(
-                                    "[chat.list.updated] deferred emission failed for %s: %s",
+                                    "[chat.conversation.deferred] emission failed for %s: %s",
                                     mem_id, exc, exc_info=True,
                                 )
 

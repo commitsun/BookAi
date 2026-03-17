@@ -43,6 +43,32 @@ class MemoryManager:
             return digits
         return str(value or "").replace("+", "").strip()
 
+    def _chat_room_aliases(self, *values: str) -> list[str]:
+        aliases: list[str] = []
+        seen: set[str] = set()
+        for raw_value in values:
+            raw = str(raw_value or "").strip()
+            if not raw:
+                continue
+            candidates = [raw]
+            if ":" in raw:
+                tail = raw.split(":")[-1].strip()
+                if tail:
+                    candidates.append(tail)
+                    tail_clean = self._normalize_phone(tail)
+                    if tail_clean:
+                        candidates.append(tail_clean)
+            clean = self._normalize_phone(raw)
+            if clean:
+                candidates.append(clean)
+            for candidate in candidates:
+                current = str(candidate or "").strip()
+                if not current or current in seen:
+                    continue
+                seen.add(current)
+                aliases.append(current)
+        return aliases
+
     def _resolve_db_conversation_id(self, conversation_id: str) -> str:
         guest_number = self.get_flag(conversation_id, "guest_number")
         if guest_number:
@@ -687,19 +713,63 @@ class MemoryManager:
                 )
                 if socket_mgr and getattr(socket_mgr, "enabled", False):
                     try:
+                        deferred_rooms = [f"chat:{alias}" for alias in self._chat_room_aliases(
+                            str(payload.get("context_id") or ""),
+                            str(payload.get("guest_chat_id") or ""),
+                            str(payload.get("chat_id") or ""),
+                            str(key or ""),
+                        )]
+                        deferred_rooms.append(f"property:{value}")
+                        channel_name = str(payload.get("channel") or "").strip()
+                        if channel_name:
+                            deferred_rooms.append(f"channel:{channel_name}")
+                        deferred_rooms = list(dict.fromkeys(room for room in deferred_rooms if room))
+                        updated_payload = {
+                            "chat_id": payload.get("chat_id"),
+                            "guest_chat_id": payload.get("guest_chat_id"),
+                            "context_id": payload.get("context_id"),
+                            "property_id": value,
+                            "channel": channel_name or None,
+                            "last_message": payload.get("message"),
+                            "last_message_at": payload.get("created_at"),
+                            "whatsapp_window": payload.get("whatsapp_window"),
+                        }
                         loop = asyncio.get_running_loop()
                         loop.create_task(
                             socket_mgr.emit(
                                 "chat.message.created",
                                 payload,
-                                rooms=f"property:{value}",
+                                rooms=deferred_rooms,
                                 instance_id=instance_id,
                             )
+                        )
+                        loop.create_task(
+                            socket_mgr.emit(
+                                "chat.message.new",
+                                payload,
+                                rooms=deferred_rooms,
+                                instance_id=instance_id,
+                            )
+                        )
+                        loop.create_task(
+                            socket_mgr.emit(
+                                "chat.updated",
+                                updated_payload,
+                                rooms=deferred_rooms,
+                                instance_id=instance_id,
+                            )
+                        )
+                        log.info(
+                            "[chat.conversation.deferred] chat_id=%s property_id=%s key=%s rooms=%s",
+                            payload.get("chat_id"),
+                            value,
+                            key,
+                            deferred_rooms,
                         )
                         emitted = True
                     except Exception as exc:
                         log.error(
-                            "[chat.message.created] deferred emission failed for %s: %s",
+                            "[chat.conversation.deferred] emission failed for %s: %s",
                             key, exc, exc_info=True,
                         )
                 if emitted and key in self.state_flags and "pending_property_room_guest_message" in self.state_flags[key]:
