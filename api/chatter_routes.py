@@ -428,6 +428,7 @@ def _build_escalation_resolution_payload(
     fallback_property_id: Optional[str | int] = None,
 ) -> Dict[str, Any]:
     row = escalation or {}
+    created_at = row.get("timestamp") or row.get("created_at") or row.get("updated_at")
     notes_raw = row.get("resolution_notes")
     if notes_raw is None:
         notes = ""
@@ -444,21 +445,44 @@ def _build_escalation_resolution_payload(
     resolved_by_email = row.get("resolved_by_email")
     if resolved_by_email is not None and not str(resolved_by_email).strip():
         resolved_by_email = None
+    guest_message = row.get("guest_message")
+    if guest_message is not None and not str(guest_message).strip():
+        guest_message = None
+    reason = row.get("escalation_reason") or row.get("reason")
+    if reason is not None and not str(reason).strip():
+        reason = None
+    context = row.get("context")
+    if context is not None and not str(context).strip():
+        context = None
+    escalation_type = row.get("escalation_type") or row.get("type")
+    if escalation_type is not None and not str(escalation_type).strip():
+        escalation_type = None
     resolved_at = row.get("resolved_at") or row.get("updated_at") or row.get("timestamp")
     property_id = row.get("property_id")
     if property_id is None:
         property_id = fallback_property_id
+    summary = reason or guest_message or context
+    resolution_medium = row.get("resolution_medium")
     return {
         "chat_id": chat_id,
         "escalation_id": str(row.get("escalation_id") or "").strip() or None,
         "property_id": property_id,
         "status": _escalation_status(row),
+        "created_at": created_at,
         "resolved_at": resolved_at,
-        "resolution_medium": row.get("resolution_medium"),
+        "resolution_medium": resolution_medium,
         "resolution_notes": notes,
+        "resolution_method": resolution_medium,
+        "resolution_comment": notes,
         "resolved_by": resolved_by,
         "resolved_by_name": resolved_by_name,
         "resolved_by_email": resolved_by_email,
+        "guest_message": guest_message,
+        "escalation_type": escalation_type,
+        "escalation_reason": reason,
+        "reason": reason,
+        "context": context,
+        "summary": summary,
     }
 
 
@@ -472,12 +496,21 @@ def _build_empty_escalation_resolution_payload(
         "escalation_id": None,
         "property_id": property_id,
         "status": "pending",
+        "created_at": None,
         "resolved_at": None,
         "resolution_medium": None,
         "resolution_notes": "",
+        "resolution_method": None,
+        "resolution_comment": "",
         "resolved_by": None,
         "resolved_by_name": None,
         "resolved_by_email": None,
+        "guest_message": None,
+        "escalation_type": None,
+        "escalation_reason": None,
+        "reason": None,
+        "context": None,
+        "summary": None,
     }
 
 
@@ -3546,8 +3579,9 @@ def register_chatter_routes(app, state) -> None:
                 except Exception:
                     continue
 
-        rooms = _rooms(clean_id, resolved_property_id, "whatsapp")
-        escalation_rooms = _rooms(clean_id, None, "whatsapp")
+        resolved_guest_chat_id = str(updated.get("guest_chat_id") or "").strip() or clean_id
+        rooms = _rooms(resolved_guest_chat_id, resolved_property_id, "whatsapp")
+        escalation_rooms = _rooms(resolved_guest_chat_id, None, "whatsapp")
         resolution_payload = _build_escalation_resolution_payload(
             clean_id,
             updated,
@@ -3558,7 +3592,7 @@ def register_chatter_routes(app, state) -> None:
         await _emit_escalation_resolved(
             clean_id,
             resolution_payload,
-            guest_chat_id=str(updated.get("guest_chat_id") or "").strip() or None,
+            guest_chat_id=resolved_guest_chat_id,
             instance_id=instance_id,
         )
         await _emit(
