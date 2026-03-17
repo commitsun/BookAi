@@ -144,6 +144,90 @@ class SocketManager:
         except Exception:
             return []
 
+    @staticmethod
+    def _expand_compat_room_names(room: str) -> list[str]:
+        raw_room = str(room or "").strip()
+        if not raw_room:
+            return []
+        expanded = [raw_room]
+        if raw_room.startswith("chat:"):
+            alias = raw_room.split(":", 1)[1].strip()
+            if alias and alias not in expanded:
+                expanded.append(alias)
+        return expanded
+
+    def _target_sids_for_rooms(self, rooms: Iterable[str]) -> list[str]:
+        target_sids: list[str] = []
+        seen: set[str] = set()
+        for room in rooms:
+            for compatible_room in self._expand_compat_room_names(str(room)):
+                for sid in self._room_participants(compatible_room):
+                    if sid in seen:
+                        continue
+                    seen.add(sid)
+                    target_sids.append(sid)
+        return target_sids
+
+    @staticmethod
+    def _normalize_chat_message_payload(event: str, data: dict[str, Any]) -> dict[str, Any]:
+        if event not in {"chat.message.created", "chat.message.new"}:
+            return data
+        payload = dict(data or {})
+        message_text = payload.get("message")
+        if message_text is None:
+            message_text = payload.get("content")
+        if message_text is not None:
+            payload.setdefault("message", message_text)
+            payload.setdefault("content", message_text)
+        sender = str(payload.get("sender") or "").strip() or "bookai"
+        payload.setdefault("sender", sender)
+        payload.setdefault("read_status", False)
+
+        original_chat_id = str(
+            payload.get("original_chat_id")
+            or payload.get("context_id")
+            or ""
+        ).strip()
+        if original_chat_id:
+            payload.setdefault("original_chat_id", original_chat_id)
+
+        chat_id = str(payload.get("chat_id") or "").strip() or None
+        created_at = str(payload.get("created_at") or "").strip() or None
+        property_id = payload.get("property_id")
+        if not payload.get("message_id"):
+            parts = [
+                str(chat_id or "chat").strip(),
+                sender,
+                str(property_id or "").strip(),
+                str(created_at or "").strip(),
+            ]
+            token = ":".join(part.replace(":", "_") for part in parts if part)
+            payload["message_id"] = f"socket:{token}" if token else "socket:message"
+
+        payload.setdefault(
+            "item",
+            {
+                "message_id": payload.get("message_id"),
+                "chat_id": chat_id,
+                "created_at": created_at,
+                "read_status": payload.get("read_status"),
+                "content": payload.get("content"),
+                "message": payload.get("message"),
+                "sender": sender,
+                "original_chat_id": payload.get("original_chat_id"),
+                "property_id": property_id,
+                "user_id": payload.get("user_id"),
+                "user_first_name": payload.get("user_first_name"),
+                "user_last_name": payload.get("user_last_name"),
+                "user_last_name2": payload.get("user_last_name2"),
+                "structured_payload": payload.get("structured_payload"),
+                "structured_csv": payload.get("structured_csv"),
+                "ai_request_type": payload.get("ai_request_type"),
+                "escalation_reason": payload.get("escalation_reason"),
+            },
+        )
+        return payload
+
     def _extract_auth_token(self, environ: dict, auth: Any | None) -> str | None:
         if isinstance(auth, dict):
             token = auth.get("token") or auth.get("bearer")
@@ -225,6 +309,7 @@ class SocketManager:
     ) -> None:
         if not self.enabled or not self.sio:
             return
+        data = self._normalize_chat_message_payload(event, data)
         log.debug("Socket emit event=%s rooms=%s", event, rooms)
         if rooms is None:
             await self.sio.emit(event, data)
@@ -241,18 +326,28 @@ class SocketManager:
                     for sid in target_sids:
                         await self.sio.emit(event, data, room=sid)
                     return
+            target_sids = self._target_sids_for_rooms([rooms])
+            if target_sids:
+                for sid in target_sids:
+                    await self.sio.emit(event, data, room=sid)
+                return
             await self.sio.emit(event, data, room=rooms)
             return
         unique_rooms = []
         seen = set()
         for room in rooms:
-            r = str(room)
-            if r in seen:
-                continue
-            seen.add(r)
-            unique_rooms.append(r)
+            for compatible_room in self._expand_compat_room_names(str(room)):
+                if compatible_room in seen:
+                    continue
+                seen.add(compatible_room)
+                unique_rooms.append(compatible_room)
         if not unique_rooms:
             await self.sio.emit(event, data)
+            return
+        target_sids = self._target_sids_for_rooms(unique_rooms)
+        if target_sids:
+            for sid in target_sids:
+                await self.sio.emit(event, data, room=sid)
             return
         try:
             await self.sio.emit(event, data, room=unique_rooms)
