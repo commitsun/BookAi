@@ -109,11 +109,125 @@ def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | Non
         log.debug("No se pudo enviar read receipt: %s", exc)
 
 
+def _clean_phone_like(value: str | None) -> str:
+    raw_value = str(value or "").strip()
+    return re.sub(r"\D", "", raw_value).strip() or raw_value
+
+
+def _resolve_sender_phone_id(contacts: list[dict] | None, msg: dict) -> str:
+    primary_contact = contacts[0] if contacts else {}
+    wa_id = primary_contact.get("wa_id")
+    if wa_id:
+        return str(wa_id).strip()
+    return str(msg.get("from") or "").strip()
+
+
+def _hydrate_instance_context_from_payload(memory_manager, memory_id: str, payload: dict | None, resolve_property_table) -> None:
+    if not (memory_manager and payload):
+        return
+
+    instance_id = payload.get("instance_id") or payload.get("instance_url")
+    if instance_id:
+        memory_manager.set_flag(memory_id, "instance_id", instance_id)
+        memory_manager.set_flag(memory_id, "instance_hotel_code", instance_id)
+
+    instance_url = payload.get("instance_url")
+    if instance_url:
+        memory_manager.set_flag(memory_id, "instance_url", instance_url)
+
+    property_table = resolve_property_table(payload)
+    if property_table:
+        memory_manager.set_flag(memory_id, "property_table", property_table)
+
+    for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+        value = payload.get(key)
+        if value:
+            memory_manager.set_flag(memory_id, key, value)
+
+
+def _hydrate_webhook_context(
+    state,
+    memory_id: str,
+    sender_phone_id: str,
+    normalized_instance_number: str,
+    instance_phone_id: str | None,
+) -> tuple[str | None, str | None]:
+    from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
+
+    memory_manager = getattr(state, "memory_manager", None)
+    resolved_instance_phone_id = str(instance_phone_id or "").strip() or None
+    instance_token = None
+
+    if memory_manager:
+        if normalized_instance_number:
+            memory_manager.set_flag(memory_id, "instance_number", normalized_instance_number)
+        if resolved_instance_phone_id:
+            memory_manager.set_flag(memory_id, "whatsapp_phone_id", resolved_instance_phone_id)
+
+    hydrate_dynamic_context(
+        state=state,
+        chat_id=memory_id,
+        instance_number=normalized_instance_number,
+        instance_phone_id=resolved_instance_phone_id,
+    )
+
+    has_instance_context = False
+    if memory_manager:
+        has_instance_context = bool(
+            memory_manager.get_flag(memory_id, "instance_id")
+            or memory_manager.get_flag(memory_id, "instance_hotel_code")
+        )
+    if resolved_instance_phone_id and memory_manager and not has_instance_context:
+        payload = fetch_instance_by_phone_id(resolved_instance_phone_id)
+        _hydrate_instance_context_from_payload(memory_manager, memory_id, payload, _resolve_property_table)
+
+    if memory_manager:
+        resolved_instance_phone_id = memory_manager.get_flag(memory_id, "whatsapp_phone_id") or resolved_instance_phone_id
+        instance_token = memory_manager.get_flag(memory_id, "whatsapp_token")
+        if sender_phone_id and resolved_instance_phone_id:
+            memory_manager.set_flag(sender_phone_id, "whatsapp_phone_id", resolved_instance_phone_id)
+        if sender_phone_id and instance_token:
+            memory_manager.set_flag(sender_phone_id, "whatsapp_token", instance_token)
+
+    return resolved_instance_phone_id, instance_token
+
+
+def _extract_text_message_body(msg: dict, _: str | None = None) -> str:
+    return msg.get("text", {}).get("body", "")
+
+
+def _extract_audio_message_text(msg: dict, instance_token: str | None = None) -> str:
+    from channels_wrapper.utils.media_utils import transcribe_audio
+
+    media_id = msg.get("audio", {}).get("id")
+    if not media_id:
+        return ""
+
+    log.info("🎧 Audio recibido (media_id=%s), iniciando transcripción...", media_id)
+    whatsapp_token = instance_token or os.getenv("WHATSAPP_TOKEN", "")
+    openai_key = os.getenv("OPENAI_API_KEY", "")
+    text = transcribe_audio(media_id, whatsapp_token, openai_key)
+    log.info("📝 Transcripción completada: %s", text)
+    return text
+
+
+def _extract_incoming_whatsapp_text(msg: dict, instance_token: str | None = None) -> str:
+    message_type = str(msg.get("type") or "").strip().lower()
+    message_handlers = {
+        "text": _extract_text_message_body,
+        "audio": _extract_audio_message_text,
+    }
+    handler = message_handlers.get(message_type)
+    if handler is None:
+        return ""
+    return handler(msg, instance_token)
+
+
 # Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook.
 # Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
-# Recibe `memory_id`, `sender` como entradas relevantes junto con el contexto inyectado en la firma.
+# Recibe `memory_id`, `sender_phone_id` como entradas relevantes junto con el contexto inyectado en la firma.
 # Devuelve un `str | int | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
-def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | None:
+def _resolve_property_id_fallback(memory_id: str, sender_phone_id: str) -> str | int | None:
     """Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook."""
     try:
         from core.db import supabase
@@ -122,8 +236,8 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
         return None
 
     raw_memory = str(memory_id or "").strip()
-    raw_sender = str(sender or "").strip()
-    clean_sender = re.sub(r"\D", "", raw_sender).strip()
+    raw_sender_phone_id = str(sender_phone_id or "").strip()
+    clean_sender_phone_id = re.sub(r"\D", "", raw_sender_phone_id).strip()
 
     # 1) Preferir contexto compuesto exacto (original_chat_id = instancia:telefono)
     if raw_memory:
@@ -148,8 +262,8 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
         except Exception:
             pass
 
-    # 2) Fallback por conversation_id (sender limpio o memory_id)
-    for cid in [raw_memory, raw_sender, clean_sender]:
+    # 2) Fallback por conversation_id (sender_phone_id limpio o memory_id)
+    for cid in [raw_memory, raw_sender_phone_id, clean_sender_phone_id]:
         if not cid:
             continue
         try:
@@ -174,12 +288,12 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
             continue
 
     # 3) Último recurso: chat_reservations por teléfono limpio.
-    if clean_sender:
+    if clean_sender_phone_id:
         try:
             rows = (
                 supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
                 .select("property_id")
-                .eq("chat_id", clean_sender)
+                .eq("chat_id", clean_sender_phone_id)
                 .limit(50)
                 .execute()
                 .data
@@ -228,62 +342,30 @@ def register_whatsapp_routes(app, state):
             value = data.get("entry", [{}])[0].get("changes", [{}])[0].get("value", {})
             msg = value.get("messages", [{}])[0]
             metadata = value.get("metadata", {}) or {}
-            contacts = value.get("contacts", [])
+            contacts = value.get("contacts", []) or []
             profile = contacts[0].get("profile", {}) if contacts else {}
             client_name = profile.get("name")
-            sender = msg.get("from")
-            msg_type = msg.get("type")
+            sender_phone_id = _resolve_sender_phone_id(contacts, msg)
             msg_id = msg.get("id")
 
-            text = ""
             instance_number = metadata.get("display_phone_number") or ""
-            normalized_instance_number = re.sub(r"\D", "", str(instance_number or "")).strip() or instance_number
+            normalized_instance_number = _clean_phone_like(instance_number)
             instance_phone_id = metadata.get("phone_number_id") or ""
-            memory_id = f"{normalized_instance_number}:{sender}" if normalized_instance_number and sender else sender
+            memory_id = (
+                f"{normalized_instance_number}:{sender_phone_id}"
+                if normalized_instance_number and sender_phone_id
+                else sender_phone_id
+            )
             instance_token = None
-            if sender and instance_number:
+            if sender_phone_id and instance_number:
                 try:
-                    from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
-
-                    # Guarda identificadores  crudos para fallback posterior.
-                    if state.memory_manager:
-                        if normalized_instance_number:
-                            state.memory_manager.set_flag(memory_id, "instance_number", normalized_instance_number)
-                        if instance_phone_id:
-                            state.memory_manager.set_flag(memory_id, "whatsapp_phone_id", instance_phone_id)
-
-                    hydrate_dynamic_context(
+                    instance_phone_id, instance_token = _hydrate_webhook_context(
                         state=state,
-                        chat_id=memory_id,
-                        instance_number=normalized_instance_number,
-                        instance_phone_id=instance_phone_id or None,
+                        memory_id=memory_id,
+                        sender_phone_id=sender_phone_id,
+                        normalized_instance_number=normalized_instance_number,
+                        instance_phone_id=instance_phone_id,
                     )
-                    # Fallback duro: si no quedó instance_id, resolver directo por phone_id.
-                    if instance_phone_id:
-                        mm = state.memory_manager
-                        if mm and not (mm.get_flag(memory_id, "instance_id") or mm.get_flag(memory_id, "instance_hotel_code")):
-                            payload = fetch_instance_by_phone_id(instance_phone_id)
-                            if payload:
-                                inst_id = payload.get("instance_id") or payload.get("instance_url")
-                                if inst_id:
-                                    mm.set_flag(memory_id, "instance_id", inst_id)
-                                    mm.set_flag(memory_id, "instance_hotel_code", inst_id)
-                                inst_url = payload.get("instance_url")
-                                if inst_url:
-                                    mm.set_flag(memory_id, "instance_url", inst_url)
-                                table = _resolve_property_table(payload)
-                                if table:
-                                    mm.set_flag(memory_id, "property_table", table)
-                                for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
-                                    val = payload.get(key)
-                                    if val:
-                                        mm.set_flag(memory_id, key, val)
-                    instance_phone_id = state.memory_manager.get_flag(memory_id, "whatsapp_phone_id")
-                    instance_token = state.memory_manager.get_flag(memory_id, "whatsapp_token")
-                    if instance_phone_id:
-                        state.memory_manager.set_flag(sender, "whatsapp_phone_id", instance_phone_id)
-                    if instance_token:
-                        state.memory_manager.set_flag(sender, "whatsapp_token", instance_token)
                 except Exception as exc:
                     log.warning("No se pudo hidratar contexto en webhook: %s", exc)
 
@@ -298,32 +380,21 @@ def register_whatsapp_routes(app, state):
                 state.processed_whatsapp_queue.append(msg_id)
                 state.processed_whatsapp_ids.add(msg_id)
 
-            if msg_type == "text":
-                text = msg.get("text", {}).get("body", "")
-            elif msg_type == "audio":
-                from channels_wrapper.utils.media_utils import transcribe_audio
+            text = _extract_incoming_whatsapp_text(msg, instance_token=instance_token)
 
-                media_id = msg.get("audio", {}).get("id")
-                if media_id:
-                    log.info("🎧 Audio recibido (media_id=%s), iniciando transcripción...", media_id)
-                    whatsapp_token = instance_token or os.getenv("WHATSAPP_TOKEN", "")
-                    openai_key = os.getenv("OPENAI_API_KEY", "")
-                    text = transcribe_audio(media_id, whatsapp_token, openai_key)
-                    log.info("📝 Transcripción completada: %s", text)
-
-            if not sender or not text:
+            if not sender_phone_id or not text:
                 return JSONResponse({"status": "ignored"})
 
-            log.info("💬 WhatsApp %s: %s", sender, text)
+            log.info("💬 WhatsApp %s: %s", sender_phone_id, text)
             chat_visible_before = False
             if client_name:
                 state.memory_manager.set_flag(memory_id, "client_name", client_name)
-            state.memory_manager.set_flag(memory_id, "guest_number", sender)
+            state.memory_manager.set_flag(memory_id, "guest_number", sender_phone_id)
             state.memory_manager.set_flag(memory_id, "force_guest_role", True)
-            if sender and sender != memory_id:
-                state.memory_manager.set_flag(sender, "force_guest_role", True)
+            if sender_phone_id and sender_phone_id != memory_id:
+                state.memory_manager.set_flag(sender_phone_id, "force_guest_role", True)
                 # Alias para que el chatter pueda ubicar el memory_id compuesto.
-                state.memory_manager.set_flag(sender, "last_memory_id", memory_id)
+                state.memory_manager.set_flag(sender_phone_id, "last_memory_id", memory_id)
 
             try:
                 property_id = state.memory_manager.get_flag(memory_id, "property_id")
@@ -351,34 +422,34 @@ def register_whatsapp_routes(app, state):
                             property_id = next(iter(prop_ids))
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
                 if property_id is None:
-                    property_id = _resolve_property_id_fallback(memory_id, sender)
+                    property_id = _resolve_property_id_fallback(memory_id, sender_phone_id)
                     if property_id is not None:
                         state.memory_manager.set_flag(memory_id, "property_id", property_id)
-                # Limpiar cualquier property_id heredado del sender global para evitar mezcla.
-                if sender:
-                    state.memory_manager.clear_flag(sender, "property_id")
+                # Limpiar cualquier property_id heredado del alias global del remitente para evitar mezcla.
+                if sender_phone_id:
+                    state.memory_manager.clear_flag(sender_phone_id, "property_id")
                 for key in ("folio_id", "checkin", "checkout"):
                     if state.memory_manager.get_flag(memory_id, key) is None:
-                        val = state.memory_manager.get_flag(sender, key)
+                        val = state.memory_manager.get_flag(sender_phone_id, key)
                         if val is not None:
                             state.memory_manager.set_flag(memory_id, key, val)
             except Exception:
                 property_id = None
-            if property_id is not None and sender:
+            if property_id is not None and sender_phone_id:
                 try:
-                    state.memory_manager.set_flag(sender, "property_id", property_id)
+                    state.memory_manager.set_flag(sender_phone_id, "property_id", property_id)
                 except Exception:
                     pass
-            clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
-            context_id = str(memory_id or sender or "").strip()
-            clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            clean_sender_phone_id = _clean_phone_like(sender_phone_id)
+            context_id = str(memory_id or sender_phone_id or "").strip()
+            clean_chat_id = clean_sender_phone_id or context_id
             guest_lang = "es"
             guest_lang_confidence = 0.0
             try:
                 prev_lang = (
                     state.memory_manager.get_flag(memory_id, "guest_lang")
                     or state.memory_manager.get_flag(clean_chat_id, "guest_lang")
-                    or state.memory_manager.get_flag(sender, "guest_lang")
+                    or state.memory_manager.get_flag(sender_phone_id, "guest_lang")
                 )
                 detected_lang, detected_confidence = language_manager.detect_language_with_confidence(
                     text,
@@ -390,7 +461,7 @@ def register_whatsapp_routes(app, state):
                 except Exception:
                     guest_lang_confidence = 0.0
                 guest_lang_confidence = max(0.0, min(1.0, guest_lang_confidence))
-                for lang_key in {memory_id, context_id, clean_chat_id, sender}:
+                for lang_key in {memory_id, context_id, clean_chat_id, sender_phone_id}:
                     if not lang_key:
                         continue
                     state.memory_manager.set_flag(lang_key, "guest_lang", guest_lang)
@@ -406,9 +477,9 @@ def register_whatsapp_routes(app, state):
             socket_mgr = getattr(state, "socket_manager", None)
             bookai_enabled = _resolve_bookai_enabled(
                 state,
-                chat_id=str(sender or ""),
+                chat_id=str(sender_phone_id or ""),
                 mem_id=str(memory_id or ""),
-                clean_id=clean_sender,
+                clean_id=clean_sender_phone_id,
                 property_id=property_id,
             )
             if bookai_enabled is False:
@@ -428,7 +499,7 @@ def register_whatsapp_routes(app, state):
                         except Exception:
                             property_id = None
                     if property_id is None:
-                        property_id = _resolve_property_id_fallback(memory_id, sender)
+                        property_id = _resolve_property_id_fallback(memory_id, sender_phone_id)
                         if property_id is not None:
                             state.memory_manager.set_flag(memory_id, "property_id", property_id)
                     if property_id is not None and not chat_visible_before:
@@ -499,7 +570,7 @@ def register_whatsapp_routes(app, state):
                     log.warning("No se pudo persistir mensaje con BookAI apagado: %s", exc)
                 try:
                     if socket_mgr and getattr(socket_mgr, "enabled", False):
-                        rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
+                        rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender_phone_id, clean_chat_id)]
                         if property_id is not None:
                             rooms.append(f"property:{property_id}")
                         rooms.append("channel:whatsapp")
@@ -595,7 +666,7 @@ def register_whatsapp_routes(app, state):
                     log.warning("No se pudo emitir mensaje entrante con BookAI apagado: %s", exc)
                 log.info(
                     "🤫 BookAI desactivado para %s (property_id=%s); mensaje no encolado.",
-                    clean_sender,
+                    clean_sender_phone_id,
                     property_id,
                 )
                 return JSONResponse({"status": "bookai_disabled"})
@@ -622,7 +693,7 @@ def register_whatsapp_routes(app, state):
                         current_property_id = None
                 if current_property_id is None:
                     try:
-                        current_property_id = _resolve_property_id_fallback(memory_id, sender)
+                        current_property_id = _resolve_property_id_fallback(memory_id, sender_phone_id)
                         if current_property_id is not None:
                             state.memory_manager.set_flag(memory_id, "property_id", current_property_id)
                     except Exception:
@@ -673,7 +744,7 @@ def register_whatsapp_routes(app, state):
                             },
                         },
                     )
-                rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender, clean_chat_id)]
+                rooms = [f"chat:{alias}" for alias in _chat_room_aliases(context_id, sender_phone_id, clean_chat_id)]
                 if property_id is not None:
                     rooms.append(f"property:{property_id}")
                 rooms.append("channel:whatsapp")
@@ -773,7 +844,7 @@ def register_whatsapp_routes(app, state):
                 )
                 resp = await process_user_message(
                     combined_text,
-                    sender,
+                    sender_phone_id,
                     state=state,
                     channel="whatsapp",
                     instance_number=normalized_instance_number,
@@ -799,20 +870,20 @@ def register_whatsapp_routes(app, state):
 
                 final_bookai_enabled = _resolve_bookai_enabled(
                     state,
-                    chat_id=str(sender or ""),
+                    chat_id=str(sender_phone_id or ""),
                     mem_id=str(cid or ""),
-                    clean_id=re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                    clean_id=clean_sender_phone_id,
                     property_id=property_id,
                 )
                 if final_bookai_enabled is False:
                     log.info(
                         "🤫 BookAI desactivado antes del envio para %s (property_id=%s); respuesta descartada.",
-                        re.sub(r"\D", "", str(sender or "")).strip() or str(sender or ""),
+                        clean_sender_phone_id,
                         property_id,
                     )
                     return
 
-                await send_fragmented_async(send_to_channel, sender, resp)
+                await send_fragmented_async(send_to_channel, sender_phone_id, resp)
 
             await state.buffer_manager.add_message(memory_id, text, _process_buffered)
 
