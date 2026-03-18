@@ -15,6 +15,10 @@ _GLOBAL_SOCKET_MANAGER = None
 class SocketManager:
     """Administra Socket.IO y expone helpers de emisión."""
 
+    # Inicializa el estado interno y las dependencias de `SocketManager`.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `app` como dependencias o servicios compartidos inyectados desde otras capas, y `cors_origins`, `bearer_token` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, app, *, cors_origins: list[str] | None, bearer_token: str | None):
         self.enabled = False
         self.sio = None
@@ -41,6 +45,10 @@ class SocketManager:
         self.enabled = True
         log.info("Socket.IO montado en /ws (tokens_validos=%s)", len(self._valid_tokens))
 
+    # Parsea el conjunto de tokens válidos.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `primary_token` como entrada principal según la firma.
+    # Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _parse_valid_tokens(primary_token: str) -> set[str]:
         tokens: set[str] = set()
@@ -83,6 +91,10 @@ class SocketManager:
                 tokens.add(token_text)
         return tokens
 
+    # Parsea el mapa token->instancia.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _parse_token_instances() -> dict[str, str]:
         mapping: dict[str, str] = {}
@@ -124,6 +136,10 @@ class SocketManager:
                 mapping[token_text] = instance_text
         return mapping
 
+    # Normaliza el token.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `token` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _normalize_token(token: str | None) -> str:
         raw = str(token or "").strip()
@@ -131,6 +147,10 @@ class SocketManager:
             raw = raw.split(" ", 1)[1].strip()
         return raw
 
+    # Resuelve el participantes.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `room` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _room_participants(self, room: str) -> list[str]:
         if not self.sio:
             return []
@@ -144,6 +164,10 @@ class SocketManager:
         except Exception:
             return []
 
+    # Expande compat sala nombres.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `room` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _expand_compat_room_names(room: str) -> list[str]:
         raw_room = str(room or "").strip()
@@ -156,6 +180,10 @@ class SocketManager:
                 expanded.append(alias)
         return expanded
 
+    # Resuelve sids para salas.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `rooms` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _target_sids_for_rooms(self, rooms: Iterable[str]) -> list[str]:
         target_sids: list[str] = []
         seen: set[str] = set()
@@ -168,6 +196,10 @@ class SocketManager:
                     target_sids.append(sid)
         return target_sids
 
+    # Normaliza el payload de chat mensaje.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `event`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _normalize_chat_message_payload(event: str, data: dict[str, Any]) -> dict[str, Any]:
         if event not in {"chat.message.created", "chat.message.new"}:
@@ -228,6 +260,10 @@ class SocketManager:
         )
         return payload
 
+    # Extrae auth token.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `environ`, `auth` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_auth_token(self, environ: dict, auth: Any | None) -> str | None:
         if isinstance(auth, dict):
             token = auth.get("token") or auth.get("bearer")
@@ -244,6 +280,10 @@ class SocketManager:
                     return None
         return None
 
+    # Determina si token valid cumple la condición necesaria en este punto del flujo.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `token` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_token_valid(self, token: str | None) -> bool:
         if not self._valid_tokens:
             return False
@@ -252,10 +292,18 @@ class SocketManager:
         raw = self._normalize_token(token)
         return raw in self._valid_tokens
 
+    # Registra el handlers.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `None` con el resultado de esta operación. Puede emitir eventos socket.
     def _register_handlers(self) -> None:
         if not self.sio:
             return
 
+        # Resuelve el conexión.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid`, `environ`, `auth` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         @self.sio.event
         async def connect(sid, environ, auth):
             token = self._extract_auth_token(environ, auth)
@@ -269,11 +317,19 @@ class SocketManager:
             log.info("Socket.IO conectado: %s", sid)
             return True
 
+        # Resuelve el desconexión.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid` como entrada principal según la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
         @self.sio.event
         async def disconnect(sid):
             self._sid_instances.pop(str(sid), None)
             log.info("Socket.IO desconectado: %s", sid)
 
+        # Resuelve el join.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
         @self.sio.event
         async def join(sid, data):
             rooms = (data or {}).get("rooms") or []
@@ -281,6 +337,10 @@ class SocketManager:
             for room in rooms:
                 await self.sio.enter_room(sid, str(room))
 
+        # Resuelve el join.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
         @self.sio.event
         async def room_join(sid, data):
             rooms = (data or {}).get("rooms") or []
@@ -288,18 +348,30 @@ class SocketManager:
             for room in rooms:
                 await self.sio.enter_room(sid, str(room))
 
+        # Resuelve el leave.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
         @self.sio.event
         async def leave(sid, data):
             rooms = (data or {}).get("rooms") or []
             for room in rooms:
                 await self.sio.leave_room(sid, str(room))
 
+        # Resuelve el leave.
+        # Se invoca dentro de `_register_handlers` para encapsular una parte local de Socket.IO, autenticación y eventos en tiempo real.
+        # Recibe `sid`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
         @self.sio.event
         async def room_leave(sid, data):
             rooms = (data or {}).get("rooms") or []
             for room in rooms:
                 await self.sio.leave_room(sid, str(room))
 
+    # Resuelve el emisión.
+    # Se usa dentro de `SocketManager` en el flujo de Socket.IO, autenticación y eventos en tiempo real.
+    # Recibe `event`, `data`, `rooms`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
     async def emit(
         self,
         event: str,
@@ -356,15 +428,27 @@ class SocketManager:
                 await self.sio.emit(event, data, room=room)
 
 
+# Fija global socket manager.
+# Se usa en el flujo de Socket.IO, autenticación y eventos en tiempo real para preparar datos, validaciones o decisiones previas.
+# Recibe `manager` como entrada principal según la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
 def set_global_socket_manager(manager: SocketManager | None) -> None:
     global _GLOBAL_SOCKET_MANAGER
     _GLOBAL_SOCKET_MANAGER = manager
 
 
+# Recupera global socket manager.
+# Se usa en el flujo de Socket.IO, autenticación y eventos en tiempo real para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `SocketManager | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_global_socket_manager() -> SocketManager | None:
     return _GLOBAL_SOCKET_MANAGER
 
 
+# Resuelve el evento.
+# Se usa en el flujo de Socket.IO, autenticación y eventos en tiempo real para preparar datos, validaciones o decisiones previas.
+# Recibe `event`, `data`, `rooms` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
 async def emit_event(event: str, data: dict[str, Any], rooms: str | Iterable[str] | None = None) -> None:
     manager = get_global_socket_manager()
     if not manager:

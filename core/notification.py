@@ -18,9 +18,10 @@ TELEGRAM_CHAT_ID = os.getenv("TELEGRAM_CHAT_ID")  # ID del encargado principal
 log = logging.getLogger("notification")
 
 
-# =====================================================
-# 📤 Envío simple (con fragmentación incluida)
-# =====================================================
+# Envía un solo fragmento de texto al encargado.
+# Se usa en el flujo de notificaciones a encargados por canales internos para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede realizar llamadas externas o a modelos.
 async def _send_single(chat_id: str, text: str):
     """Envía un solo fragmento de texto al encargado."""
     if not TELEGRAM_BOT_TOKEN or not chat_id:
@@ -44,9 +45,10 @@ async def _send_single(chat_id: str, text: str):
         return False
 
 
-# =====================================================
-# 📣 Notificador principal (fragmentación + reintentos)
-# =====================================================
+# Envía un mensaje (fragmentado si es largo) al encargado por Telegram.
+# Se usa en el flujo de notificaciones a encargados por canales internos para preparar datos, validaciones o decisiones previas.
+# Recibe `message`, `retries`, `delay` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Puede enviar mensajes o plantillas.
 async def notify_encargado(message: str, retries: int = 2, delay: float = 1.0) -> bool:
     """
     Envía un mensaje (fragmentado si es largo) al encargado por Telegram.
@@ -77,9 +79,10 @@ async def notify_encargado(message: str, retries: int = 2, delay: float = 1.0) -
         return False
 
 
-# =====================================================
-# 👥 Notificación a múltiples encargados
-# =====================================================
+# Envía el mismo mensaje a varios encargados (con fragmentación y delays).
+# Se usa en el flujo de notificaciones a encargados por canales internos para preparar datos, validaciones o decisiones previas.
+# Recibe `message`, `chat_ids` como entradas relevantes junto con el contexto inyectado en la firma.
+# Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede enviar mensajes o plantillas.
 async def notify_multiple_encargados(message: str, chat_ids: list[str]):
     """
     Envía el mismo mensaje a varios encargados (con fragmentación y delays).

@@ -7,6 +7,10 @@ from langchain_openai import ChatOpenAI
 log = logging.getLogger("fragmentation")
 _CUT_MARKER = "<<BOOKAI_CUT>>"
 
+# Divide fragmentos largos sin reescribir contenido ni añadir puntuación.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `fragment`, `hard_limit` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _split_long_fragment_preserving_text(fragment: str, hard_limit: int = 210) -> list[str]:
     """Divide fragmentos largos sin reescribir contenido ni añadir puntuación."""
     text = (fragment or "").strip()
@@ -41,6 +45,10 @@ def _split_long_fragment_preserving_text(fragment: str, hard_limit: int = 210) -
     return [part for part in parts if part]
 
 
+# Parte por frases preservando el texto original.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _collect_sentence_fragments(text: str) -> list[str]:
     """Parte por frases preservando el texto original."""
     stripped = (text or "").strip().replace("\r", "")
@@ -57,17 +65,26 @@ def _collect_sentence_fragments(text: str) -> list[str]:
     return fragments or [stripped]
 
 
+# Normaliza para comparison.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_for_comparison(text: str) -> str:
     return re.sub(r"\s+", " ", str(text or "").strip())
 
 
+# Resuelve preserve source.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `original`, `fragments` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _fragments_preserve_source(original: str, fragments: list[str]) -> bool:
     rebuilt = " ".join((frag or "").strip() for frag in fragments if (frag or "").strip())
     return _normalize_for_comparison(original) == _normalize_for_comparison(rebuilt)
 
-# ============================================================
-# 🔹 Fragmentación determinista sin reescritura
-# ============================================================
+# Divide el texto en fragmentos naturales preservando el contenido original.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `max_fragments` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def fragment_text_intelligently(text: str, max_fragments: int = 12) -> list[str]:
     """Divide el texto en fragmentos naturales preservando el contenido original."""
     if not text or not isinstance(text, str):
@@ -86,9 +103,10 @@ def fragment_text_intelligently(text: str, max_fragments: int = 12) -> list[str]
     return [f.strip() for f in fragments if f and f.strip()]
 
 
-# ============================================================
-# 🤖 IA Fragmentadora con validación estricta
-# ============================================================
+# Usa IA solo para decidir puntos de corte.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `max_fragments` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def fragment_text_with_ai(text: str, max_fragments: int = 9) -> list[str]:
     """
     Usa IA solo para decidir puntos de corte.
@@ -155,9 +173,10 @@ Texto original:
         return fragment_text_intelligently(raw_text, max_fragments=max_fragments)
 
 
-# ============================================================
-# ⏳ Simulación de escritura humana
-# ============================================================
+# Simula typing retardo seconds.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `thoughtful` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _simulate_typing_delay_seconds(text: str, thoughtful: bool = False) -> float:
     base = random.uniform(1.0, 1.8)
     length_factor = min(len(text) / 150, 2.5)
@@ -166,14 +185,19 @@ def _simulate_typing_delay_seconds(text: str, thoughtful: bool = False) -> float
     return base + length_factor + variability + thoughtful_delay
 
 
+# Espera typing asincronía.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `thoughtful` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 async def sleep_typing_async(text: str, thoughtful: bool = False):
     delay = _simulate_typing_delay_seconds(text, thoughtful)
     await asyncio.sleep(delay)
 
 
-# ============================================================
-# 💬 Envío fragmentado con ritmo humano
-# ============================================================
+# Envía la respuesta en fragmentos naturales sin reescribir el contenido.
+# Se usa en el flujo de fragmentación, typing y envío escalonado de texto para preparar datos, validaciones o decisiones previas.
+# Recibe `send_callable` como dependencias o servicios compartidos inyectados desde otras capas, y `user_id`, `reply` como datos de contexto o entrada de la operación.
+# Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Sin efectos secundarios relevantes.
 async def send_fragmented_async(send_callable, user_id: str, reply: str):
     """
     Envía la respuesta en fragmentos naturales sin reescribir el contenido.

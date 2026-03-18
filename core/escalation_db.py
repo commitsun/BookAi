@@ -6,6 +6,10 @@ from core.db import supabase  # ✅ reutiliza la conexión ya existente
 log = logging.getLogger("EscalationsDB")
 
 
+# Normaliza el ID de chat del huésped.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_guest_chat_id(value: str) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -17,9 +21,10 @@ def _normalize_guest_chat_id(value: str) -> str:
         return f"{left_clean}:{right_clean}".strip(":")
     return re.sub(r"\D", "", raw).strip() or raw
 
-# ======================================================
-# 💾 Crear o actualizar una escalación
-# ======================================================
+# Inserta o actualiza una escalación en la base de datos Supabase.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation` como entrada principal según la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede consultar o escribir en base de datos.
 def save_escalation(escalation: dict):
     """
     Inserta o actualiza una escalación en la base de datos Supabase.
@@ -36,9 +41,10 @@ def save_escalation(escalation: dict):
         log.error(f"⚠️ Error guardando escalación {escalation.get('escalation_id')}: {e}", exc_info=True)
 
 
-# ======================================================
-# 🔍 Obtener una escalación por ID
-# ======================================================
+# Recupera una escalación específica por su ID.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id` como entrada principal según la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
 def get_escalation(escalation_id: str):
     """Recupera una escalación específica por su ID."""
     try:
@@ -58,9 +64,10 @@ def get_escalation(escalation_id: str):
         return None
 
 
-# ======================================================
-# ✏️ Actualizar campos de una escalación existente
-# ======================================================
+# Actualiza los campos de una escalación existente.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `updates` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede consultar o escribir en base de datos.
 def update_escalation(escalation_id: str, updates: dict):
     """
     Actualiza los campos de una escalación existente.
@@ -77,9 +84,10 @@ def update_escalation(escalation_id: str, updates: dict):
         log.error(f"⚠️ Error actualizando escalación {escalation_id}: {e}", exc_info=True)
 
 
-# ======================================================
-# 💬 Historial de mensajes de escalación
-# ======================================================
+# Devuelve el historial de mensajes (JSONB) de una escalación.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id` como entrada principal según la firma.
+# Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_escalation_messages(escalation_id: str) -> list[dict]:
     """Devuelve el historial de mensajes (JSONB) de una escalación."""
     if not escalation_id:
@@ -105,6 +113,10 @@ def get_escalation_messages(escalation_id: str) -> list[dict]:
         return []
 
 
+# Agrega un mensaje al historial de la escalación y lo persiste en DB.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `role`, `content`, `timestamp` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def append_escalation_message(
     escalation_id: str,
     role: str,
@@ -130,9 +142,10 @@ def append_escalation_message(
     return messages
 
 
-# ======================================================
-# 🧾 Listar escalaciones pendientes de confirmación
-# ======================================================
+# Devuelve las últimas escalaciones sin confirmar (manager_confirmed = false).
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `limit`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
 def list_pending_escalations(limit: int = 20, property_id=None):
     """Devuelve las últimas escalaciones sin confirmar (manager_confirmed = false)."""
     try:
@@ -152,6 +165,10 @@ def list_pending_escalations(limit: int = 20, property_id=None):
         return []
 
 
+# Resuelve chat candidates.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id` como entrada principal según la firma.
+# Devuelve un `tuple[set[str], str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_chat_candidates(guest_chat_id: str) -> tuple[set[str], str]:
     raw = str(guest_chat_id or "").strip()
     normalized = _normalize_guest_chat_id(raw)
@@ -165,6 +182,10 @@ def _pending_chat_candidates(guest_chat_id: str) -> tuple[set[str], str]:
     return candidates, clean
 
 
+# Resuelve la consulta de escalations.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
 def _chat_escalations_query(guest_chat_id: str, property_id=None):
     candidates, clean = _pending_chat_candidates(guest_chat_id)
     like_clause = f"guest_chat_id.like.%:{clean}" if clean else ""
@@ -183,6 +204,10 @@ def _chat_escalations_query(guest_chat_id: str, property_id=None):
     return query
 
 
+# Determina si escalation resolved cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def is_escalation_resolved(escalation: dict | None) -> bool:
     if not isinstance(escalation, dict):
         return False
@@ -198,6 +223,10 @@ def is_escalation_resolved(escalation: dict | None) -> bool:
     return False
 
 
+# Recupera último escalation para chat.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `dict | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_latest_escalation_for_chat(guest_chat_id: str, property_id=None) -> dict | None:
     if not guest_chat_id:
         return None
@@ -220,6 +249,10 @@ def get_latest_escalation_for_chat(guest_chat_id: str, property_id=None) -> dict
         return None
 
 
+# Recupera último resolved escalation para chat.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `dict | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_latest_resolved_escalation_for_chat(guest_chat_id: str, property_id=None) -> dict | None:
     if not guest_chat_id:
         return None
@@ -243,6 +276,10 @@ def get_latest_resolved_escalation_for_chat(guest_chat_id: str, property_id=None
         return None
 
 
+# Devuelve TODAS las escalaciones pendientes para un chat, ordenadas por antigüedad.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `limit`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def list_pending_escalations_for_chat(guest_chat_id: str, limit: int = 20, property_id=None) -> list[dict]:
     """Devuelve TODAS las escalaciones pendientes para un chat, ordenadas por antigüedad."""
     if not guest_chat_id:
@@ -276,9 +313,10 @@ def list_pending_escalations_for_chat(guest_chat_id: str, limit: int = 20, prope
         return []
 
 
-# ======================================================
-# 🔎 Última escalación pendiente por chat
-# ======================================================
+# Devuelve la escalación pendiente más reciente para un chat específico.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `dict | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_latest_pending_escalation(guest_chat_id: str, property_id=None) -> dict | None:
     """Devuelve la escalación pendiente más reciente para un chat específico."""
     if not guest_chat_id:
@@ -314,6 +352,10 @@ def get_latest_pending_escalation(guest_chat_id: str, property_id=None) -> dict 
         return None
 
 
+# Resuelve escalation con resolution.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `property_id`, `resolution_medium`, `resolution_notes`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `dict | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def resolve_escalation_with_resolution(
     escalation_id: str,
     *,
@@ -356,6 +398,10 @@ def resolve_escalation_with_resolution(
         return None
 
 
+# Marca como resueltas TODAS las escalaciones pendientes para un chat.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `final_response`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def resolve_pending_escalations_for_chat(
     guest_chat_id: str,
     final_response: str | None = None,
@@ -379,9 +425,10 @@ def resolve_pending_escalations_for_chat(
     return resolved_ids
 
 
-# ======================================================
-# ✅ Resolver escalación pendiente por chat
-# ======================================================
+# Marca como resuelta la escalación pendiente más reciente para un chat.
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `final_response` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def resolve_latest_pending_escalation(guest_chat_id: str, final_response: str | None = None) -> str | None:
     """Marca como resuelta la escalación pendiente más reciente para un chat."""
     esc = get_latest_pending_escalation(guest_chat_id)
@@ -400,9 +447,10 @@ def resolve_latest_pending_escalation(guest_chat_id: str, final_response: str | 
     return str(escalation_id)
 
 
-# ======================================================
-# 🧹 Borrar una escalación (opcional, útil para debug)
-# ======================================================
+# Elimina una escalación específica (por depuración o pruebas).
+# Se usa en el flujo de persistencia y resolución de escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id` como entrada principal según la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede consultar o escribir en base de datos.
 def delete_escalation(escalation_id: str):
     """Elimina una escalación específica (por depuración o pruebas)."""
     try:

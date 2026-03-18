@@ -9,6 +9,10 @@ from typing import Any, Coroutine, TypeVar
 T = TypeVar("T")
 
 
+# Run a coroutine from sync code without mutating a running event loop.
+# Se usa en el flujo de puente entre código síncrono y coroutines para preparar datos, validaciones o decisiones previas.
+# Recibe `coro` como entrada principal según la firma.
+# Devuelve un `T` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def run_coro_sync(coro: Coroutine[Any, Any, T]) -> T:
     """
     Run a coroutine from sync code without mutating a running event loop.

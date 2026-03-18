@@ -21,10 +21,18 @@ SUPER_OFFER_FLAG = "super_offer_pending"
 _HUMAN_ESCALATION_COOLDOWN_MIN = 15
 
 
+# Limpia el ID de chat.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_chat_id(value: str) -> str:
     return re.sub(r"\D", "", str(value or "")).strip()
 
 
+# Construye la ventana activa de WhatsApp.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `created_at` como entrada principal según la firma.
+# Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_active_whatsapp_window(created_at: datetime | None = None) -> dict:
     base_dt = created_at or datetime.now(timezone.utc)
     if base_dt.tzinfo is None:
@@ -37,6 +45,10 @@ def _build_active_whatsapp_window(created_at: datetime | None = None) -> dict:
     }
 
 
+# Resuelve los aliases de sala para un chat.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `values` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _chat_room_aliases(*values: str) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
@@ -64,6 +76,10 @@ def _chat_room_aliases(*values: str) -> list[str]:
     return aliases
 
 
+# Detecta si el mensaje del huésped pide hablar o consultar con una persona.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _message_requests_human_intervention(text: str) -> bool:
     raw = (text or "").strip().lower()
     if not raw:
@@ -76,6 +92,10 @@ def _message_requests_human_intervention(text: str) -> bool:
     return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
 
 
+# Detecta si una respuesta promete una gestión humana o interna.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _response_promises_human_escalation(text: str) -> bool:
     raw = (text or "").strip().lower()
     if not raw:
@@ -90,6 +110,10 @@ def _response_promises_human_escalation(text: str) -> bool:
     return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
 
 
+# Usa un LLM como clasificador para confirmar si la respuesta promete escalación humana.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `assistant_response` como datos de contexto o entrada de la operación.
+# Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _llm_response_promises_human_escalation(
     llm: Any,
     *,
@@ -129,6 +153,10 @@ async def _llm_response_promises_human_escalation(
         return _response_promises_human_escalation(assistant_response)
 
 
+# Comprueba si el chat tiene una escalación pendiente dentro de la ventana de cooldown.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `mem_id` como datos de contexto o entrada de la operación.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _has_recent_pending_escalation(mem_id: str, state) -> bool:
     if not mem_id:
         return False
@@ -152,6 +180,10 @@ def _has_recent_pending_escalation(mem_id: str, state) -> bool:
         return False
 
 
+# Comprueba si existe una escalación humana real para alguno de los IDs relacionados.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_ids` como datos de contexto o entrada de la operación.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _has_real_human_escalation(state: Any, *chat_ids: str) -> bool:
     candidates = _chat_room_aliases(*chat_ids)
     if not candidates:
@@ -193,6 +225,10 @@ def _has_real_human_escalation(state: Any, *chat_ids: str) -> bool:
     return False
 
 
+# Detecta referencias textuales a gestión humana o interna.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _may_reference_human_escalation(text: str) -> bool:
     raw = (text or "").strip().lower()
     if not raw:
@@ -205,6 +241,10 @@ def _may_reference_human_escalation(text: str) -> bool:
     return any(re.search(p, raw, re.IGNORECASE) for p in patterns)
 
 
+# Reescribe respuestas para que no prometan una escalación inexistente.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `assistant_response`, `target_lang` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _llm_rewrite_honest_non_escalated_response(
     llm: Any,
     *,
@@ -245,6 +285,10 @@ async def _llm_rewrite_honest_non_escalated_response(
         return ""
 
 
+# Alinea la respuesta final con el estado real de escalación humana.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `llm`, `state` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `assistant_response`, `target_lang`, `chat_ids` como datos de contexto o entrada de la operación.
+# Devuelve un `tuple[str, bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 async def _align_response_with_human_escalation_state(
     llm: Any,
     *,
@@ -284,6 +328,10 @@ async def _align_response_with_human_escalation_state(
     return rewritten.strip(), True
 
 
+# Sanea la respuesta de huésped facing.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _sanitize_guest_facing_response(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
@@ -342,6 +390,10 @@ def _sanitize_guest_facing_response(text: str) -> str:
     return raw
 
 
+# Extrae JSON object.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `dict[str, Any] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -355,6 +407,10 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
         return None
 
 
+# Resuelve el float.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `value`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -362,6 +418,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# Resuelve booleano or none.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _as_bool_or_none(value: Any) -> Optional[bool]:
     if isinstance(value, bool):
         return value
@@ -377,6 +437,10 @@ def _as_bool_or_none(value: Any) -> Optional[bool]:
     return None
 
 
+# Resuelve BookAI enabled suffix fallback.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `bookai_flags`, `clean_id`, `property_candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `tuple[Optional[bool], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_bookai_enabled_suffix_fallback(
     bookai_flags: dict[Any, Any],
     *,
@@ -433,6 +497,10 @@ def _resolve_bookai_enabled_suffix_fallback(
     return None, None, None
 
 
+# Resuelve BookAI enabled.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `mem_id`, `clean_id`, `property_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_bookai_enabled(
     state: Any,
     *,
@@ -605,6 +673,10 @@ def _resolve_bookai_enabled(
     return None
 
 
+# Humaniza oferta type.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _humanize_offer_type(value: Any) -> str:
     raw = str(value or "").strip()
     if not raw:
@@ -612,6 +684,10 @@ def _humanize_offer_type(value: Any) -> str:
     return raw.replace("_", " ").strip()
 
 
+# Humaniza missing fields.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `fields` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _humanize_missing_fields(fields: list[str] | None) -> str:
     mapping = {
         "schedule": "horario",
@@ -632,6 +708,10 @@ def _humanize_missing_fields(fields: list[str] | None) -> str:
     return ", ".join(dict.fromkeys(normalized))
 
 
+# Carga activo super oferta.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `keys` como datos de contexto o entrada de la operación.
+# Devuelve un `tuple[Optional[dict[str, Any]], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _load_active_super_offer(memory_manager: Any, *keys: str) -> tuple[Optional[dict[str, Any]], Optional[str]]:
     if not memory_manager:
         return None, None
@@ -659,6 +739,10 @@ def _load_active_super_offer(memory_manager: Any, *keys: str) -> tuple[Optional[
     return None, None
 
 
+# Determina si mensaje related to pendiente oferta cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `user_message`, `pending_offer` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_message_related_to_pending_offer(user_message: str, pending_offer: dict[str, Any]) -> bool:
     text = (user_message or "").strip().lower()
     if not text:
@@ -682,6 +766,10 @@ def _is_message_related_to_pending_offer(user_message: str, pending_offer: dict[
         "saber", "sobre", "tambien", "tb",
     }
 
+    # Resuelve el tokens.
+    # Se invoca dentro de `_is_message_related_to_pending_offer` para encapsular una parte local de pipeline principal de entrada, guardrails y envío de respuesta.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _tokens(value: str) -> set[str]:
         parts = re.findall(r"[a-záéíóúñü]{3,}", value, flags=re.IGNORECASE)
         return {p.lower() for p in parts if p.lower() not in stopwords}
@@ -693,6 +781,10 @@ def _is_message_related_to_pending_offer(user_message: str, pending_offer: dict[
     return bool(msg_tokens.intersection(offer_tokens))
 
 
+# Clasifica huésped oferta intent.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `pending_offer` como datos de contexto o entrada de la operación.
+# Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _classify_guest_offer_intent(
     llm: Any,
     *,
@@ -738,6 +830,10 @@ async def _classify_guest_offer_intent(
     }
 
 
+# Comprueba oferta respuesta consistency.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `pending_offer`, `agent_response` como datos de contexto o entrada de la operación.
+# Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _check_offer_response_consistency(
     llm: Any,
     *,
@@ -777,6 +873,10 @@ async def _check_offer_response_consistency(
     }
 
 
+# Flujo principal:.
+# Se usa en el flujo de pipeline principal de entrada, guardrails y envío de respuesta para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `user_message`, `chat_id`, `hotel_name`, `channel`, ... como datos de contexto o entrada de la operación.
+# Devuelve un `str | None` con el resultado de esta operación. Puede emitir eventos socket, enviar mensajes o plantillas, realizar llamadas externas o a modelos.
 async def process_user_message(
     user_message: str,
     chat_id: str,
@@ -840,6 +940,10 @@ async def process_user_message(
             except Exception as exc:
                 log.debug("No se pudo detectar/guardar guest_lang en pipeline: %s", exc)
 
+        # Asegura huésped idioma.
+        # Se invoca dentro de `process_user_message` para encapsular una parte local de pipeline principal de entrada, guardrails y envío de respuesta.
+        # Recibe `text` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _ensure_guest_language(text: str) -> str:
             if not text:
                 return text
@@ -850,6 +954,10 @@ async def process_user_message(
             except Exception:
                 return text
 
+        # Resuelve el mensaje de huésped.
+        # Se invoca dentro de `process_user_message` para encapsular una parte local de pipeline principal de entrada, guardrails y envío de respuesta.
+        # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
         def _persist_guest_message() -> None:
             nonlocal guest_message_persisted, property_id
             if guest_message_persisted:
@@ -1075,6 +1183,10 @@ async def process_user_message(
         guardrail_llm = semantic_llm
         guardrail_llm_loaded = semantic_llm is not None
 
+        # Recupera guardrail llm.
+        # Se invoca dentro de `process_user_message` para encapsular una parte local de pipeline principal de entrada, guardrails y envío de respuesta.
+        # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _get_guardrail_llm():
             nonlocal guardrail_llm, guardrail_llm_loaded
             if guardrail_llm_loaded:
@@ -1171,6 +1283,10 @@ async def process_user_message(
                 log.warning("No se pudo guardar respuesta rápida de localizador: %s", exc)
         # response_raw ya puede venir de regla anti-duplicados o localizador rápido
 
+        # Envía inciso callback.
+        # Se invoca dentro de `process_user_message` para encapsular una parte local de pipeline principal de entrada, guardrails y envío de respuesta.
+        # Recibe `msg` como entrada principal según la firma.
+        # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede enviar mensajes o plantillas.
         async def send_inciso_callback(msg: str):
             try:
                 clean_msg = _sanitize_guest_facing_response(msg)

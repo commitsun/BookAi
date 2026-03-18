@@ -4,6 +4,10 @@ from typing import Any
 
 log = logging.getLogger("normalize_reply")
 
+# Limpia respuestas del MCP y añade soporte para:.
+# Se usa en el flujo de normalización de respuestas crudas del modelo para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_text_from_raw(raw: Any) -> str:
     """
     Limpia respuestas del MCP y añade soporte para:
@@ -113,6 +117,10 @@ def _extract_text_from_raw(raw: Any) -> str:
     return str(raw)
 
 
+# Limpia caracteres y artefactos del modelo, sin censurar contenido.
+# Se usa en el flujo de normalización de respuestas crudas del modelo para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_reply`, `user_query`, `agent_name` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def normalize_reply(raw_reply: Any, user_query: str, agent_name: str = "Unknown") -> str:
     """Limpia caracteres y artefactos del modelo, sin censurar contenido."""
     try:

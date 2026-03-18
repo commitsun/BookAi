@@ -6,6 +6,10 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from core.template_registry import TemplateDefinition, TemplateRegistry
 
 
+# Resuelve registro resolves base code when rows use idioma suffix.
+# Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del registro de plantillas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def test_registry_resolves_base_code_when_rows_use_language_suffix():
     registry = TemplateRegistry(
         templates=[

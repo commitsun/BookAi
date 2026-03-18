@@ -7,10 +7,18 @@ import re
 from typing import Any, Dict, Optional
 
 
+# Resuelve el clave.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _norm_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
 
 
+# Convierte el texto.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _to_text(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -38,6 +46,10 @@ def _to_text(value: Any) -> Optional[str]:
     return text or None
 
 
+# Resuelve el valor.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _csv_value(value: Any) -> Optional[str]:
     text = _to_text(value)
     if not text:
@@ -46,6 +58,10 @@ def _csv_value(value: Any) -> Optional[str]:
     return text.replace(";", ",")
 
 
+# Resuelve el parámetros.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _flat_params(params: Dict[str, Any] | None) -> Dict[str, Any]:
     if not isinstance(params, dict):
         return {}
@@ -59,6 +75,10 @@ def _flat_params(params: Dict[str, Any] | None) -> Dict[str, Any]:
     return flat
 
 
+# Selecciona el pick.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `flat`, `keys` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pick(flat: Dict[str, Any], *keys: str) -> Optional[str]:
     for key in keys:
         value = flat.get(_norm_key(key))
@@ -68,6 +88,10 @@ def _pick(flat: Dict[str, Any], *keys: str) -> Optional[str]:
     return None
 
 
+# Resuelve el tipo.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `template_code`, `template_name`, `trigger` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _infer_kind(template_code: str, template_name: str, trigger: Optional[str] = None) -> str:
     haystack = " ".join(
         part.strip().lower()
@@ -85,6 +109,10 @@ def _infer_kind(template_code: str, template_name: str, trigger: Optional[str] =
     return "template"
 
 
+# Construye el payload de plantilla estructurado.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `template_code`, `template_name`, `language`, `parameters`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def build_template_structured_payload(
     *,
     template_code: Optional[str],
@@ -237,6 +265,10 @@ def build_template_structured_payload(
     }
 
 
+# Extrae estructurado csv.
+# Se usa en el flujo de payload estructurado y CSV de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `structured_payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_structured_csv(structured_payload: Any) -> Optional[str]:
     if not isinstance(structured_payload, dict):
         return None

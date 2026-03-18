@@ -2,8 +2,8 @@ name: "🚀 Deploy to EC2"
 
 on:
   push:
-    branches:
-      - "**"
+    branches-ignore:
+      - refacto-bookai
 
 concurrency:
   group: deploy-${{ github.ref }}

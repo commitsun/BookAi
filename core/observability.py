@@ -7,6 +7,10 @@ from langsmith.run_helpers import get_current_run_tree
 PROJECT = os.getenv("LANGCHAIN_PROJECT", "BookAI")
 SAMPLING = float(os.getenv("LANGSMITH_SAMPLING_RATE", "1.0"))
 
+# Contexto corto para anidar metadatos/tags en las trazas.
+# Se usa en el flujo de propagación de contexto de observabilidad para preparar datos, validaciones o decisiones previas.
+# Recibe `name`, `metadata`, `tags`, `parent` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 @contextmanager
 def ls_context(
     name: Optional[str] = None,
@@ -32,6 +36,10 @@ def ls_context(
     with tracing_context(**kwargs):
         yield
 
+# Propaga el contexto actual a sub-agentes/servicios (si aplica).
+# Se usa en el flujo de propagación de contexto de observabilidad para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `Dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def current_headers_for_propagation() -> Dict:
     """
     Propaga el contexto actual a sub-agentes/servicios (si aplica).

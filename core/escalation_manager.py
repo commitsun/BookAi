@@ -27,6 +27,10 @@ _lock = threading.Lock()
 # FUNCIONES PÚBLICAS
 # =============================================================
 
+# Registra una nueva relación entre el mensaje de Telegram y la escalación interna.
+# Se usa en el flujo de tracking en memoria de escalaciones por mensaje para preparar datos, validaciones o decisiones previas.
+# Recibe `message_id`, `escalation_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede consultar o escribir en base de datos.
 def register_escalation(message_id: str, escalation_id: str):
     """
     Registra una nueva relación entre el mensaje de Telegram y la escalación interna.
@@ -51,6 +55,10 @@ def register_escalation(message_id: str, escalation_id: str):
         log.error(f"❌ Error guardando vinculación en DB: {e}")
 
 
+# Recupera el escalation_id asociado a un message_id de Telegram.
+# Se usa en el flujo de tracking en memoria de escalaciones por mensaje para preparar datos, validaciones o decisiones previas.
+# Recibe `message_id` como entrada principal según la firma.
+# Devuelve un `str | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_escalation(message_id: str) -> str | None:
     """
     Recupera el escalation_id asociado a un message_id de Telegram.
@@ -85,12 +93,20 @@ def get_escalation(message_id: str) -> str | None:
     return None
 
 
+# Devuelve una copia del diccionario actual (debug o persistencia).
+# Se usa en el flujo de tracking en memoria de escalaciones por mensaje para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_all_trackings() -> dict:
     """Devuelve una copia del diccionario actual (debug o persistencia)."""
     with _lock:
         return dict(ESCALATION_TRACKING)
 
 
+# Elimina un tracking específico o limpia todos.
+# Se usa en el flujo de tracking en memoria de escalaciones por mensaje para preparar datos, validaciones o decisiones previas.
+# Recibe `message_id` como entrada principal según la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
 def clear_tracking(message_id: str | None = None):
     """Elimina un tracking específico o limpia todos."""
     with _lock:

@@ -17,6 +17,10 @@ class ChannelManager:
     Cada canal debe heredar de BaseChannel y aceptar `openai_api_key` en su constructor.
     """
 
+    # Inicializa el estado interno y las dependencias de `ChannelManager`.
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory_manager=None):
         self.channels = {}
         self.openai_api_key = os.getenv("OPENAI_API_KEY")
@@ -25,9 +29,10 @@ class ChannelManager:
         self.memory_manager = memory_manager
         self._load_channels()
 
-    # ------------------------------------------------------------------
-    # 📦 Carga dinámica de canales
-    # ------------------------------------------------------------------
+    # Carga los módulos de canal disponibles.
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _load_channels(self):
         """Carga los módulos de canal disponibles."""
         possible_channels = {
@@ -66,9 +71,10 @@ class ChannelManager:
         if not self.channels:
             log.warning("⚠️ No se cargó ningún canal. Verifica los módulos en channels_wrapper/*")
 
-    # ------------------------------------------------------------------
-    # 🔌 Registro en FastAPI
-    # ------------------------------------------------------------------
+    # Registra todos los canales en la app FastAPI.
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # Recibe `app`, `hybrid_agent` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     def register_all(self, app, hybrid_agent=None):
         """
         Registra todos los canales en la app FastAPI.
@@ -88,9 +94,10 @@ class ChannelManager:
             except Exception as e:
                 log.error(f"💥 Error registrando canal '{name}': {e}", exc_info=True)
 
-    # ------------------------------------------------------------------
-    # 💬 Envío de mensajes
-    # ------------------------------------------------------------------
+    # Envía un mensaje al canal especificado (WhatsApp, Telegram, etc.).
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # Recibe `chat_id`, `message`, `channel`, `context_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def send_message(
         self,
         chat_id: str,
@@ -174,9 +181,10 @@ class ChannelManager:
             log.error(f"❌ Error enviando mensaje por canal '{channel}': {e}", exc_info=True)
 
 
-    # ------------------------------------------------------------------
-    # 💬 Envío de plantillas (WhatsApp)
-    # ------------------------------------------------------------------
+    # Envía una plantilla preaprobada (ej: WhatsApp).
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # Recibe `chat_id`, `template_id`, `parameters`, `language`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def send_template_message(
         self,
         chat_id: str,
@@ -261,6 +269,10 @@ class ChannelManager:
             log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
             raise
 
+    # Verifica si el número destino tiene cuenta WhatsApp.
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # Recibe `chat_id`, `channel`, `context_id`, `request_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def check_recipient_has_whatsapp_account(
         self,
         chat_id: str,
@@ -333,9 +345,10 @@ class ChannelManager:
             return {"hasWhatsApp": True, "reason": "checker_error", "check_status": "fallback"}
 
 
-    # ------------------------------------------------------------------
-    # 🧩 Utilidad: listar canales activos
-    # ------------------------------------------------------------------
+    # Devuelve la lista de canales cargados actualmente.
+    # Se usa dentro de `ChannelManager` en el flujo de carga dinámica y envío por canales externos.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def list_channels(self):
         """Devuelve la lista de canales cargados actualmente."""
         return list(self.channels.keys())

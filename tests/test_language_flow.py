@@ -9,38 +9,74 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
 class _FakeLanguageManager:
+    # Inicializa el estado interno y las dependencias de `_FakeLanguageManager`.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `detected_lang` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, detected_lang: str):
         self.detected_lang = detected_lang
 
+    # Detecta la idioma.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `text`, `prev_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def detect_language(self, text: str, prev_lang: str | None = None) -> str:
         return self.detected_lang
 
+    # Asegura la idioma.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `text`, `lang_code` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def ensure_language(self, text: str, lang_code: str) -> str:
         return f"[{lang_code}] {text}"
 
 
 class _FakeSupervisor:
+    # Valida el validate.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `*args`, `**kwargs` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     async def validate(self, *args, **kwargs):
         return {"estado": "Aprobado", "motivo": ""}
 
 
 class _FakeInterno:
+    # Resuelve el escalate.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `**kwargs` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     async def escalate(self, **kwargs):
         return None
 
 
 class _FakeMemory:
+    # Inicializa el estado interno y las dependencias de `_FakeMemory`.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `history`, `flags` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, history=None, flags=None):
         self._history = history or []
         self._flags = flags or {}
         self.saved = []
 
+    # Fija el flag.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `chat_id`, `key`, `value` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     def set_flag(self, chat_id, key, value):
         self._flags[(chat_id, key)] = value
 
+    # Recupera el flag.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `chat_id`, `key` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def get_flag(self, chat_id, key):
         return self._flags.get((chat_id, key))
 
+    # Persiste el save.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `conversation_id`, `role`, `content`, `channel` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def save(self, conversation_id, role, content, channel=None):
         self.saved.append(
             {
@@ -51,14 +87,26 @@ class _FakeMemory:
             }
         )
 
+    # Recupera el memory.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `conversation_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def get_memory(self, conversation_id, limit=20):
         return self._history[-limit:]
 
+    # Recupera los mensajes de memory as.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def get_memory_as_messages(self, conversation_id):
         return []
 
 
 class _FakeState:
+    # Inicializa el estado interno y las dependencias de `_FakeState`.
+    # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+    # Recibe `memory` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory):
         self.memory_manager = memory
         self.tracking = {}
@@ -68,11 +116,19 @@ class _FakeState:
         self.socket_manager = None
 
 
+# Carga pipeline con stubs.
+# Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+# Recibe `detected_lang`, `agent_reply` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
 def _load_pipeline_with_stubs(detected_lang: str, agent_reply: str = "ok"):
     fake_lang_mod = types.ModuleType("core.language_manager")
     fake_lang_mod.language_manager = _FakeLanguageManager(detected_lang)
 
     class _DummyMainAgent:
+        # Orquesta la ejecución principal de `_DummyMainAgent` para la consulta o evento actual.
+        # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+        # Recibe `**kwargs` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         async def ainvoke(self, **kwargs):
             return agent_reply
 
@@ -90,6 +146,10 @@ def _load_pipeline_with_stubs(detected_lang: str, agent_reply: str = "ok"):
     return importlib.import_module("core.pipeline")
 
 
+# Resuelve pipeline persists huésped idioma before main agent flow.
+# Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def test_pipeline_persists_guest_lang_before_main_agent_flow():
     pipeline = _load_pipeline_with_stubs("en", agent_reply="Main response")
     memory = _FakeMemory(history=[])
@@ -108,6 +168,10 @@ def test_pipeline_persists_guest_lang_before_main_agent_flow():
     assert memory.get_flag("34600111222", "guest_lang") == "en"
 
 
+# Resuelve pipeline localizes locator quick respuesta.
+# Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def test_pipeline_localizes_locator_quick_reply():
     pipeline = _load_pipeline_with_stubs("fr")
     memory = _FakeMemory(history=[], flags={("34600333444", "reservation_locator"): "ZX/987"})
@@ -126,6 +190,10 @@ def test_pipeline_localizes_locator_quick_reply():
     assert memory.get_flag("34600333444", "guest_lang") == "fr"
 
 
+# Resuelve super and telegram have activo idioma rewrite hook.
+# Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def test_super_and_telegram_have_active_language_rewrite_hook():
     super_src = Path("api/superintendente_routes.py").read_text(encoding="utf-8")
     telegram_src = Path("channels_wrapper/telegram/webhook_telegram.py").read_text(encoding="utf-8")

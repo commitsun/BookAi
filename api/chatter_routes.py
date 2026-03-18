@@ -150,9 +150,10 @@ class ResolveEscalationRequest(BaseModel):
     )
 
 
-# ---------------------------------------------------------------------------
-# Utilidades
-# ---------------------------------------------------------------------------
+# Parsea el mapa token->instancia.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_token_instance_map() -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
@@ -194,6 +195,10 @@ def _parse_token_instance_map() -> Dict[str, str]:
     return parsed
 
 
+# Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `auth_header` como entrada principal según la firma.
+# Devuelve un `Dict[str, Optional[str]]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
     """Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
@@ -216,6 +221,10 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
     return {"token": token, "instance_id": None}
 
 
+# Resuelve los sets de chats visibles por instancia.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_id`, `channel`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Tuple[set[str], set[str]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _instance_chat_sets(
     instance_id: str,
     channel: str,
@@ -299,10 +308,18 @@ def _instance_chat_sets(
     return chat_ids, original_chat_ids
 
 
+# Limpia el ID de chat.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
 
 
+# Valida si un identificador parece un chat de WhatsApp utilizable.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_plausible_whatsapp_chat_id(chat_id: str) -> bool:
     digits = _clean_chat_id(chat_id)
     if not digits:
@@ -331,6 +348,10 @@ def _is_plausible_whatsapp_chat_id(chat_id: str) -> bool:
     return True
 
 
+# Extrae huésped teléfono.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_guest_phone(chat_id: str) -> str:
     raw = str(chat_id or "").strip()
     if ":" in raw:
@@ -339,6 +360,10 @@ def _extract_guest_phone(chat_id: str) -> str:
     return clean or raw
 
 
+# Convierte international teléfono.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `phone` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _to_international_phone(phone: str) -> Optional[str]:
     raw = str(phone or "").strip()
     if not raw:
@@ -355,6 +380,10 @@ def _to_international_phone(phone: str) -> Optional[str]:
     return f"+{clean}"
 
 
+# Normaliza el ID de property.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str | int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
     if value is None:
         return None
@@ -364,6 +393,10 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str | int]:
     return text or None
 
 
+# Normaliza chat search.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_chat_search(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -371,6 +404,10 @@ def _normalize_chat_search(value: Optional[str]) -> Optional[str]:
     return text or None
 
 
+# Construye chat search filtros.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `search` como entrada principal según la firma.
+# Devuelve un `List[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_chat_search_filters(search: str) -> List[str]:
     text = _normalize_chat_search(search)
     if not text:
@@ -400,6 +437,10 @@ def _build_chat_search_filters(search: str) -> List[str]:
     return list(dict.fromkeys(filters))
 
 
+# Normaliza el ID de user.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
     if value is None:
         return None
@@ -412,6 +453,10 @@ def _normalize_user_id(value: Optional[int | str]) -> Optional[int]:
         return None
 
 
+# Resuelve el estado.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _escalation_status(escalation: Dict[str, Any]) -> str:
     explicit = str((escalation or {}).get("status") or "").strip().lower()
     if explicit in {"pending", "resolved"}:
@@ -421,6 +466,10 @@ def _escalation_status(escalation: Dict[str, Any]) -> str:
     return "pending"
 
 
+# Construye el payload de escalation resolution.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `escalation`, `fallback_property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_escalation_resolution_payload(
     chat_id: str,
     escalation: Dict[str, Any],
@@ -486,6 +535,10 @@ def _build_escalation_resolution_payload(
     }
 
 
+# Construye el payload de empty escalation resolution.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_empty_escalation_resolution_payload(
     chat_id: str,
     *,
@@ -514,6 +567,10 @@ def _build_empty_escalation_resolution_payload(
     }
 
 
+# Resuelve el historial de exists in.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `channel` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _chat_exists_in_history(
     chat_id: str,
     *,
@@ -545,6 +602,10 @@ def _chat_exists_in_history(
         return False
 
 
+# Resuelve el remitente.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `role` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _map_sender(role: str) -> str:
     role = (role or "").lower()
     if role in {"guest", "bookai", "system", "tool"}:
@@ -556,6 +617,10 @@ def _map_sender(role: str) -> str:
     return "bookai"
 
 
+# Normaliza content del historial para render en frontend.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_history_content(content: str) -> str:
     """Normaliza content del historial para render en frontend."""
     text = str(content or "")
@@ -565,6 +630,10 @@ def _format_history_content(content: str) -> str:
     return text
 
 
+# Normaliza pendiente clave.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_pending_key(guest_id: str) -> str:
     raw = str(guest_id or "").strip()
     if not raw:
@@ -580,6 +649,10 @@ def _normalize_pending_key(guest_id: str) -> str:
     return raw
 
 
+# Normaliza pendiente property.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_pending_property(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -587,12 +660,20 @@ def _normalize_pending_property(value: Any) -> Optional[str]:
     return text or None
 
 
+# Resuelve compound clave.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_compound_key(guest_chat_id: str, property_id: Any) -> str:
     guest_key = _normalize_pending_key(guest_chat_id)
     prop_key = _normalize_pending_property(property_id)
     return f"{guest_key}|{prop_key or '*'}"
 
 
+# Extrae reserva fields.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     folio_keys = (
         "folio_id",
@@ -607,6 +688,10 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     checkin_keys = ("checkin", "check_in", "fecha_entrada", "entrada", "arrival", "checkin_date")
     checkout_keys = ("checkout", "check_out", "fecha_salida", "salida", "departure", "checkout_date")
 
+    # Selecciona el pick.
+    # Se invoca dentro de `_extract_reservation_fields` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `keys` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _pick(keys):
         for key in keys:
             if key in params and params.get(key) not in (None, ""):
@@ -616,6 +701,10 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
+# Extrae property nombre.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -626,6 +715,10 @@ def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae reserva locator.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -636,6 +729,10 @@ def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae reserva cliente nombre.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_client_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -658,6 +755,10 @@ def _extract_reservation_client_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae dates desde reserva.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
@@ -675,6 +776,10 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
     return None, None
 
 
+# Extrae locator desde reserva.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -685,6 +790,10 @@ def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae cliente nombre desde reserva.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_client_name_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -706,6 +815,10 @@ def _extract_client_name_from_reservation(payload: Dict[str, Any]) -> Optional[s
     return None
 
 
+# Extrae el texto de desde.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
@@ -725,6 +838,10 @@ def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optiona
     return folio_id, checkin, checkout
 
 
+# Elimina marcadores internos (p.ej. [esc_xxx]) antes de enviar al huésped.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _sanitize_guest_outgoing_text(text: str) -> str:
     """Elimina marcadores internos (p.ej. [esc_xxx]) antes de enviar al huésped."""
     raw = (text or "").strip()
@@ -744,6 +861,10 @@ def _sanitize_guest_outgoing_text(text: str) -> str:
     return "\n".join(clean_lines).strip()
 
 
+# Detecta mensajes internos que deben ocultarse en el chatter operativo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `hide_template_sent` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_internal_hidden_message(text: str, *, hide_template_sent: bool = True) -> bool:
     content = (text or "").strip()
     if not content:
@@ -765,6 +886,10 @@ def _is_internal_hidden_message(text: str, *, hide_template_sent: bool = True) -
     return False
 
 
+# Agrupa pendientes por chat+property para evitar cruces entre hoteles.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `limit`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, List[Dict[str, Any]]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) -> Dict[str, List[Dict[str, Any]]]:
     """Agrupa pendientes por chat+property para evitar cruces entre hoteles."""
     pending = list_pending_escalations(limit=limit, property_id=property_id) or []
@@ -797,6 +922,10 @@ def _pending_by_chat(limit: int = 200, property_id: Optional[str | int] = None) 
     return grouped
 
 
+# Resuelve el prefijos.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_id` como entrada principal según la firma.
+# Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _instance_prefixes(instance_id: Optional[str]) -> set[str]:
     prefixes: set[str] = set()
     normalized = str(instance_id or "").strip()
@@ -819,6 +948,10 @@ def _instance_prefixes(instance_id: Optional[str]) -> set[str]:
     return {p for p in prefixes if p}
 
 
+# Resuelve pendiente por instancia.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `grouped`, `instance_id`, `allowed_chat_ids` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, List[Dict[str, Any]]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _filter_pending_by_instance(
     grouped: Dict[str, List[Dict[str, Any]]],
     instance_id: Optional[str],
@@ -853,6 +986,10 @@ def _filter_pending_by_instance(
     return filtered
 
 
+# Resuelve pendiente valores.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `values` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _join_pending_values(values: List[str]) -> Optional[str]:
     clean = [v.strip() for v in values if isinstance(v, str) and v.strip()]
     if not clean:
@@ -862,12 +999,20 @@ def _join_pending_values(values: List[str]) -> Optional[str]:
     return "\n".join(f"{idx}. {text}" for idx, text in enumerate(clean, start=1))
 
 
+# Resuelve el pendiente.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escs` como entrada principal según la firma.
+# Devuelve un `Optional[Dict[str, Any]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _latest_pending(escs: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]:
     if not escs:
         return None
     return escs[-1]
 
 
+# Resuelve el actions.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `grouped` como datos de contexto o entrada de la operación.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: Any = None) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
@@ -892,6 +1037,10 @@ def _pending_actions(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: A
     return result
 
 
+# Resuelve el idioma del huésped.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `latest` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_guest_lang(latest: Dict[str, Any], memory_manager: Any = None) -> str:
     guest_chat_id = str(
         latest.get("guest_chat_id")
@@ -917,6 +1066,10 @@ def _resolve_guest_lang(latest: Dict[str, Any], memory_manager: Any = None) -> s
     return "es"
 
 
+# Resuelve el reasons.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `grouped` como datos de contexto o entrada de la operación.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: Any = None) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
@@ -927,6 +1080,10 @@ def _pending_reasons(grouped: Dict[str, List[Dict[str, Any]]], memory_manager: A
     return result
 
 
+# Resuelve el types.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `grouped` como entrada principal según la firma.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_types(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
@@ -937,6 +1094,10 @@ def _pending_types(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     return result
 
 
+# Resuelve la respuestas.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `grouped` como entrada principal según la firma.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_responses(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, str]:
     result: Dict[str, str] = {}
     for guest_id, escs in grouped.items():
@@ -947,6 +1108,10 @@ def _pending_responses(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, st
     return result
 
 
+# Resuelve los mensajes.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `grouped` como entrada principal según la firma.
+# Devuelve un `Dict[str, list]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, list]:
     result: Dict[str, list] = {}
     for guest_id, escs in grouped.items():
@@ -970,6 +1135,10 @@ def _pending_messages(grouped: Dict[str, List[Dict[str, Any]]]) -> Dict[str, lis
     return result
 
 
+# Si existe una única property en pendientes para el huésped, devuélvela.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `grouped`, `guest_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str | int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_property_for_guest(
     grouped: Dict[str, List[Dict[str, Any]]],
     guest_chat_id: str,
@@ -1007,6 +1176,10 @@ def _pending_property_for_guest(
     return value
 
 
+# Estado consolidado de la última escalación pendiente para un chat.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `property_id`, `instance_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_snapshot_for_chat(
     chat_id: str,
     property_id: Optional[str | int],
@@ -1055,6 +1228,10 @@ def _pending_snapshot_for_chat(
     }
 
 
+# Busca valor por key exacta; solo usa fallback legacy si el chat no está acotado a una property.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `mapping`, `chat_id`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Any` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property_id: Any) -> Any:
     """Busca valor por key exacta; solo usa fallback legacy si el chat no está acotado a una property."""
     if not isinstance(mapping, dict):
@@ -1099,6 +1276,10 @@ def _pending_value_with_fallback(mapping: Dict[str, Any], chat_id: str, property
     return candidate_any_prop
 
 
+# Limpia borrador instruction block.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _strip_draft_instruction_block(text: str) -> str:
     if not text:
         return text
@@ -1135,6 +1316,10 @@ def _strip_draft_instruction_block(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+# Compacta borradores para que la sugerencia sea breve y legible en Chatter.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `max_chars`, `max_sentences` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _compact_ai_draft(text: str, max_chars: int = 380, max_sentences: int = 3) -> str:
     """Compacta borradores para que la sugerencia sea breve y legible en Chatter."""
     raw = (text or "").strip()
@@ -1153,6 +1338,10 @@ def _compact_ai_draft(text: str, max_chars: int = 380, max_sentences: int = 3) -
     return normalized
 
 
+# Resuelve escalations summary.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalations` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pending_escalations_summary(escalations: List[Dict[str, Any]]) -> str:
     if not escalations:
         return "No hay escalaciones pendientes."
@@ -1167,6 +1356,10 @@ def _pending_escalations_summary(escalations: List[Dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
+# Resuelve el configuración.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `Dict[str, bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_settings(state) -> Dict[str, bool]:
     load_tracking = getattr(state, "load_tracking", None)
     if callable(load_tracking):
@@ -1181,6 +1374,10 @@ def _bookai_settings(state) -> Dict[str, bool]:
     return settings
 
 
+# Resuelve flag claves.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Optional[str] = None) -> list[str]:
     clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
     prop = _normalize_property_id(property_id)
@@ -1197,6 +1394,10 @@ def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Option
     return keys
 
 
+# Resuelve flag valor.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `property_id`, `instance_id`, `default` como datos de contexto o entrada de la operación.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_value(
     state,
     *,
@@ -1217,6 +1418,10 @@ def _bookai_flag_value(
     return bool(resolution["value"])
 
 
+# Parsea BookAI flag.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `Optional[bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_bookai_flag(raw: Any) -> Optional[bool]:
     if isinstance(raw, bool):
         return raw
@@ -1230,6 +1435,10 @@ def _parse_bookai_flag(raw: Any) -> Optional[bool]:
     return None
 
 
+# Resuelve flag resolution.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `settings`, `aliases`, `chat_id`, `property_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_resolution(
     settings: Dict[str, Any],
     *,
@@ -1322,6 +1531,10 @@ def _bookai_flag_resolution(
     }
 
 
+# Resuelve el registro.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `Optional[TemplateRegistry]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _template_registry(state) -> Optional[TemplateRegistry]:
     registry = getattr(state, "template_registry", None)
     if registry and isinstance(registry, TemplateRegistry):
@@ -1329,6 +1542,10 @@ def _template_registry(state) -> Optional[TemplateRegistry]:
     return None
 
 
+# Parsea un timestamp tolerando formatos heterogéneos.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[datetime]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_ts(value: Optional[str]) -> Optional[datetime]:
     if not value:
         return None
@@ -1338,11 +1555,19 @@ def _parse_ts(value: Optional[str]) -> Optional[datetime]:
         return None
 
 
+# Convierte utc z.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _to_utc_z(value: datetime) -> str:
     dt = value.astimezone(timezone.utc).replace(microsecond=0)
     return dt.isoformat().replace("+00:00", "Z")
 
 
+# Construye WhatsApp window.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `last_guest_message_at`, `last_template_sent_at` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_whatsapp_window(
     last_guest_message_at: Optional[str],
     last_template_sent_at: Optional[str] = None,
@@ -1381,6 +1606,10 @@ def _build_whatsapp_window(
     }
 
 
+# Resuelve historial identidad filtros.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `List[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _chat_history_identity_filters(chat_id: str, original_chat_id: Optional[str] = None) -> List[str]:
     decoded_id = str(chat_id or "").strip()
     clean_id = _clean_chat_id(decoded_id) or decoded_id
@@ -1400,6 +1629,10 @@ def _chat_history_identity_filters(chat_id: str, original_chat_id: Optional[str]
     return filters
 
 
+# Resuelve last huésped mensaje at.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `channel`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_last_guest_message_at(
     chat_id: str,
     *,
@@ -1425,6 +1658,10 @@ def _resolve_last_guest_message_at(
         return None
 
 
+# Resuelve last plantilla sent at.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `channel`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_last_template_sent_at(
     chat_id: str,
     *,
@@ -1451,6 +1688,10 @@ def _resolve_last_template_sent_at(
         return None
 
 
+# Resuelve WhatsApp window para chat.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `channel`, `original_chat_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_whatsapp_window_for_chat(
     chat_id: str,
     *,
@@ -1479,6 +1720,10 @@ def _resolve_whatsapp_window_for_chat(
     return _build_whatsapp_window(guest_message_at, template_sent_at)
 
 
+# Busca el ultimo property_id no nulo para el chat en DB.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `channel` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str | int]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -> Optional[str | int]:
     """Busca el ultimo property_id no nulo para el chat en DB."""
     decoded_id = str(chat_id or "").strip()
@@ -1526,6 +1771,10 @@ def _resolve_property_id_from_history(chat_id: str, channel: str = "whatsapp") -
     return None
 
 
+# Intenta alinear aliases (ej. instance:phone) para flags sin duplicar mensajes.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _related_memory_ids(state, chat_id: str) -> list[str]:
     """Intenta alinear aliases (ej. instance:phone) para flags sin duplicar mensajes."""
     ids = set()
@@ -1558,6 +1807,10 @@ def _related_memory_ids(state, chat_id: str) -> list[str]:
     return list(ids)
 
 
+# Resuelve instancia número.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(instance_payload, dict):
         return None
@@ -1569,6 +1822,10 @@ def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Construye contexto ID desde instancia.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `instance_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[str] = None) -> Optional[str]:
     memory_manager = getattr(state, "memory_manager", None)
     clean = _clean_chat_id(chat_id) or str(chat_id).strip()
@@ -1600,6 +1857,10 @@ def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[s
     return context_id
 
 
+# Resuelve el context_id (ej. instancia:telefono) para enrutar WhatsApp.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `instance_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_whatsapp_context_id(
     state,
     chat_id: str,
@@ -1612,6 +1873,10 @@ def _resolve_whatsapp_context_id(
     memory_manager = getattr(state, "memory_manager", None)
     clean = _clean_chat_id(chat_id) or str(chat_id).strip()
 
+    # Resuelve la instancia.
+    # Se invoca dentro de `_resolve_whatsapp_context_id` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `mem_id` como entrada principal según la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _matches_instance(mem_id: str) -> bool:
         if not mem_id:
             return False
@@ -1653,6 +1918,10 @@ def _resolve_whatsapp_context_id(
     return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
 
 
+# Normaliza idioma confidence.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `value`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_language_confidence(value: Any, default: float = 0.0) -> float:
     try:
         confidence = float(value)
@@ -1665,6 +1934,10 @@ def _normalize_language_confidence(value: Any, default: float = 0.0) -> float:
     return confidence
 
 
+# Resuelve idioma huésped + confianza priorizando flags de memoria y aliases.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `context_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Tuple[str, float]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_guest_lang_meta_for_chat(
     state,
     chat_id: str,
@@ -1745,12 +2018,20 @@ def _resolve_guest_lang_meta_for_chat(
     return "es", 0.0
 
 
+# Resuelve idioma huésped priorizando flags de memoria y aliases del chat.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `context_id` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_guest_lang_for_chat(state, chat_id: str, context_id: Optional[str] = None) -> str:
     """Resuelve idioma huésped priorizando flags de memoria y aliases del chat."""
     lang, _ = _resolve_guest_lang_meta_for_chat(state, chat_id, context_id=context_id)
     return lang
 
 
+# Ajusta mensaje saliente al idioma del huésped para envíos manuales.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `text`, `context_id` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _ensure_guest_language_for_outgoing(state, chat_id: str, text: str, context_id: Optional[str] = None) -> str:
     """Ajusta mensaje saliente al idioma del huésped para envíos manuales."""
     raw = (text or "").strip()
@@ -1765,12 +2046,17 @@ def _ensure_guest_language_for_outgoing(state, chat_id: str, text: str, context_
         return raw
 
 
-# ---------------------------------------------------------------------------
-# Registro de rutas
-# ---------------------------------------------------------------------------
+# Registra las rutas de `chatter` sobre la aplicación FastAPI activa.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `app`, `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `None` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos, emitir eventos socket, enviar mensajes o plantillas.
 def register_chatter_routes(app, state) -> None:
     router = APIRouter(prefix="/api/v1/chatter", tags=["chatter"])
 
+    # Resuelve los aliases de sala para un chat.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _chat_room_aliases(chat_id: str) -> list[str]:
         aliases: list[str] = []
         seen: set[str] = set()
@@ -1797,6 +2083,10 @@ def register_chatter_routes(app, state) -> None:
                 aliases.append(v)
         return aliases
 
+    # Resuelve el salas.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `channel` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _rooms(chat_id: str, property_id: Optional[str | int], channel: str) -> list[str]:
         aliases = _chat_room_aliases(chat_id) or [chat_id]
         rooms = [f"chat:{alias}" for alias in aliases]
@@ -1806,6 +2096,10 @@ def register_chatter_routes(app, state) -> None:
             rooms.append(f"channel:{channel}")
         return rooms
 
+    # Resuelve el salas.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _chat_rooms(chat_id: str) -> list[str]:
         aliases = _chat_room_aliases(chat_id) or [chat_id]
         rooms: list[str] = []
@@ -1821,6 +2115,10 @@ def register_chatter_routes(app, state) -> None:
             rooms.append(room)
         return rooms
 
+    # Resuelve el emisión.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `event`, `payload` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
     async def _emit(event: str, payload: dict) -> None:
         socket_mgr = getattr(state, "socket_manager", None)
         if not socket_mgr or not getattr(socket_mgr, "enabled", False):
@@ -1830,6 +2128,10 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
+    # Resuelve escalation resolved.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `payload`, `guest_chat_id`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
     async def _emit_escalation_resolved(
         chat_id: str,
         payload: dict,
@@ -1892,6 +2194,10 @@ def register_chatter_routes(app, state) -> None:
                 exc_info=True,
             )
 
+    # Resuelve chat visibilidad.
+    # Se invoca dentro de `register_chatter_routes` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `channel`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _restore_chat_visibility(
         chat_id: str,
         *,
@@ -1929,6 +2235,10 @@ def register_chatter_routes(app, state) -> None:
         except Exception:
             return False
 
+    # Atiende el endpoint `GET /chats` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `page`, `page_size`, `channel`, `property_id`, ... desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.get("/chats")
     async def list_chats(
         page: int = Query(default=1, ge=1),
@@ -2363,6 +2673,10 @@ def register_chatter_routes(app, state) -> None:
             "items": items,
         }
 
+    # Atiende el endpoint `GET /chats/{chat_id}/messages` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `page`, `page_size`, `property_id`, ... desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.get("/chats/{chat_id}/messages")
     async def list_messages(
         chat_id: str,
@@ -2542,6 +2856,10 @@ def register_chatter_routes(app, state) -> None:
             "items": items,
         }
 
+    # Atiende el endpoint `POST /messages` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `payload`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, emitir eventos socket, enviar mensajes o plantillas.
     @router.post("/messages")
     @router.post("/messages/send")
     async def send_message(
@@ -3112,6 +3430,10 @@ def register_chatter_routes(app, state) -> None:
             "sender": sender_for_ui,
         }
 
+    # Atiende el endpoint `POST /chats/{chat_id}/proposed-response` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `payload`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.post("/chats/{chat_id}/proposed-response")
     async def refine_proposed_response(
         chat_id: str,
@@ -3170,6 +3492,10 @@ def register_chatter_routes(app, state) -> None:
 
         from core.message_utils import extract_clean_draft
 
+        # Limpia instruction block.
+        # Se invoca dentro de `refine_proposed_response` para encapsular una parte local de API del chatter, historial, mensajes, templates y escalaciones.
+        # Recibe `text` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _strip_instruction_block(text: str) -> str:
             if not text:
                 return text
@@ -3246,6 +3572,10 @@ def register_chatter_routes(app, state) -> None:
             "is_final_response": True,
         }
 
+    # Atiende el endpoint `POST /chats/{chat_id}/escalation-chat` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `payload`, `property_id`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.post("/chats/{chat_id}/escalation-chat")
     async def escalation_chat(
         chat_id: str,
@@ -3392,6 +3722,10 @@ def register_chatter_routes(app, state) -> None:
             "is_final_response": is_final_response,
         }
 
+    # Atiende el endpoint `GET /chats/{chat_id}/escalation-chat` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `escalation_id`, `property_id`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.get("/chats/{chat_id}/escalation-chat")
     async def get_escalation_chat(
         chat_id: str,
@@ -3471,6 +3805,10 @@ def register_chatter_routes(app, state) -> None:
             "pending_summary": _pending_escalations_summary(pending_escalations),
         }
 
+    # Atiende el endpoint `POST /chats/{chat_id}/resolve-escalation` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `payload`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.post("/chats/{chat_id}/resolve-escalation")
     async def resolve_escalation(
         chat_id: str,
@@ -3647,6 +3985,10 @@ def register_chatter_routes(app, state) -> None:
 
         return resolution_payload
 
+    # Atiende el endpoint `GET /chats/{chat_id}/escalation-resolution` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.get("/chats/{chat_id}/escalation-resolution")
     async def get_escalation_resolution(
         chat_id: str,
@@ -3701,6 +4043,10 @@ def register_chatter_routes(app, state) -> None:
             fallback_property_id=resolved_property_id,
         )
 
+    # Atiende el endpoint `PATCH /chats/{chat_id}/bookai` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `payload`, `property_id`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.patch("/chats/{chat_id}/bookai")
     async def toggle_bookai(
         chat_id: str,
@@ -3813,6 +4159,10 @@ def register_chatter_routes(app, state) -> None:
             "bookai_enabled": payload.bookai_enabled,
         }
 
+    # Atiende el endpoint `PATCH /chats/{chat_id}/read` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.patch("/chats/{chat_id}/read")
     async def mark_chat_read(
         chat_id: str,
@@ -3867,6 +4217,10 @@ def register_chatter_routes(app, state) -> None:
             "read_status": True,
         }
 
+    # Atiende el endpoint `POST /chats/{chat_id}/archive` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, emitir eventos socket.
     @router.post("/chats/{chat_id}/archive")
     async def archive_chat(
         chat_id: str,
@@ -4088,6 +4442,10 @@ def register_chatter_routes(app, state) -> None:
             "archived": True,
         }
 
+    # Atiende el endpoint `POST /chats/{chat_id}/hide` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, emitir eventos socket.
     @router.post("/chats/{chat_id}/hide")
     async def hide_chat(
         chat_id: str,
@@ -4309,6 +4667,10 @@ def register_chatter_routes(app, state) -> None:
             "hidden": True,
         }
 
+    # Atiende el endpoint `GET /templates` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `instance_id`, `language`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.get("/templates")
     async def list_templates(
         instance_id: Optional[str] = Query(default=None),
@@ -4342,6 +4704,10 @@ def register_chatter_routes(app, state) -> None:
 
         return {"items": results}
 
+    # Atiende el endpoint `POST /templates/send` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `payload`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, emitir eventos socket, enviar mensajes o plantillas.
     @router.post("/templates/send")
     async def send_template(
         payload: SendTemplateRequest,
@@ -4901,6 +5267,10 @@ def register_chatter_routes(app, state) -> None:
             "structured_csv": structured_csv,
         }
 
+    # Atiende el endpoint `GET /chats/{chat_id}/window` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API del chatter, historial, mensajes, templates y escalaciones.
+    # Recibe `chat_id`, `property_id`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.get("/chats/{chat_id}/window")
     async def check_window(
         chat_id: str,

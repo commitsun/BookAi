@@ -58,6 +58,10 @@ NOTIFIED_ESCALATIONS: Dict[str, str] = {}
 _MEMORY_MANAGER = None
 
 
+# Resuelve el evento.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `event`, `payload`, `rooms` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
 def _fire_event(event: str, payload: dict, rooms: list[str] | None = None) -> None:
     try:
         loop = asyncio.get_running_loop()
@@ -81,18 +85,30 @@ def _fire_event(event: str, payload: dict, rooms: list[str] | None = None) -> No
     loop.create_task(emit_event(event, payload, rooms=rooms))
 
 
+# Permite que las tools guarden mensajes en la memoria global.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
 def set_memory_manager(memory_manager):
     """Permite que las tools guarden mensajes en la memoria global."""
     global _MEMORY_MANAGER
     _MEMORY_MANAGER = memory_manager
 
 
+# Limpia el ID de chat.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_chat_id(chat_id: str) -> str:
     if not chat_id:
         return ""
     return re.sub(r"\D", "", str(chat_id or "")).strip()
 
 
+# Normaliza guest_chat_id preservando formato instancia:cliente cuando exista.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_guest_chat_id(guest_chat_id: str) -> str:
     """Normaliza guest_chat_id preservando formato instancia:cliente cuando exista."""
     raw = str(guest_chat_id or "").strip()
@@ -106,6 +122,10 @@ def _normalize_guest_chat_id(guest_chat_id: str) -> str:
     return _clean_chat_id(raw) or raw
 
 
+# Sanea el texto del huésped.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _sanitize_guest_text(text: str) -> str:
     raw = (text or "").strip()
     if not raw:
@@ -124,6 +144,10 @@ def _sanitize_guest_text(text: str) -> str:
     return "\n".join(lines).strip()
 
 
+# Resuelve el idioma del huésped.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `guest_message` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_guest_lang(guest_chat_id: str, guest_message: str = "") -> str:
     base = "es"
     try:
@@ -149,6 +173,10 @@ def _resolve_guest_lang(guest_chat_id: str, guest_message: str = "") -> str:
     return base
 
 
+# Formatea el bloque needs_action en español.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `escalation_text` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_needs_action_es(guest_chat_id: str, escalation_text: str) -> str:
     raw = (escalation_text or "").strip()
     if not raw:
@@ -167,6 +195,10 @@ def _format_needs_action_es(guest_chat_id: str, escalation_text: str) -> str:
     return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
 
+# Formatea el motivo enriquecido con idioma.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `reason`, `guest_message` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_reason_with_lang(guest_chat_id: str, reason: str, guest_message: str = "") -> str:
     base = (reason or "").strip()
     if not base:
@@ -175,6 +207,10 @@ def _format_reason_with_lang(guest_chat_id: str, reason: str, guest_message: str
     return f"{base} (Idioma huésped: {lang})"
 
 
+# Fusiona el texto de escalation.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `previous`, `addition` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _merge_escalation_text(previous: str, addition: str) -> str:
     prev = (previous or "").strip()
     add = (addition or "").strip()
@@ -187,6 +223,10 @@ def _merge_escalation_text(previous: str, addition: str) -> str:
     return f"{prev} {add}".strip()
 
 
+# Sintetiza en una sola consulta lo ya pendiente + la nueva ampliación.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `previous`, `addition` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def _synthesize_escalation_query(previous: str, addition: str) -> str:
     """Sintetiza en una sola consulta lo ya pendiente + la nueva ampliación."""
     prev = (previous or "").strip()
@@ -196,7 +236,10 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
     if not add:
         return prev
 
-    # Dedupe simple por líneas idénticas o contenidas.
+    # Elimina duplicados de el lines.
+    # Se invoca dentro de `_synthesize_escalation_query` para encapsular una parte local de tools internas de escalación, borradores y confirmaciones.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _dedupe_lines(text: str) -> list[str]:
         lines: list[str] = []
         for raw in str(text or "").splitlines():
@@ -259,6 +302,10 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
     return " ".join(combined_lines).strip()
 
 
+# Resuelve el prioridad.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_type` como entrada principal según la firma.
+# Devuelve un `int` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _escalation_priority(escalation_type: str) -> int:
     t = (escalation_type or "").strip().lower()
     if t == "inappropriate":
@@ -272,6 +319,10 @@ def _escalation_priority(escalation_type: str) -> int:
     return 0
 
 
+# Conserva el tipo más crítico entre el pendiente y el nuevo.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `existing_type`, `incoming_type` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pick_escalation_type(existing_type: str, incoming_type: str) -> str:
     """Conserva el tipo más crítico entre el pendiente y el nuevo."""
     a = (existing_type or "").strip()
@@ -283,6 +334,10 @@ def _pick_escalation_type(existing_type: str, incoming_type: str) -> str:
     return a if _escalation_priority(a) >= _escalation_priority(b) else b
 
 
+# ID usado por Chatter/rooms: siempre el teléfono del huésped.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _chat_room_id(guest_chat_id: str) -> str:
     """ID usado por Chatter/rooms: siempre el teléfono del huésped."""
     raw = str(guest_chat_id or "").strip()
@@ -291,6 +346,10 @@ def _chat_room_id(guest_chat_id: str) -> str:
     return _clean_chat_id(raw) or raw
 
 
+# Resuelve el ID de property.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id` como entrada principal según la firma.
+# Devuelve un `Optional[str | int]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     if not _MEMORY_MANAGER or not guest_chat_id:
         return None
@@ -399,6 +458,10 @@ def _resolve_property_id(guest_chat_id: str) -> Optional[str | int]:
     return None
 
 
+# Resuelve para escalation.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
     clean_id = _chat_room_id(guest_chat_id) or guest_chat_id
     rooms = [f"chat:{clean_id}", "channel:whatsapp"]
@@ -408,6 +471,10 @@ def _rooms_for_escalation(guest_chat_id: str) -> list[str]:
     return rooms
 
 
+# Recupera or restore escalation.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id` como entrada principal según la firma.
+# Devuelve un `Optional[Escalation]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _get_or_restore_escalation(escalation_id: str) -> Optional[Escalation]:
     esc = ESCALATIONS_STORE.get(escalation_id)
     if esc:
@@ -465,13 +532,25 @@ class ConfirmarYEnviarInput(BaseModel):
 # 📨 TOOL 1: NOTIFICAR ENCARGADO (Telegram)
 # =============================================================
 
+# Envía una notificación al encargado del hotel por Telegram.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `guest_chat_id`, `guest_message`, `escalation_type`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos, realizar llamadas externas o a modelos.
 def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_type, reason, context) -> str:
     """Envía una notificación al encargado del hotel por Telegram."""
     try:
+        # Resuelve el tokens.
+        # Se invoca dentro de `send_to_encargado` para encapsular una parte local de tools internas de escalación, borradores y confirmaciones.
+        # Recibe `value` como entrada principal según la firma.
+        # Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _text_tokens(value: str) -> set[str]:
             words = re.findall(r"[a-z0-9áéíóúñü]{3,}", str(value or "").lower())
             return set(words)
 
+        # Comprueba si el mensaje nuevo parece un seguimiento de la escalación en curso.
+        # Se invoca dentro de `send_to_encargado` para encapsular una parte local de tools internas de escalación, borradores y confirmaciones.
+        # Recibe `prev_message`, `new_message`, `reason_text`, `context_text` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
         def _looks_like_followup(prev_message: str, new_message: str, reason_text: str, context_text: str) -> bool:
             ctx = f"{reason_text}\n{context_text}".lower()
             if any(token in ctx for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso", "follow-up", "seguimiento")):
@@ -727,6 +806,10 @@ def send_to_encargado(escalation_id, guest_chat_id, guest_message, escalation_ty
 # 🧠 TOOL 2: GENERAR BORRADOR DE RESPUESTA
 # =============================================================
 
+# Genera o reformula un borrador empático y profesional para el huésped.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `manager_response`, `adjustment` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos, realizar llamadas externas o a modelos.
 def generar_borrador(escalation_id: str, manager_response: str, adjustment: Optional[str] = None) -> str:
     """Genera o reformula un borrador empático y profesional para el huésped."""
     esc = _get_or_restore_escalation(escalation_id)
@@ -813,6 +896,10 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
 # 📤 TOOL 3: CONFIRMAR Y ENVIAR RESPUESTA FINAL
 # =============================================================
 
+# Confirma o reformula según el input del encargado y envía si corresponde.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `confirmed`, `adjustments` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos, enviar mensajes o plantillas.
 async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: str = "") -> str:
     """Confirma o reformula según el input del encargado y envía si corresponde."""
     esc = _get_or_restore_escalation(escalation_id)
@@ -955,24 +1042,40 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 # 🧩 REGISTRO DE TOOLS
 # =============================================================
 
+# Tool que notifica al encargado del hotel sobre una nueva escalación por Telegram.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `**kwargs` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede activar tools o agentes.
 @tool("notificar_encargado", args_schema=SendToEncargadoInput, return_direct=False)
 def notificar_encargado_tool(**kwargs) -> str:
     """Tool que notifica al encargado del hotel sobre una nueva escalación por Telegram."""
     return send_to_encargado(**kwargs)
 
 
+# Tool que genera un borrador empático y profesional para el huésped a partir de la respuesta del encargado.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `**kwargs` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede activar tools o agentes.
 @tool("generar_borrador_respuesta", args_schema=GenerarBorradorInput, return_direct=True)
 def generar_borrador_tool(**kwargs) -> str:
     """Tool que genera un borrador empático y profesional para el huésped a partir de la respuesta del encargado."""
     return generar_borrador(**kwargs)
 
 
+# Tool que confirma o ajusta la respuesta y la envía al huésped por WhatsApp.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `**kwargs` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede activar tools o agentes.
 @tool("confirmar_y_enviar_respuesta", args_schema=ConfirmarYEnviarInput, return_direct=True)
 async def confirmar_y_enviar_tool(**kwargs) -> str:
     """Tool que confirma o ajusta la respuesta y la envía al huésped por WhatsApp."""
     return await confirmar_y_enviar(**kwargs)
 
 
+# Devuelve la lista de herramientas disponibles para el agente interno.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
 def create_interno_tools(memory_manager=None):
     """Devuelve la lista de herramientas disponibles para el agente interno."""
     set_memory_manager(memory_manager)

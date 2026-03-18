@@ -29,6 +29,10 @@ class ThinkTool:
     cuando enfrenta situaciones complejas o ambiguas.
     """
     
+    # Args:.
+    # Se usa dentro de `ThinkTool` en el flujo de tool de razonamiento auxiliar del agente.
+    # Recibe `model_name` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede realizar llamadas externas o a modelos.
     def __init__(self, model_name: str = "gpt-4.1-mini"):
         """
         Args:
@@ -54,6 +58,10 @@ Sé conciso, claro y estructurado."""
         
         log.info("✅ ThinkTool inicializado")
     
+    # Realiza reflexión profunda sobre una pregunta compleja.
+    # Se usa dentro de `ThinkTool` en el flujo de tool de razonamiento auxiliar del agente.
+    # Recibe `pregunta` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _think(self, pregunta: str) -> str:
         """
         Realiza reflexión profunda sobre una pregunta compleja.
@@ -83,6 +91,10 @@ Sé conciso, claro y estructurado."""
             log.error(f"❌ Error durante reflexión: {e}")
             return f"❌ Error al procesar el razonamiento: {str(e)}"
     
+    # Convierte esta clase en una herramienta compatible con LangChain.
+    # Se usa dentro de `ThinkTool` en el flujo de tool de razonamiento auxiliar del agente.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
     def as_tool(self) -> StructuredTool:
         """
         Convierte esta clase en una herramienta compatible con LangChain.
@@ -103,6 +115,10 @@ Sé conciso, claro y estructurado."""
         )
 
 
+# Factory function para crear la herramienta Think.
+# Se usa en el flujo de tool de razonamiento auxiliar del agente para preparar datos, validaciones o decisiones previas.
+# Recibe `model_name` como entrada principal según la firma.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_think_tool(model_name: str = "gpt-4.1-mini") -> StructuredTool:
     """
     Factory function para crear la herramienta Think.

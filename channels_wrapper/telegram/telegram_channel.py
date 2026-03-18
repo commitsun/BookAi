@@ -31,9 +31,10 @@ TELEGRAM_REPLY_TRACKER = {}
 class TelegramChannel(BaseChannel):
     """Canal Telegram: encargado ↔ huésped (gestión de escalaciones y confirmaciones)."""
 
-    # ----------------------------------------------------------
-    # 🔹 Implementación requerida por BaseChannel
-    # ----------------------------------------------------------
+    # Extrae los datos clave de un mensaje entrante de Telegram.
+    # Se usa dentro de `TelegramChannel` en el flujo de integración de Telegram como canal operativo.
+    # Recibe `payload` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def extract_message_data(self, payload):
         """
         Extrae los datos clave de un mensaje entrante de Telegram.
@@ -52,9 +53,10 @@ class TelegramChannel(BaseChannel):
             log.error(f"⚠️ Error extrayendo datos de mensaje Telegram: {e}", exc_info=True)
             return None, None, None, None
 
-    # ----------------------------------------------------------
-    # 🔹 Envío de mensajes
-    # ----------------------------------------------------------
+    # Envía mensaje al encargado (modo clásico).
+    # Se usa dentro de `TelegramChannel` en el flujo de integración de Telegram como canal operativo.
+    # Recibe `user_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede realizar llamadas externas o a modelos.
     def send_message(self, user_id: str, text: str):
         """Envía mensaje al encargado (modo clásico)."""
         if not TELEGRAM_BOT_TOKEN or not user_id:
@@ -76,10 +78,15 @@ class TelegramChannel(BaseChannel):
         except Exception as e:
             log.error(f"💥 Error enviando Telegram: {e}", exc_info=True)
 
-    # ----------------------------------------------------------
-    # 🔹 Registro de rutas (webhook)
-    # ----------------------------------------------------------
+    # Registra las rutas de `` sobre la aplicación FastAPI activa.
+    # Se usa dentro de `TelegramChannel` en el flujo de integración de Telegram como canal operativo.
+    # Recibe `app` como dependencias o servicios compartidos inyectados desde otras capas.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede enviar mensajes o plantillas.
     def register_routes(self, app):
+        # Webhook para manejar las respuestas y confirmaciones del encargado.
+        # Se usa como punto de entrada HTTP dentro de integración de Telegram como canal operativo.
+        # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+        # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede enviar mensajes o plantillas.
         @app.post("/telegram/webhook")
         async def telegram_webhook(request: Request):
             """

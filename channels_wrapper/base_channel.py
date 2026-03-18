@@ -14,6 +14,10 @@ log = logging.getLogger("channel")
 class BaseChannel(ABC):
     """Plantilla base común para todos los canales."""
 
+    # Inicializa el estado interno y las dependencias de `BaseChannel`.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `openai_api_key` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede realizar llamadas externas o a modelos.
     def __init__(self, openai_api_key: Optional[str] = None):
         self.client = OpenAI(api_key=openai_api_key or C.OPENAI_API_KEY)
         self.conversations: Dict[str, List[dict]] = {}
@@ -28,26 +32,36 @@ class BaseChannel(ABC):
             log.warning(f"⚠️ No se pudo inicializar MainAgent: {e}")
             self.agent = None
 
-    # ==========================================================
-    # Métodos abstractos (implementados por cada canal)
-    # ==========================================================
+    # Envía el mensaje.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `user_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Sin efectos secundarios relevantes.
     @abstractmethod
     def send_message(self, user_id: str, text: str):
         ...
 
+    # Extrae mensaje data.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `payload` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     @abstractmethod
     def extract_message_data(
         self, payload: dict
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:
         ...
 
+    # Registra las rutas de `` sobre la aplicación FastAPI activa.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `app` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     @abstractmethod
     def register_routes(self, app):
         ...
 
-    # ============================================================
-    # 🧩 MÉTODO REQUERIDO POR BaseChannel
-    # ============================================================
+    # Extrae los datos clave del payload recibido desde Telegram.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `payload` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def extract_message_data(self, payload: dict):
         """
         Extrae los datos clave del payload recibido desde Telegram.
@@ -66,18 +80,24 @@ class BaseChannel(ABC):
             log.error(f"⚠️ Error extrayendo datos del mensaje de Telegram: {e}", exc_info=True)
             return None, None, None, None
 
-    # ==========================================================
-    # Hooks opcionales
-    # ==========================================================
+    # Resuelve el proceso.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `conversation_id`, `msg_type`, `user_msg` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def pre_process(self, conversation_id: str, msg_type: str, user_msg: str):
         pass
 
+    # Resuelve el proceso.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `conversation_id`, `reply` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def post_process(self, conversation_id: str, reply: str):
         pass
 
-    # ==========================================================
-    # Flujo general del canal
-    # ==========================================================
+    # Procesa mensaje asincronía.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `payload` como entrada principal según la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos.
     async def process_message_async(self, payload: dict):
         user_id, msg_id, msg_type, user_msg = self.extract_message_data(payload)
         if not user_id or not msg_id or not user_msg:
@@ -121,9 +141,10 @@ class BaseChannel(ABC):
                 "❌ Lo siento, ha ocurrido un problema al procesar tu mensaje. Intenta de nuevo más tarde."
             )
 
-    # ==========================================================
-    # Gestión de memoria conversacional interna
-    # ==========================================================
+    # Asegura el ensure.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `cid` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _ensure(self, cid: str):
         if cid not in self.conversations:
             self.conversations[cid] = [
@@ -136,6 +157,10 @@ class BaseChannel(ABC):
                 }
             ]
 
+    # Añade el append.
+    # Se usa dentro de `BaseChannel` en el flujo de capa base de canales y procesamiento común de mensajes.
+    # Recibe `cid`, `role`, `content` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _append(self, cid: str, role: str, content: str):
         self._ensure(cid)
         self.conversations[cid].append({"role": role, "content": content})

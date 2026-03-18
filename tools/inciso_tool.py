@@ -32,6 +32,10 @@ class IncisoTool:
     Se usa cuando el agente necesita tiempo para procesar (ej: revisión o consulta interna).
     """
 
+    # Args:.
+    # Se usa dentro de `IncisoTool` en el flujo de tool de mensajes intermedios con cooldown.
+    # Recibe `send_callback` como dependencias o servicios compartidos inyectados desde otras capas, y `cooldown_seconds` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, send_callback=None, cooldown_seconds: int = 15):
         """
         Args:
@@ -50,7 +54,10 @@ class IncisoTool:
 
         log.info("✅ IncisoTool inicializado correctamente")
 
-    # --------------------------------------------------
+    # Decide si se puede enviar un nuevo inciso o se suprime por cooldown o límite.
+    # Se usa dentro de `IncisoTool` en el flujo de tool de mensajes intermedios con cooldown.
+    # Recibe `mensaje` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _can_send(self, mensaje: str) -> bool:
         """Decide si se puede enviar un nuevo inciso o se suprime por cooldown o límite."""
         # Máximo 2 incisos por sesión de agente
@@ -78,7 +85,10 @@ class IncisoTool:
 
         return True
 
-    # --------------------------------------------------
+    # Envía un mensaje intermedio al usuario, manejando correctamente.
+    # Se usa dentro de `IncisoTool` en el flujo de tool de mensajes intermedios con cooldown.
+    # Recibe `mensaje` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _send_inciso(self, mensaje: str) -> str:
         """
         Envía un mensaje intermedio al usuario, manejando correctamente
@@ -123,7 +133,10 @@ class IncisoTool:
             log.error(f"❌ Error al enviar inciso: {e}", exc_info=True)
             return f"❌ Error al enviar mensaje intermedio: {str(e)}"
 
-    # --------------------------------------------------
+    # Convierte esta clase en una herramienta compatible con LangChain.
+    # Se usa dentro de `IncisoTool` en el flujo de tool de mensajes intermedios con cooldown.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
     def as_tool(self) -> StructuredTool:
         """
         Convierte esta clase en una herramienta compatible con LangChain.
@@ -142,6 +155,10 @@ class IncisoTool:
         )
 
 
+# Factory function para crear la herramienta Inciso.
+# Se usa en el flujo de tool de mensajes intermedios con cooldown para preparar datos, validaciones o decisiones previas.
+# Recibe `send_callback` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_inciso_tool(send_callback=None) -> StructuredTool:
     """
     Factory function para crear la herramienta Inciso.

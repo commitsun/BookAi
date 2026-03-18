@@ -6,6 +6,10 @@ from openai import OpenAI
 log = logging.getLogger("media_utils")
 
 
+# Descarga un archivo de audio de WhatsApp (OGG/OPUS) desde Meta Graph API.
+# Se usa en el flujo de descarga y transcripción de media para preparar datos, validaciones o decisiones previas.
+# Recibe `media_id`, `token` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `BytesIO | None` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def download_media_bytes(media_id: str, token: str) -> BytesIO | None:
     """
     Descarga un archivo de audio de WhatsApp (OGG/OPUS) desde Meta Graph API.
@@ -41,6 +45,10 @@ def download_media_bytes(media_id: str, token: str) -> BytesIO | None:
         return None
 
 
+# Descarga y transcribe un audio de WhatsApp usando Whisper (modelo whisper-1).
+# Se usa en el flujo de descarga y transcripción de media para preparar datos, validaciones o decisiones previas.
+# Recibe `media_id`, `token`, `openai_key` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def transcribe_audio(media_id: str, token: str, openai_key: str) -> str:
     """
     Descarga y transcribe un audio de WhatsApp usando Whisper (modelo whisper-1).

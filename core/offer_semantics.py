@@ -13,10 +13,18 @@ from core.config import ModelConfig, ModelTier
 log = logging.getLogger("OfferSemantics")
 
 
+# Normaliza el ID de huésped.
+# Se usa en el flujo de estado semántico de ofertas enviadas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def normalize_guest_id(guest_id: str | None) -> str:
     return str(guest_id or "").replace("+", "").strip()
 
 
+# Extrae JSON object.
+# Se usa en el flujo de estado semántico de ofertas enviadas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `dict[str, Any] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -30,6 +38,10 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
         return None
 
 
+# Resuelve el float.
+# Se usa en el flujo de estado semántico de ofertas enviadas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `value`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -37,6 +49,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# Clasifica el mensaje de oferta estado desde WhatsApp.
+# Se usa en el flujo de estado semántico de ofertas enviadas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `message` como datos de contexto o entrada de la operación.
+# Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def classify_offer_state_from_wa_message(llm: Any, message: str) -> dict[str, Any]:
     text = (message or "").strip()
     if not llm or not text:
@@ -89,6 +105,10 @@ async def classify_offer_state_from_wa_message(llm: Any, message: str) -> dict[s
     }
 
 
+# Resuelve huésped oferta estado desde sent WhatsApp.
+# Se usa en el flujo de estado semántico de ofertas enviadas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `guest_id`, `sent_message`, `source`, `owner_id`, ... como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 async def sync_guest_offer_state_from_sent_wa(
     state: Any,
     *,

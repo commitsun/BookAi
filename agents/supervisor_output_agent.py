@@ -23,6 +23,10 @@ with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
 # 🧠 FUNCIÓN PRINCIPAL DE AUDITORÍA
 # =============================================================
 
+# Evalúa si la respuesta del agente es adecuada, segura y coherente.
+# Se usa en el flujo de supervisor de salida antes de enviar respuestas al huésped para preparar datos, validaciones o decisiones previas.
+# Recibe `input_usuario`, `respuesta_agente` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> str:
     """Evalúa si la respuesta del agente es adecuada, segura y coherente."""
     with ls_context(
@@ -67,10 +71,18 @@ class SupervisorOutputAgent:
     Agente de auditoría de salida con integración de memoria y detección de loops.
     """
 
+    # Inicializa el estado interno y las dependencias de `SupervisorOutputAgent`.
+    # Se usa dentro de `SupervisorOutputAgent` en el flujo de supervisor de salida antes de enviar respuestas al huésped.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
         self._pending_escalation_max_age_min = 20
 
+    # Comprueba si el chat mantiene una escalación pendiente reciente.
+    # Se usa dentro de `SupervisorOutputAgent` en el flujo de supervisor de salida antes de enviar respuestas al huésped.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _has_recent_pending_escalation(self, chat_id: str) -> bool:
         if not chat_id:
             return False
@@ -96,6 +108,10 @@ class SupervisorOutputAgent:
         except Exception:
             return False
 
+    # Resuelve humano contacto already done.
+    # Se usa dentro de `SupervisorOutputAgent` en el flujo de supervisor de salida antes de enviar respuestas al huésped.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _claims_human_contact_already_done(text: str) -> bool:
         normalized = (text or "").strip().lower()
@@ -110,6 +126,10 @@ class SupervisorOutputAgent:
         ]
         return any(re.search(p, normalized, re.IGNORECASE) for p in done_patterns)
 
+    # Evalúa la respuesta y aplica reglas de tolerancia + detección de loops.
+    # Se usa dentro de `SupervisorOutputAgent` en el flujo de supervisor de salida antes de enviar respuestas al huésped.
+    # Recibe `user_input`, `agent_response`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Puede activar tools o agentes.
     async def validate(self, user_input: str, agent_response: str, chat_id: str = None) -> dict:
         """Evalúa la respuesta y aplica reglas de tolerancia + detección de loops."""
         try:

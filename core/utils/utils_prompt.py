@@ -11,6 +11,10 @@ uvicorn_log = logging.getLogger("uvicorn.error")
 # Cache de prompts por filename → (mtime, contenido)
 _PROMPT_CACHE: Dict[str, Tuple[float, str]] = {}
 
+# Carga un prompt desde la carpeta 'prompts' y devuelve el contenido.
+# Se usa en el flujo de carga y saneado de prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `filename` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def load_prompt(filename: str) -> str:
     """
     Carga un prompt desde la carpeta 'prompts' y devuelve el contenido.
@@ -50,6 +54,10 @@ def load_prompt(filename: str) -> str:
 
     return content
 
+# Normaliza cualquier texto a UTF-8 seguro.
+# Se usa en el flujo de carga y saneado de prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def sanitize_text(text: str) -> str:
     """
     Normaliza cualquier texto a UTF-8 seguro.

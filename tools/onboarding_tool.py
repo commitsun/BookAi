@@ -16,6 +16,10 @@ from core.db import upsert_chat_reservation
 log = logging.getLogger("OnboardingTools")
 
 
+# Localiza una tool MCP por coincidencia parcial de nombre.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `tools`, `candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _find_tool(tools: list[Any], candidates: list[str]) -> Optional[Any]:
     """Localiza una tool MCP por coincidencia parcial de nombre."""
     normalized = []
@@ -43,6 +47,10 @@ def _find_tool(tools: list[Any], candidates: list[str]) -> Optional[Any]:
     return None
 
 
+# Resuelve el ID de property.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `fallback` como datos de contexto o entrada de la operación.
+# Devuelve un `int` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_property_id(memory_manager, chat_id: str, fallback: int) -> int:
     if not memory_manager or not chat_id:
         return fallback
@@ -56,6 +64,10 @@ def _resolve_property_id(memory_manager, chat_id: str, fallback: int) -> int:
         return fallback
 
 
+# Intenta parsear JSON de forma tolerante:.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `raw`, `context` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _safe_parse_json(raw: Any, context: str) -> Optional[Any]:
     """
     Intenta parsear JSON de forma tolerante:
@@ -74,11 +86,19 @@ def _safe_parse_json(raw: Any, context: str) -> Optional[Any]:
         return []
 
 
+# Intenta extraer un folio_id desde una respuesta de reserva.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_folio_id(payload: Any) -> Optional[str]:
     """Intenta extraer un folio_id desde una respuesta de reserva."""
     if payload is None:
         return None
 
+    # Resuelve el dígitos.
+    # Se invoca dentro de `_extract_folio_id` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _as_digits(val: Any) -> Optional[str]:
         if isinstance(val, (int, float)) and int(val) == val:
             return str(int(val))
@@ -141,6 +161,10 @@ def _extract_folio_id(payload: Any) -> Optional[str]:
 
     return None
 
+# Extrae reserva locator.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_locator(payload: Any) -> Optional[str]:
     if payload is None:
         return None
@@ -185,6 +209,10 @@ def _extract_reservation_locator(payload: Any) -> Optional[str]:
     return None
 
 
+# Extrae reserva cliente nombre.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_client_name(payload: Any) -> Optional[str]:
     if payload is None:
         return None
@@ -217,6 +245,10 @@ def _extract_reservation_client_name(payload: Any) -> Optional[str]:
     return None
 
 
+# Recupera mcp tools.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `server_name` como entrada principal según la firma.
+# Devuelve un `Tuple[list[Any], Optional[str]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any], Optional[str]]:
     try:
         tools = await get_tools(server_name=server_name)
@@ -226,6 +258,10 @@ async def _get_mcp_tools(server_name: str = "OnboardingAgent") -> Tuple[list[Any
         return [], f"❌ No se pudo acceder al servidor MCP ({server_name})."
 
 
+# Reutiliza la tool 'buscar_token' expuesta por MCP.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `tools`, `instance_url` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Tuple[Optional[str], Optional[str]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 async def _obtener_token(
     tools: list[Any],
     *,
@@ -256,6 +292,10 @@ async def _obtener_token(
         return None, f"Error obteniendo token desde MCP: {exc}"
 
 
+# Construye la tool `room_type` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_room_type_tool(memory_manager=None, chat_id: str = ""):
     class RoomTypeInput(BaseModel):
         property_id: Optional[int] = Field(
@@ -271,6 +311,10 @@ def create_room_type_tool(memory_manager=None, chat_id: str = ""):
             description="Nombre a filtrar (opcional, ej. 'Individual').",
         )
 
+    # Resuelve type lookup.
+    # Se invoca dentro de `create_room_type_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `property_id`, `pms_property_id`, `room_type_name` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _room_type_lookup(
         property_id: Optional[int] = None,
         pms_property_id: int = 38,
@@ -348,6 +392,10 @@ def create_room_type_tool(memory_manager=None, chat_id: str = ""):
     )
 
 
+# Construye la tool `reservation` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede consultar o escribir en base de datos, realizar llamadas externas o a modelos, activar tools o agentes.
 def create_reservation_tool(memory_manager=None, chat_id: str = ""):
     class ReservationInput(BaseModel):
         checkin: str = Field(..., description="Fecha check-in YYYY-MM-DD")
@@ -367,6 +415,10 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         pms_property_id: int = Field(default=38, description="Propiedad PMS (compatibilidad)")
         pricelist_id: int = Field(default=3, description="Lista de precios (siempre 3)")
 
+    # Normaliza el ID de chat.
+    # Se invoca dentro de `create_reservation_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_chat_id(val: Optional[str]) -> Optional[str]:
         if not val:
             return None
@@ -379,6 +431,10 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
         cleaned = re.sub(r"\D+", "", text)
         return cleaned or text.strip() or None
 
+    # Resuelve el ID del tipo de habitación.
+    # Se invoca dentro de `create_reservation_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `tools`, `token`, `pms_property_id`, `room_type_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Tuple[Optional[int], Optional[str]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _resolve_room_type_id(
         tools: list[Any],
         token: str,
@@ -421,6 +477,10 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
 
         return None, f"No se encontro un roomTypeId para '{room_type_name}'."
 
+    # Crea la reserva.
+    # Se invoca dentro de `create_reservation_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `checkin`, `checkout`, `adults`, `children`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos, realizar llamadas externas o a modelos, activar tools o agentes.
     async def _create_reservation(
         checkin: str,
         checkout: str,
@@ -725,7 +785,15 @@ def create_reservation_tool(memory_manager=None, chat_id: str = ""):
     )
 
 
+# Construye la tool `token` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_token_tool():
+    # Recupera el token.
+    # Se invoca dentro de `create_token_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _get_token() -> str:
         tools, err = await _get_mcp_tools()
         if err:
@@ -740,6 +808,10 @@ def create_token_tool():
     )
 
 
+# Construye la tool `consulta_reserva_propia` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
     from tools.superintendente_tool import (
         create_consulta_reserva_general_tool,
@@ -782,9 +854,17 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
         property_id: Optional[int] = Field(default=None, description="Propiedad (property_id)")
         pms_property_id: int = Field(default=38, description="Propiedad PMS (compatibilidad)")
 
+    # Normaliza el teléfono.
+    # Se invoca dentro de `create_consulta_reserva_propia_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_phone(val: Optional[str]) -> str:
         return re.sub(r"\D+", "", val or "")
 
+    # Normaliza el ID de chat.
+    # Se invoca dentro de `create_consulta_reserva_propia_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_chat_id(val: Optional[str]) -> Optional[str]:
         if not val:
             return None
@@ -797,6 +877,10 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
         cleaned = re.sub(r"\D+", "", text)
         return cleaned or text.strip() or None
 
+    # Resuelve reserva propia.
+    # Se invoca dentro de `create_consulta_reserva_propia_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `folio_id`, `reservation_locator`, `listar`, `fecha_inicio`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _consulta_reserva_propia(
         folio_id: Optional[str] = None,
         reservation_locator: Optional[str] = None,
@@ -967,6 +1051,10 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
     )
 
 
+# Construye la tool `multireserva` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools de reservas, room types y consultas de onboarding para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
     class MultiReservaInput(BaseModel):
         chat_id: Optional[str] = Field(default=None, description="Chat ID del huésped.")
@@ -977,6 +1065,10 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
             description="Permiso explícito para ejecutar multireserva.",
         )
 
+    # Normaliza el chat.
+    # Se invoca dentro de `create_multireserva_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_chat(val: Optional[str]) -> Optional[str]:
         if not val:
             return None
@@ -989,6 +1081,10 @@ def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
         cleaned = re.sub(r"\D+", "", text)
         return cleaned or text.strip() or None
 
+    # Resuelve la multireserva.
+    # Se invoca dentro de `create_multireserva_tool` para encapsular una parte local de tools de reservas, room types y consultas de onboarding.
+    # Recibe `chat_id`, `property_id`, `instance_id`, `allow` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _multireserva(
         chat_id: Optional[str] = None,
         property_id: Optional[int] = None,

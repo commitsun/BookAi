@@ -32,6 +32,10 @@ class DispoPreciosTool:
     El subagente tiene acceso al PMS del hotel vía MCP server.
     """
 
+    # Args:.
+    # Se usa dentro de `DispoPreciosTool` en el flujo de tool de disponibilidad y precios.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede activar tools o agentes.
     def __init__(self, memory_manager=None, chat_id: str = ""):
         """
         Args:
@@ -52,7 +56,10 @@ class DispoPreciosTool:
 
         log.info(f"✅ DispoPreciosTool inicializado para chat {chat_id} (modelo={model_name})")
 
-    # ----------------------------------------------------------
+    # Delega la consulta al subagente de disponibilidad y precios.
+    # Se usa dentro de `DispoPreciosTool` en el flujo de tool de disponibilidad y precios.
+    # Recibe `consulta` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     def _procesar_consulta(self, consulta: str) -> str:
         """
         Delega la consulta al subagente de disponibilidad y precios.
@@ -84,7 +91,10 @@ class DispoPreciosTool:
                 "Por favor, reformula tu consulta o contacta directamente con el hotel."
             )
 
-    # ----------------------------------------------------------
+    # Convierte esta clase en una herramienta compatible con LangChain.
+    # Se usa dentro de `DispoPreciosTool` en el flujo de tool de disponibilidad y precios.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
     def as_tool(self) -> StructuredTool:
         """
         Convierte esta clase en una herramienta compatible con LangChain.
@@ -110,7 +120,10 @@ class DispoPreciosTool:
         )
 
 
-# ----------------------------------------------------------
+# Factory function para crear la herramienta de disponibilidad y precios.
+# Se usa en el flujo de tool de disponibilidad y precios para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_dispo_precios_tool(memory_manager=None, chat_id: str = "") -> StructuredTool:
     """
     Factory function para crear la herramienta de disponibilidad y precios.

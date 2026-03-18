@@ -47,6 +47,10 @@ app = FastAPI(title="HotelAI - Sistema de Agentes ReAct v4")
 # CORS
 # =============================================================
 
+# Parsea los orígenes CORS configurados.
+# Se usa en el flujo de arranque FastAPI, CORS, sockets y registro de rutas para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_cors_origins(raw: str) -> list[str]:
     raw = (raw or "").strip()
     if not raw:
@@ -65,11 +69,19 @@ if not cors_origins:
 class ConditionalCORSMiddleware:
     """Evita duplicar headers CORS en rutas que ya los manejan (p.ej. Socket.IO)."""
 
+    # Inicializa el estado interno y las dependencias de `ConditionalCORSMiddleware`.
+    # Se usa dentro de `ConditionalCORSMiddleware` en el flujo de arranque FastAPI, CORS, sockets y registro de rutas.
+    # Recibe `app` como dependencias o servicios compartidos inyectados desde otras capas, y `skip_paths`, `cors_kwargs` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, app, *, skip_paths: list[str], **cors_kwargs):
         self.app = app
         self.cors = CORSMiddleware(app, **cors_kwargs)
         self.skip_paths = tuple(skip_paths)
 
+    # Gestiona la invocación directa del objeto cuando actúa como middleware o callback.
+    # Se usa dentro de `ConditionalCORSMiddleware` en el flujo de arranque FastAPI, CORS, sockets y registro de rutas.
+    # Recibe `scope`, `receive`, `send` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     async def __call__(self, scope, receive, send):
         if scope.get("type") == "http":
             path = scope.get("path") or ""
@@ -122,6 +134,10 @@ register_superintendente_routes(app, state)
 # =============================================================
 
 
+# Atiende el endpoint `GET /health` y coordina la operación pública de este módulo.
+# Se usa como punto de entrada HTTP dentro de arranque FastAPI, CORS, sockets y registro de rutas.
+# No recibe parámetros de negocio adicionales; consume el request y dependencias resueltas por FastAPI.
+# Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
 @app.get("/health")
 async def health_check():
     return {

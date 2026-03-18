@@ -64,6 +64,10 @@ NO_GUEST_REPLY = "__NO_GUEST_REPLY__"
 class MainAgent:
     """Agente principal que orquesta todas las operaciones del sistema."""
 
+    # Inicializa el estado interno y las dependencias de `MainAgent`.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `memory_manager`, `send_message_callback`, `interno_agent` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(
         self,
         memory_manager: Optional[MemoryManager] = None,
@@ -81,6 +85,10 @@ class MainAgent:
 
         log.info("✅ MainAgent inicializado (GPT-4.1 + arquitectura modular + flags persistentes)")
 
+    # Recupera el prompt de default.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_default_prompt(self) -> str:
         return (
             "Eres el agente principal de un sistema de IA para hoteles.\n\n"
@@ -95,6 +103,10 @@ class MainAgent:
             "NO generes respuestas por tu cuenta. SOLO invoca tools."
         )
 
+    # Construye la tools.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `hotel_name` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `List[BaseTool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def build_tools(self, chat_id: str, hotel_name: str) -> List[BaseTool]:
         tools: List[BaseTool] = []
 
@@ -166,6 +178,10 @@ class MainAgent:
         log.info("🔧 Tools cargadas para %s: %s", chat_id, [t.name for t in tools])
         return tools
 
+    # Construye el prompt base que usa el agente ReAct en cada invocación.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `ChatPromptTemplate` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def create_prompt_template(self) -> ChatPromptTemplate:
         return ChatPromptTemplate.from_messages([
             ("system", self.system_prompt),
@@ -174,6 +190,10 @@ class MainAgent:
             MessagesPlaceholder(variable_name="agent_scratchpad"),
         ])
 
+    # Resuelve respuestas del huésped cuando hay una confirmación de escalación pendiente.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _handle_pending_confirmation(self, chat_id: str, user_input: str) -> Optional[str]:
         if not self.memory_manager:
             return None
@@ -213,6 +233,10 @@ class MainAgent:
         text = reply or "Solo para confirmar: ¿quieres que lo consulte? Responde con 'sí' o 'no'."
         return self._localize(chat_id, text)
 
+    # Clasifica si la respuesta del huésped confirma, rechaza o deja ambigua la consulta al encargado.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `Optional[bool]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _interpret_confirmation(self, text: str) -> Optional[bool]:
         t = (text or "").strip().lower()
         if not t:
@@ -244,6 +268,10 @@ class MainAgent:
         except Exception:
             return None
 
+    # Genera y registra la pregunta de confirmación antes de escalar a humano.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input`, `motivo` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _request_escalation_confirmation(self, chat_id: str, user_input: str, motivo: str) -> str:
         self.memory_manager.set_flag(
             chat_id,
@@ -261,6 +289,10 @@ class MainAgent:
         )
         return self._localize(chat_id, text)
 
+    # Decide si el nuevo mensaje debe anexarse a una escalación pendiente.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     def _should_attach_to_pending_escalation(self, chat_id: str, user_input: str) -> bool:
         text = (user_input or "").strip()
         if not text:
@@ -308,11 +340,19 @@ class MainAgent:
         except Exception:
             return False
 
+    # Comprueba si al chat le falta un `property_id` usable.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _needs_property_context(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
         return not self.memory_manager.get_flag(chat_id, "property_id")
 
+    # Comprueba si el chat ya tiene contexto real de property.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _has_real_property_context(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -326,6 +366,10 @@ class MainAgent:
             return False
         return True
 
+    # Recupera property candidates.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_property_candidates(self, chat_id: str) -> list[dict]:
         if not self.memory_manager or not chat_id:
             return []
@@ -334,6 +378,10 @@ class MainAgent:
             return candidates
         return []
 
+    # Resuelve selection candidates.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _remember_selection_candidates(self, chat_id: str, candidates: list[dict]) -> None:
         if not self.memory_manager or not chat_id:
             return
@@ -356,12 +404,20 @@ class MainAgent:
         if compact:
             self.memory_manager.set_flag(chat_id, FLAG_PROPERTY_LAST_PRESENTED_CANDIDATES, compact)
 
+    # Recupera last presented candidates.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_last_presented_candidates(self, chat_id: str) -> list[dict]:
         if not self.memory_manager or not chat_id:
             return []
         candidates = self.memory_manager.get_flag(chat_id, FLAG_PROPERTY_LAST_PRESENTED_CANDIDATES) or []
         return candidates if isinstance(candidates, list) else []
 
+    # Carga candidatos de property desde instancia si no existen en memoria.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _ensure_property_candidates(self, chat_id: str) -> list[dict]:
         """
         Carga candidatos de property desde instancia si no existen en memoria.
@@ -452,6 +508,10 @@ class MainAgent:
         )
         return candidates
 
+    # Normaliza el texto.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_text(self, value: str) -> str:
         text = (value or "").strip().lower()
         if not text:
@@ -461,6 +521,10 @@ class MainAgent:
         text = re.sub(r"[^a-z0-9]+", " ", text).strip()
         return re.sub(r"\s+", " ", text)
 
+    # Valida que una etiqueta de property sea utilizable para desambiguación.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_valid_property_label(self, value: Optional[str]) -> bool:
         text = self._normalize_text(value or "")
         if not text:
@@ -486,6 +550,10 @@ class MainAgent:
             return False
         return True
 
+    # Resuelve el tokenize.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _tokenize(self, value: str) -> list[str]:
         text = self._normalize_text(value)
         if not text:
@@ -493,6 +561,10 @@ class MainAgent:
         stop = {"hotel", "hostal", "aldea", "alda", "el", "la", "los", "las", "de", "del"}
         return [t for t in text.split() if t and t not in stop]
 
+    # Carga snippets embebidos dentro de main_prompt.txt usando marcadores:.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `key` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _load_embedded_prompt(self, key: str) -> str:
         """
         Carga snippets embebidos dentro de main_prompt.txt usando marcadores:
@@ -512,6 +584,10 @@ class MainAgent:
             return ""
         return match.group(1).strip()
 
+    # Genera respuestas con LLM usando prompts configurables.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `intent`, `data` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _generate_reply(self, chat_id: str, intent: str, **data) -> str:
         """
         Genera respuestas con LLM usando prompts configurables.
@@ -538,6 +614,10 @@ class MainAgent:
             return ""
         return out.strip()
 
+    # Construye disambiguation question.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_disambiguation_question(self, chat_id: str, candidates: list[dict]) -> str:
         self._remember_selection_candidates(chat_id, candidates or [])
         listing = self._format_property_candidates(candidates or [])
@@ -553,6 +633,10 @@ class MainAgent:
         base = prompt or "¿En cuál de nuestros hoteles estarías interesado? Puedes darme un nombre aproximado."
         return f"{base}\n{listing}" if listing else base
 
+    # Construye property not in instancia.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_property_not_in_instance(self, chat_id: str) -> str:
         reply = self._generate_reply(chat_id=chat_id, intent="property_not_in_instance")
         if reply:
@@ -562,6 +646,10 @@ class MainAgent:
             return prompt
         return "No encuentro ese hotel en esta instancia. ¿Puedes indicarme otro nombre (aprox)?"
 
+    # Recupera el idioma del huésped.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_guest_lang(self, chat_id: str, user_input: Optional[str] = None) -> str:
         if not self.memory_manager or not chat_id:
             return "es"
@@ -574,12 +662,20 @@ class MainAgent:
             return detected
         return (prev or "es").strip().lower() or "es"
 
+    # Resuelve el localize.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _localize(self, chat_id: str, text: str) -> str:
         lang = self._get_guest_lang(chat_id)
         if not text or lang == "es":
             return text
         return language_manager.ensure_language(text, lang)
 
+    # Recupera intent texto es.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_intent_text_es(self, chat_id: Optional[str], text: str) -> str:
         raw = (text or "").strip()
         if not raw:
@@ -598,6 +694,10 @@ class MainAgent:
         self.memory_manager.set_flag(chat_id, "intent_text_es", {"src": raw, "text": translated, "lang": lang})
         return translated
 
+    # Formatea property candidates.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `candidates` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_property_candidates(self, candidates: list[dict]) -> str:
         if not candidates:
             return ""
@@ -629,6 +729,10 @@ class MainAgent:
             return ""
         return "Los hoteles disponibles son:\n" + "\n".join(lines)
 
+    # Decide si conviene pedir un filtro por ciudad antes de listar properties.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `candidates`, `threshold` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _should_ask_city_filter(self, chat_id: str, candidates: list[dict], threshold: int = 10) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -640,6 +744,10 @@ class MainAgent:
             return False
         return True
 
+    # Detecta si el texto del huésped no concreta bien la ubicación.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `text`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_uncertain_location(self, text: str, chat_id: Optional[str] = None) -> bool:
         t = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not t:
@@ -659,6 +767,10 @@ class MainAgent:
                 return True
         return False
 
+    # Resuelve candidates por city.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `candidates`, `city_text`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _filter_candidates_by_city(self, candidates: list[dict], city_text: str, chat_id: Optional[str] = None) -> list[dict]:
         target_raw = self._get_intent_text_es(chat_id, city_text) or (city_text or "")
         target_raw = target_raw.strip()
@@ -684,6 +796,10 @@ class MainAgent:
                 filtered.append(cand)
         return filtered
 
+    # Resuelve el texto de candidates por.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `candidates`, `text`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _filter_candidates_by_text(self, candidates: list[dict], text: str, chat_id: Optional[str] = None) -> list[dict]:
         target = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not target:
@@ -703,6 +819,10 @@ class MainAgent:
                 filtered.append(cand)
         return filtered
 
+    # Resuelve ask city filtro.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `candidates`, `original_message` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _maybe_ask_city_filter(self, chat_id: str, candidates: list[dict], original_message: str) -> Optional[str]:
         if not self._should_ask_city_filter(chat_id, candidates):
             return None
@@ -714,6 +834,10 @@ class MainAgent:
         cities = self._extract_unique_cities(candidates or [])
         return self._build_ask_city_reply(chat_id, cities)
 
+    # Devuelve candidatos para listar (ciudades/hoteles) con fallback de memoria:.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_candidates_for_listing(self, chat_id: str) -> list[dict]:
         """
         Devuelve candidatos para listar (ciudades/hoteles) con fallback de memoria:
@@ -728,6 +852,10 @@ class MainAgent:
         candidates = self._get_last_presented_candidates(chat_id)
         return candidates if isinstance(candidates, list) else []
 
+    # Clasifica property intent single.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _classify_property_intent_single(self, chat_id: str, text: str) -> str:
         raw = (text or "").strip()
         if not raw or not self.memory_manager:
@@ -752,6 +880,10 @@ class MainAgent:
             out = "other"
         return out
 
+    # Clasifica intención relacionada con properties.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _classify_property_intent(self, chat_id: str, text: str) -> str:
         """
         Clasifica intención relacionada con properties.
@@ -782,6 +914,10 @@ class MainAgent:
         self.memory_manager.set_flag(chat_id, "property_intent_cache", {"src": raw, "intent": out})
         return out
 
+    # Extrae unique cities.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `candidates` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_unique_cities(self, candidates: list[dict]) -> list[str]:
         seen = set()
         cities = []
@@ -796,6 +932,10 @@ class MainAgent:
             cities.append(city)
         return cities
 
+    # Construye city list respuesta.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `cities`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_city_list_reply(self, cities: list[str], chat_id: str) -> str:
         cities_sorted = sorted(cities, key=lambda c: self._normalize_text(c)) if cities else []
         body = ", ".join(cities_sorted[:12]) if cities_sorted else ""
@@ -808,6 +948,10 @@ class MainAgent:
             return self._localize(chat_id, "¿En qué ciudad te gustaría alojarte? Así podré ayudarte mejor.")
         return self._localize(chat_id, f"Tenemos hoteles en estas ciudades: {body}. ¿Te interesa alguna en concreto?")
 
+    # Construye ask city respuesta.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `cities` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_ask_city_reply(self, chat_id: str, cities: list[str]) -> str:
         cities_sorted = sorted(cities, key=lambda c: self._normalize_text(c)) if cities else []
         body = ", ".join(cities_sorted[:12]) if cities_sorted else ""
@@ -820,9 +964,17 @@ class MainAgent:
             return self._localize(chat_id, f"¿En qué ciudad te gustaría alojarte? Tenemos hoteles en: {body}.")
         return self._localize(chat_id, "¿En qué ciudad te gustaría alojarte?")
 
+    # Detecta si la intención del huésped es pedir direcciones o ubicación exacta.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_address_intent(self, chat_id: str, text: str) -> bool:
         return self._classify_property_intent(chat_id, text) == "list_property_addresses"
 
+    # Construye properties con addresses respuesta.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_properties_with_addresses_reply(self, chat_id: str, candidates: list[dict]) -> str:
         self._remember_selection_candidates(chat_id, candidates or [])
         listing = self._format_property_candidates(candidates or [])
@@ -840,6 +992,10 @@ class MainAgent:
             return reply
         return self._localize(chat_id, listing)
 
+    # Limpia property selection pendiente flags.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _clear_property_selection_pending_flags(self, chat_id: str) -> None:
         if not self.memory_manager or not chat_id:
             return
@@ -853,6 +1009,10 @@ class MainAgent:
         ):
             self.memory_manager.clear_flag(chat_id, key)
 
+    # Recupera actual property candidate.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_current_property_candidate(self, chat_id: str) -> Optional[dict]:
         if not self.memory_manager or not chat_id:
             return None
@@ -893,6 +1053,10 @@ class MainAgent:
                 return cand
         return None
 
+    # Construye actual property address respuesta.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_current_property_address_reply(self, chat_id: str) -> str:
         if not self._has_real_property_context(chat_id):
             return ""
@@ -901,6 +1065,10 @@ class MainAgent:
             return ""
         return self._build_properties_with_addresses_reply(chat_id, [current])
 
+    # Selecciona candidato de forma semántica usando LLM (sin reglas por keywords).
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input`, `candidates` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[dict]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _select_candidate_with_llm(self, chat_id: str, user_input: str, candidates: list[dict]) -> Optional[dict]:
         """
         Selecciona candidato de forma semántica usando LLM (sin reglas por keywords).
@@ -951,6 +1119,10 @@ class MainAgent:
             return None
         return candidates[choice - 1]
 
+    # Hidrata contexto desde activo reserva.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _hydrate_context_from_active_reservation(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1007,6 +1179,10 @@ class MainAgent:
                     self.memory_manager.set_flag(chat_id, "property_display_name", display)
         return True
 
+    # Comprueba si el chat tiene una reserva activa vinculada.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede consultar o escribir en base de datos.
     def _has_active_reservation(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1023,6 +1199,10 @@ class MainAgent:
         except Exception:
             return False
 
+    # Resuelve property desde candidates.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _resolve_property_from_candidates(self, chat_id: str, user_input: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1128,6 +1308,10 @@ class MainAgent:
             or self.memory_manager.get_flag(chat_id, "property_name")
         )
 
+    # Resuelve el mensaje de property desde.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _resolve_property_from_message(self, chat_id: str, user_input: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1177,6 +1361,10 @@ class MainAgent:
         )
         return resolved
 
+    # Resuelve property etiquetas.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _sync_property_labels(self, chat_id: str) -> None:
         if not self.memory_manager or not chat_id:
             return
@@ -1200,6 +1388,10 @@ class MainAgent:
             self.memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
             self.memory_manager.set_flag(chat_id, "wa_context_instance_id", instance_id)
 
+    # Solicita el contexto de property.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `original_message` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _request_property_context(self, chat_id: str, original_message: str) -> str:
         self.memory_manager.set_flag(
             chat_id,
@@ -1222,6 +1414,10 @@ class MainAgent:
             return self._localize(chat_id, prompt)
         return self._localize(chat_id, "¿En qué hotel o propiedad te gustaría alojarte?")
 
+    # Limpia el contexto de property.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _clear_property_context(self, chat_id: str) -> None:
         if not self.memory_manager:
             return
@@ -1239,6 +1435,10 @@ class MainAgent:
         ):
             self.memory_manager.clear_flag(chat_id, key)
 
+    # Detecta si el mensaje apunta a iniciar una nueva reserva.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `text`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_new_reservation_intent(self, text: str, chat_id: Optional[str] = None) -> bool:
         t = self._normalize_text(self._get_intent_text_es(chat_id, text))
         if not t:
@@ -1256,6 +1456,10 @@ class MainAgent:
         # "otra" + "reserva" en el mismo mensaje
         return "reserva" in t and ("otra" in t or "nuevo" in t or "nueva" in t)
 
+    # Decide si debe forzarse una respuesta desde la base de conocimiento cuando no hay tools operativas.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `response` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `user_input`, `intermediate_steps` como datos de contexto o entrada de la operación.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     def _should_force_kb_when_no_tools(
         self,
         chat_id: str,
@@ -1311,6 +1515,10 @@ class MainAgent:
         except Exception:
             return False
 
+    # Decide si onboarding debe exigir disponibilidad antes de crear la reserva.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input`, `intermediate_steps` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     def _should_require_availability_before_onboarding(
         self,
         chat_id: str,
@@ -1383,6 +1591,10 @@ class MainAgent:
         except Exception:
             return True
 
+    # Decide si conviene conservar la intención de property ya inferida.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `user_input`, `intent` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     def _should_keep_property_intent(self, chat_id: str, user_input: str, intent: str) -> bool:
         """
         Decide semánticamente si una intención de properties realmente aplica
@@ -1425,6 +1637,10 @@ class MainAgent:
         except Exception:
             return True
 
+    # Solicita property switch confirmation.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `original_message` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _request_property_switch_confirmation(self, chat_id: str, original_message: str) -> str:
         self.memory_manager.set_flag(
             chat_id,
@@ -1476,6 +1692,10 @@ class MainAgent:
             "Si es otro, dime el nombre (aprox) y continúo."
         )
 
+    # Solicita property switch confirmation con hint.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id`, `original_message`, `property_id_hint`, `property_label_hint` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _request_property_switch_confirmation_with_hint(
         self,
         chat_id: str,
@@ -1517,6 +1737,10 @@ class MainAgent:
             "Si es otro, dime el nombre (aprox) y continúo."
         )
 
+    # Comprueba si la instancia activa tiene varias properties asociadas.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     def _is_multi_property_instance(self, chat_id: str) -> bool:
         if not self.memory_manager or not chat_id:
             return False
@@ -1604,6 +1828,10 @@ class MainAgent:
                     log.warning("No se pudo fijar property unica desde candidatos: %s", exc)
         return False
 
+    # Normaliza switch question para single property.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `response` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_switch_question_for_single_property(self, chat_id: str, response: str) -> str:
         text = (response or "").strip()
         if not text:
@@ -1626,6 +1854,10 @@ class MainAgent:
         )
         return self._localize(chat_id, fixed)
 
+    # Recupera el historial de property hint desde.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `tuple[Optional[int], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_property_hint_from_history(self, chat_id: str) -> tuple[Optional[int], Optional[str]]:
         if not self.memory_manager:
             return None, None
@@ -1643,6 +1875,10 @@ class MainAgent:
             prop_label = None
         return prop_id, prop_label
 
+    # Deriva escalation to interno.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `user_input`, `chat_id`, `motivo`, `escalation_type`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede realizar llamadas externas o a modelos.
     async def _delegate_escalation_to_interno(
             self,
             *,
@@ -1689,6 +1925,10 @@ class MainAgent:
             except Exception as exc:
                 log.error(f"❌ Error delegando escalación a InternoAgent: {exc}", exc_info=True)
 
+    # Orquesta la ejecución principal de `MainAgent` para la consulta o evento actual.
+    # Se usa dentro de `MainAgent` en el flujo de orquestación principal del huésped, property context y subagentes.
+    # Recibe `user_input`, `chat_id`, `hotel_name`, `chat_history` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede realizar llamadas externas o a modelos.
     async def ainvoke(
         self,
         user_input: str,
@@ -2629,6 +2869,10 @@ class MainAgent:
                 return fallback_msg
 
 
+# Crea main agent.
+# Se usa en el flujo de orquestación principal del huésped, property context y subagentes para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager`, `send_callback`, `interno_agent` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `MainAgent` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def create_main_agent(
     memory_manager: Optional[MemoryManager] = None,
     send_callback: Optional[Callable] = None,

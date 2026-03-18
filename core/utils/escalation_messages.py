@@ -32,11 +32,19 @@ class EscalationMessages:
         "Un segundo que lo reviso...",
     ]
 
+    # Retorna un mensaje aleatorio de escalación.
+    # Se usa dentro de `EscalationMessages` en el flujo de mensajes predefinidos para escalaciones.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def get_random() -> str:
         """Retorna un mensaje aleatorio de escalación"""
         return random.choice(EscalationMessages.MESSAGES)
 
+    # Retorna mensaje según el contexto.
+    # Se usa dentro de `EscalationMessages` en el flujo de mensajes predefinidos para escalaciones.
+    # Recibe `context` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def get_by_context(context: str = "general") -> str:
         """

@@ -19,6 +19,10 @@ from core.language_manager import language_manager
 log = logging.getLogger("WhatsAppWebhook")
 
 
+# Resuelve los aliases de sala para un chat.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `values` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _chat_room_aliases(*values: str) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
@@ -46,6 +50,10 @@ def _chat_room_aliases(*values: str) -> list[str]:
     return aliases
 
 
+# Construye la ventana activa de WhatsApp.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `created_at` como entrada principal según la firma.
+# Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_active_whatsapp_window(created_at: str | None = None) -> dict:
     base_dt = None
     if created_at:
@@ -65,6 +73,10 @@ def _build_active_whatsapp_window(created_at: str | None = None) -> dict:
     }
 
 
+# Envía el status 'read' para reflejar doble check azul en el cliente.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `message_id`, `phone_id`, `token` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede realizar llamadas externas o a modelos.
 def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | None = None):
     """Envía el status 'read' para reflejar doble check azul en el cliente."""
     phone_id = phone_id or os.getenv("WHATSAPP_PHONE_ID")
@@ -97,6 +109,10 @@ def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | Non
         log.debug("No se pudo enviar read receipt: %s", exc)
 
 
+# Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_id`, `sender` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str | int | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | None:
     """Intenta recuperar property_id desde historial/reservas cuando llega nulo en webhook."""
     try:
@@ -181,9 +197,17 @@ def _resolve_property_id_fallback(memory_id: str, sender: str) -> str | int | No
     return None
 
 
+# Registra los endpoints de webhook de WhatsApp en la app FastAPI.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `app`, `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede emitir eventos socket, enviar mensajes o plantillas.
 def register_whatsapp_routes(app, state):
     """Registra los endpoints de webhook de WhatsApp en la app FastAPI."""
 
+    # Atiende el endpoint `GET /webhook` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de webhook WhatsApp del flujo principal multipropiedad.
+    # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @app.get("/webhook")
     async def verify_webhook(request: Request):
         verify_token = os.getenv("WHATSAPP_VERIFY_TOKEN", "midemo")
@@ -192,6 +216,10 @@ def register_whatsapp_routes(app, state):
             return PlainTextResponse(params.get("hub.challenge"))
         return JSONResponse({"error": "Invalid verification token"}, status_code=403)
 
+    # Webhook WhatsApp (Meta) + Buffer inteligente + Transcripción de audio (Whisper).
+    # Se usa como punto de entrada HTTP dentro de webhook WhatsApp del flujo principal multipropiedad.
+    # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede emitir eventos socket, enviar mensajes o plantillas.
     @app.post("/webhook")
     async def whatsapp_webhook(request: Request):
         """Webhook WhatsApp (Meta) + Buffer inteligente + Transcripción de audio (Whisper)."""
@@ -732,6 +760,10 @@ def register_whatsapp_routes(app, state):
                     rooms=rooms,
                 )
 
+            # Procesa el buffered.
+            # Se invoca dentro de `whatsapp_webhook` para encapsular una parte local de webhook WhatsApp del flujo principal multipropiedad.
+            # Recibe `cid`, `combined_text`, `version` como entradas relevantes junto con el contexto inyectado en la firma.
+            # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede enviar mensajes o plantillas.
             async def _process_buffered(cid: str, combined_text: str, version: int):
                 log.info(
                     "🧠 Procesando lote buffered v%s → %s\n🧩 Mensajes combinados:\n%s",
@@ -753,6 +785,10 @@ def register_whatsapp_routes(app, state):
                     log.info("🔇 Escalación silenciosa %s", cid)
                     return
 
+                # Envía to channel.
+                # Se invoca dentro de `_process_buffered` para encapsular una parte local de webhook WhatsApp del flujo principal multipropiedad.
+                # Recibe `uid`, `txt` como entradas relevantes junto con el contexto inyectado en la firma.
+                # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede enviar mensajes o plantillas.
                 async def send_to_channel(uid: str, txt: str):
                     await state.channel_manager.send_message(
                         uid,

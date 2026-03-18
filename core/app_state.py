@@ -25,6 +25,10 @@ TRACK_FILE = "/tmp/escalation_tracking.pkl"
 class AppState:
     """Contenedor liviano del estado global y dependencias compartidas."""
 
+    # Inicializa el estado interno y las dependencias de `AppState`.
+    # Se usa dentro de `AppState` en el flujo de estado compartido de aplicación y persistencia de tracking.
+    # Recibe `idle_seconds` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede consultar o escribir en base de datos.
     def __init__(self, idle_seconds: float = 15.0):
         self.log = logging.getLogger("AppState")
 
@@ -77,9 +81,10 @@ class AppState:
         self._tracking_mtime: Optional[float] = None
         self.load_tracking()
 
-    # ---------------------------------------------------------
-    # Persistencia mínima para restaurar tracking tras reinicios
-    # ---------------------------------------------------------
+    # Persiste el tracking.
+    # Se usa dentro de `AppState` en el flujo de estado compartido de aplicación y persistencia de tracking.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     def save_tracking(self):
         try:
             with open(TRACK_FILE, "wb") as f:
@@ -91,6 +96,10 @@ class AppState:
         except Exception as exc:
             self.log.warning("No se pudo guardar tracking: %s", exc)
 
+    # Carga el tracking.
+    # Se usa dentro de `AppState` en el flujo de estado compartido de aplicación y persistencia de tracking.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def load_tracking(self):
         if not os.path.exists(TRACK_FILE):
             return

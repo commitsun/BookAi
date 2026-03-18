@@ -5,12 +5,20 @@ from __future__ import annotations
 from typing import Any, Optional
 
 
+# Resuelve el stringify.
+# Se usa en el flujo de bloques de contexto dinámico para prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _stringify(value: Any) -> str:
     if value is None or value == "":
         return "N/A"
     return str(value)
 
 
+# Return formatted dynamic context block or empty string when unused.
+# Se usa en el flujo de bloques de contexto dinámico para prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_url`, `property_id`, `property_name`, `property_display_name`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def build_dynamic_context_block(
     *,
     instance_url: Optional[str] = None,
@@ -50,6 +58,10 @@ def build_dynamic_context_block(
     )
 
 
+# Collect dynamic context from MemoryManager flags.
+# Se usa en el flujo de bloques de contexto dinámico para prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
     """Collect dynamic context from MemoryManager flags."""
     if not memory_manager or not chat_id:

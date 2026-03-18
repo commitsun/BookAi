@@ -89,6 +89,10 @@ class Recipient(BaseModel):
     country: Optional[str] = Field(default=None, description="Código de país ISO (opcional)")
     display_name: Optional[str] = Field(default=None, description="Nombre para mostrar del huésped")
 
+    # Limpia el teléfono.
+    # Se usa dentro de `Recipient` en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo.
+    # Recibe `data` como entrada principal según la firma.
+    # Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @model_validator(mode="before")
     def _strip_phone(cls, data: Dict[str, Any]) -> Dict[str, Any]:
         phone = data.get("phone")
@@ -127,9 +131,10 @@ class SendTemplateRequest(BaseModel):
     )
 
 
-# ---------------------------------------------------------------------------
-# Utilidades
-# ---------------------------------------------------------------------------
+# Parsea el mapa token->instancia.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_token_instance_map() -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
@@ -171,6 +176,10 @@ def _parse_token_instance_map() -> Dict[str, str]:
     return parsed
 
 
+# Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `auth_header` como entrada principal según la firma.
+# Devuelve un `Dict[str, Optional[str]]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
     """Verifica Bearer Token y, si aplica, resuelve instance_id desde mapa token->instancia."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
@@ -193,12 +202,20 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
     return {"token": token, "instance_id": None}
 
 
+# Solo dígitos, para Meta Cloud API.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `phone` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_phone(phone: str) -> str:
     """Solo dígitos, para Meta Cloud API."""
     digits = re.sub(r"\D", "", phone or "")
     return digits
 
 
+# Valida si el teléfono del destinatario parece apto para WhatsApp.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `phone`, `country` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_plausible_recipient_phone(phone: str, country: Optional[str] = None) -> bool:
     """
     Validación global de teléfono:
@@ -236,6 +253,10 @@ def _is_plausible_recipient_phone(phone: str, country: Optional[str] = None) -> 
     return True
 
 
+# Extrae reserva fields.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     folio_keys = (
         "folio_id",
@@ -250,6 +271,10 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     checkin_keys = ("checkin", "check_in", "fecha_entrada", "entrada", "arrival", "checkin_date")
     checkout_keys = ("checkout", "check_out", "fecha_salida", "salida", "departure", "checkout_date")
 
+    # Selecciona el pick.
+    # Se invoca dentro de `_extract_reservation_fields` para encapsular una parte local de API de recepción y envío de plantillas desde Roomdoo/Odoo.
+    # Recibe `keys` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _pick(keys):
         for key in keys:
             if key in params and params.get(key) not in (None, ""):
@@ -259,6 +284,10 @@ def _extract_reservation_fields(params: Dict[str, Any]) -> tuple[Optional[str], 
     return _pick(folio_keys), _pick(checkin_keys), _pick(checkout_keys)
 
 
+# Extrae reserva locator.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -269,6 +298,10 @@ def _extract_reservation_locator(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae reserva cliente nombre.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservation_client_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -291,6 +324,10 @@ def _extract_reservation_client_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae property nombre.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     if not params:
         return None
@@ -301,6 +338,10 @@ def _extract_property_name(params: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae dates desde reserva.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[str], Optional[str]]:
     if not isinstance(payload, dict):
         return None, None
@@ -318,6 +359,10 @@ def _extract_dates_from_reservation(payload: Dict[str, Any]) -> tuple[Optional[s
     return None, None
 
 
+# Extrae locator desde reserva.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -328,6 +373,10 @@ def _extract_locator_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Extrae cliente nombre desde reserva.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_client_name_from_reservation(payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -349,6 +398,10 @@ def _extract_client_name_from_reservation(payload: Dict[str, Any]) -> Optional[s
     return None
 
 
+# Extrae el texto de desde.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
     if not text:
         return None, None, None
@@ -368,6 +421,10 @@ def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optiona
     return folio_id, checkin, checkout
 
 
+# Resuelve instancia número.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
     if not isinstance(instance_payload, dict):
         return None
@@ -379,6 +436,10 @@ def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Construye contexto ID desde instancia.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `instance_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[str] = None) -> Optional[str]:
     memory_manager = getattr(state, "memory_manager", None)
     clean = _normalize_phone(chat_id) or str(chat_id).strip()
@@ -410,6 +471,10 @@ def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[s
     return context_id
 
 
+# Resuelve context_id (instancia:telefono) desde flags/memoria.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `instance_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_whatsapp_context_id(
     state,
     chat_id: str,
@@ -464,6 +529,10 @@ def _resolve_whatsapp_context_id(
     return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
 
 
+# Valida el ID de instancia.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def _validate_instance_id(instance_id: Optional[str]) -> str:
     normalized = str(instance_id or "").strip()
     if not normalized:
@@ -474,6 +543,10 @@ def _validate_instance_id(instance_id: Optional[str]) -> str:
     return normalized
 
 
+# Resuelve los aliases de sala para un chat.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `context_id` como datos de contexto o entrada de la operación.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _chat_room_aliases(state, chat_id: str, context_id: Optional[str] = None) -> list[str]:
     aliases: list[str] = []
     seen: set[str] = set()
@@ -507,6 +580,10 @@ def _chat_room_aliases(state, chat_id: str, context_id: Optional[str] = None) ->
     return aliases
 
 
+# Resuelve el salas.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `property_id`, `channel`, `context_id` como datos de contexto o entrada de la operación.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _rooms(state, chat_id: str, property_id: Optional[str | int], channel: str, context_id: Optional[str] = None) -> list[str]:
     aliases = _chat_room_aliases(state, chat_id, context_id=context_id) or [chat_id]
     rooms = [f"chat:{alias}" for alias in aliases]
@@ -517,6 +594,10 @@ def _rooms(state, chat_id: str, property_id: Optional[str | int], channel: str, 
     return rooms
 
 
+# Resuelve chat visibilidad.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `channel`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _restore_chat_visibility(
     chat_id: str,
     *,
@@ -555,13 +636,18 @@ def _restore_chat_visibility(
         return False
 
 
-# ---------------------------------------------------------------------------
-# Registro de rutas
-# ---------------------------------------------------------------------------
+# Registra las rutas de `template` sobre la aplicación FastAPI activa.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo para preparar datos, validaciones o decisiones previas.
+# Recibe `app`, `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `None` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos, emitir eventos socket, enviar mensajes o plantillas.
 def register_template_routes(app, state) -> None:
     router = APIRouter(prefix="/api/v1/whatsapp", tags=["whatsapp-templates"])
     registry: TemplateRegistry = getattr(state, "template_registry", None)
 
+    # Resuelve el emisión.
+    # Se invoca dentro de `register_template_routes` para encapsular una parte local de API de recepción y envío de plantillas desde Roomdoo/Odoo.
+    # Recibe `event`, `payload` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede emitir eventos socket.
     async def _emit(event: str, payload: dict) -> None:
         socket_mgr = getattr(state, "socket_manager", None)
         if not socket_mgr or not getattr(socket_mgr, "enabled", False):
@@ -571,6 +657,10 @@ def register_template_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
+    # Atiende el endpoint `POST /send-template` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API de recepción y envío de plantillas desde Roomdoo/Odoo.
+    # Recibe `payload`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, emitir eventos socket, enviar mensajes o plantillas.
     @router.post("/send-template")
     async def send_template(
         payload: SendTemplateRequest,

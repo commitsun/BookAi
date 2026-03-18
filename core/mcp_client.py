@@ -24,6 +24,10 @@ mcp_connections = {
     # InternoAgent NO usa MCP — es local (Telegram + Supabase)
 }
 
+# Construye el cliente.
+# Se usa en el flujo de cliente MCP y filtrado de tools remotas para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `MultiServerMCPClient` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_client() -> MultiServerMCPClient:
     return MultiServerMCPClient(mcp_connections)
 
@@ -31,9 +35,10 @@ def _build_client() -> MultiServerMCPClient:
 # Inicializar el cliente multi-servidor
 mcp_client = _build_client()
 
-# =====================================================
-# 🧩 FUNCIONES AUXILIARES
-# =====================================================
+# Wrapper resiliente para obtener tools desde MCP.
+# Se usa en el flujo de cliente MCP y filtrado de tools remotas para preparar datos, validaciones o decisiones previas.
+# Recibe `server_name`, `retries`, `retry_delay` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede realizar llamadas externas o a modelos.
 async def get_tools(server_name: str, retries: int = 1, retry_delay: float = 0.4):
     """
     Wrapper resiliente para obtener tools desde MCP.
@@ -59,6 +64,10 @@ async def get_tools(server_name: str, retries: int = 1, retry_delay: float = 0.4
     return []
 
 
+# Devuelve las tools relevantes para un servidor MCP concreto.
+# Se usa en el flujo de cliente MCP y filtrado de tools remotas para preparar datos, validaciones o decisiones previas.
+# Recibe `server_name` como entrada principal según la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede realizar llamadas externas o a modelos.
 async def get_filtered_tools(server_name: str):
     """
     Devuelve las tools relevantes para un servidor MCP concreto.
@@ -101,9 +110,10 @@ async def get_filtered_tools(server_name: str):
         return []
 
 
-# =====================================================
-# 🎧 EVENT LISTENER
-# =====================================================
+# Escucha eventos del MCP Server y los reenvía al manejador proporcionado.
+# Se usa en el flujo de cliente MCP y filtrado de tools remotas para preparar datos, validaciones o decisiones previas.
+# Recibe `client`, `handle_event` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 async def listen_events(client: MultiServerMCPClient, handle_event):
     """
     Escucha eventos del MCP Server y los reenvía al manejador proporcionado.

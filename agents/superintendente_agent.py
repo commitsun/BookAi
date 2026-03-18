@@ -51,6 +51,10 @@ class SuperintendenteAgent:
     Comunicación exclusiva con encargado vía Telegram
     """
 
+    # Inicializa el estado interno y las dependencias de `SuperintendenteAgent`.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `memory_manager`, `supabase_client`, `channel_manager`, `template_registry` como dependencias o servicios compartidos inyectados desde otras capas, y `model_tier` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(
         self,
         memory_manager: Any,
@@ -69,6 +73,10 @@ class SuperintendenteAgent:
 
         log.info("SuperintendenteAgent inicializado (modelo: %s)", self.llm.model_name)
 
+    # Crea un cliente S3 tolerante a perfiles ausentes.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _get_s3_client(self):
         """
         Crea un cliente S3 tolerante a perfiles ausentes.
@@ -96,6 +104,10 @@ class SuperintendenteAgent:
             config=BotoConfig(retries={"max_attempts": 3, "mode": "standard"}),
         )
 
+    # Invocar agente superintendente (sesión con encargado).
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `user_input`, `encargado_id`, `hotel_name`, `context_window`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def ainvoke(
         self,
         user_input: str,
@@ -297,6 +309,10 @@ class SuperintendenteAgent:
             log.error("Error en SuperintendenteAgent: %s", exc, exc_info=True)
             raise
 
+    # Comprueba si el texto es un follow-up corto que depende del contexto previo.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_followup_candidate(self, text: str) -> bool:
         clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
         if not clean:
@@ -318,6 +334,10 @@ class SuperintendenteAgent:
         }
         return clean in explicit
 
+    # Reescribe seguimiento con contexto.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `user_input`, `chat_history` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _rewrite_followup_with_context(self, user_input: str, chat_history: List[Any]) -> str:
         raw = (user_input or "").strip()
         if not raw or not self.llm:
@@ -364,6 +384,10 @@ class SuperintendenteAgent:
         except Exception:
             return raw
 
+    # Intenta construir un borrador directo de WhatsApp a partir de una orden explícita del encargado.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `user_input`, `encargado_id`, `session_id`, `clients_context` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _try_direct_whatsapp_draft(
         self,
         user_input: str,
@@ -478,6 +502,10 @@ class SuperintendenteAgent:
 
         return f"[WA_DRAFT]|{guest_id}|{message}"
 
+    # Normaliza nombres de persona para facilitar matching y resolución de huéspedes.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_person_name(self, value: str) -> str:
         raw = str(value or "").strip().lower()
         if not raw:
@@ -488,6 +516,10 @@ class SuperintendenteAgent:
         cleaned = re.sub(r"[^a-z0-9]+", " ", deaccented)
         return re.sub(r"\s+", " ", cleaned).strip()
 
+    # Resuelve guest_id usando el bloque CLIENTES_ACTIVOS inyectado por API.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `guest_label`, `clients_context` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `tuple[Optional[str], list[dict]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_guest_from_clients_context(
         self,
         guest_label: str,
@@ -521,6 +553,10 @@ class SuperintendenteAgent:
         if header_idx is None:
             return None, []
 
+        # Localiza el índice de una columna dentro del bloque tabular de clientes.
+        # Se invoca dentro de `_resolve_guest_from_clients_context` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # Recibe `name` como entrada principal según la firma.
+        # Devuelve un `Optional[int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _col(name: str) -> Optional[int]:
             try:
                 return header_cols.index(name)
@@ -567,7 +603,10 @@ class SuperintendenteAgent:
         if not candidates:
             return None, []
 
-        # Dedup por teléfono manteniendo mejor score y más reciente.
+        # Resuelve un timestamp tolerando formatos heterogéneos.
+        # Se invoca dentro de `_resolve_guest_from_clients_context` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # Recibe `value` como entrada principal según la firma.
+        # Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _ts(value: Any) -> float:
             try:
                 return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
@@ -596,6 +635,10 @@ class SuperintendenteAgent:
             return next(iter(phones)), unique
         return None, unique
 
+    # Decide si el mensaje necesita reescritura para quedar bien en WhatsApp.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `message` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _needs_wa_polish(self, message: str) -> bool:
         text = (message or "").lower()
         if not text:
@@ -612,6 +655,10 @@ class SuperintendenteAgent:
         )
         return any(t in text for t in triggers)
 
+    # Comprueba si el texto contiene una intención explícita de envío al huésped.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _has_explicit_send_intent(self, text: str) -> bool:
         clean = (text or "").strip().lower()
         if not clean:
@@ -625,6 +672,10 @@ class SuperintendenteAgent:
             )
         )
 
+    # Extrae el nombre de huésped referenciado en una consulta de reserva.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_reservation_subject_name(self, text: str) -> Optional[str]:
         raw = (text or "").strip()
         if not raw:
@@ -643,6 +694,10 @@ class SuperintendenteAgent:
                 return value
         return None
 
+    # Amplía una consulta de reserva con el contexto activo del huésped y su folio.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `user_input`, `convo_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _enrich_reservation_query_with_context(self, user_input: str, *, convo_id: str) -> str:
         raw = (user_input or "").strip()
         if not raw or not self.memory_manager:
@@ -697,6 +752,10 @@ class SuperintendenteAgent:
         )
         return f"{raw}{extra}"
 
+    # Compone el mensaje de huésped.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `message` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _compose_guest_message(self, message: str) -> str:
         clean = sanitize_wa_message(message or "")
         if not clean:
@@ -729,6 +788,10 @@ class SuperintendenteAgent:
         except Exception:
             return clean
 
+    # Usa el LLM para extraer destinatario y mensaje cuando el patrón directo no es fiable.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `Optional[tuple[str, str]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _extract_send_intent_llm(self, text: str) -> Optional[tuple[str, str]]:
         if not text:
             return None
@@ -771,6 +834,10 @@ class SuperintendenteAgent:
             return None
         return guest, message
 
+    # Parsea órdenes directas de envío y separa destinatario y mensaje.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `Optional[tuple[str, str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _parse_direct_send_request(self, text: str) -> Optional[tuple[str, str]]:
         if not text:
             return None
@@ -803,6 +870,10 @@ class SuperintendenteAgent:
                 return name, msg
         return None
 
+    # Crear tools del superintendente.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `encargado_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede activar tools o agentes.
     async def _create_tools(self, hotel_name: str, encargado_id: str):
         """Crear tools del superintendente"""
 
@@ -891,6 +962,10 @@ class SuperintendenteAgent:
         # Ajustar append_func para herramienta de KB al método interno S3
         return [tool for tool in tools if tool is not None]
 
+    # Construir system prompt para superintendente.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `clients_context` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_system_prompt(self, hotel_name: str, clients_context: Optional[str] = None) -> str:
         """Construir system prompt para superintendente"""
 
@@ -944,6 +1019,10 @@ class SuperintendenteAgent:
             )
         return "\n\n".join(parts)
 
+    # Sanea hotel nombre.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _sanitize_hotel_name(self, hotel_name: str) -> str:
         raw = " ".join((hotel_name or "").split())
         if not raw:
@@ -959,6 +1038,10 @@ class SuperintendenteAgent:
         ).strip()
         return raw
 
+    # Resuelve hotel nombre.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `encargado_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `tuple[str, bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_hotel_name(self, hotel_name: str, encargado_id: str) -> tuple[str, bool]:
         if self.memory_manager and encargado_id:
             try:
@@ -974,6 +1057,10 @@ class SuperintendenteAgent:
             return cleaned, False
         return hotel_name, False
 
+    # Extrae el ID de property.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `texts` como entrada principal según la firma.
+    # Devuelve un `int | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_property_id(self, *texts: str) -> int | None:
         for text in texts:
             if not text:
@@ -986,6 +1073,10 @@ class SuperintendenteAgent:
                     continue
         return None
 
+    # Procesar solicitud de agregar a base de conocimientos.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `topic`, `content`, `encargado_id`, `hotel_name`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     async def handle_kb_addition(
         self,
         topic: str,
@@ -1073,6 +1164,10 @@ class SuperintendenteAgent:
                 "message": f"Error: {exc}",
             }
 
+    # Recupera document class.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     def _get_document_class(self):
         try:
             from docx import Document  # type: ignore
@@ -1080,6 +1175,10 @@ class SuperintendenteAgent:
         except ImportError as exc:
             raise RuntimeError("Falta dependencia python-docx para editar el documento") from exc
 
+    # Anexa la información al documento de conocimientos en S3.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `topic`, `content`, `hotel_name`, `source_type`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def _append_to_knowledge_document(
         self,
         topic: str,
@@ -1148,6 +1247,10 @@ class SuperintendenteAgent:
 
         return {"status": "success", "key": key_used}
 
+    # Lee el documento de KB y prepara un borrador de eliminación según criterio/fechas.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `criterio`, `fecha_inicio`, `fecha_fin`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _prepare_kb_removal_preview(
         self,
         hotel_name: str,
@@ -1179,6 +1282,10 @@ class SuperintendenteAgent:
                 "error": "No encontré registros en la base de conocimientos Variable.",
             }
 
+        # Parsea el date.
+        # Se invoca dentro de `_prepare_kb_removal_preview` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # Recibe `val` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _parse_date(val: str | None):
             if not val:
                 return None
@@ -1196,6 +1303,10 @@ class SuperintendenteAgent:
         crit_lower = criterio_clean.lower()
         crit_terms = [t for t in re.findall(r"[a-záéíóúñü0-9]+", crit_lower) if t]
 
+        # Resuelve el coincidencias.
+        # Se invoca dentro de `_prepare_kb_removal_preview` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # Recibe `entry` como entrada principal según la firma.
+        # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _matches(entry: dict[str, Any]) -> bool:
             blob = f"{entry.get('topic','')} {entry.get('content','')}".lower()
             if crit_terms:
@@ -1226,6 +1337,10 @@ class SuperintendenteAgent:
         preview_items = []
         preview_chars = 0
 
+        # Recorta texto y elimina líneas de borradores previos para una vista limpia.
+        # Se invoca dentro de `_prepare_kb_removal_preview` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # Recibe `text` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _clean_snippet(text: str) -> str:
             """Recorta texto y elimina líneas de borradores previos para una vista limpia."""
             if not text:
@@ -1274,6 +1389,10 @@ class SuperintendenteAgent:
         }
         return payload
 
+    # Elimina entradas del documento de KB (Variable) según IDs parseados.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `target_ids`, `encargado_id`, `note`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def handle_kb_removal(
         self,
         hotel_name: str,
@@ -1373,6 +1492,10 @@ class SuperintendenteAgent:
             "doc_key": key_used,
         }
 
+    # Devuelve una lista ordenada de posibles keys en S3 para el documento de KB del hotel.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `boto_client` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `bucket`, `use_env` como datos de contexto o entrada de la operación.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_doc_candidates(
         self,
         hotel_name: str,
@@ -1505,6 +1628,10 @@ class SuperintendenteAgent:
         log.info("Candidatos para documento KB: %s", candidates)
         return candidates
 
+    # Descarga el documento de KB y lo parsea en entradas discretas con índices.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `boto_client` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `bucket`, `use_env` como datos de contexto o entrada de la operación.
+    # Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def _load_kb_entries(
         self,
         hotel_name: str,
@@ -1565,6 +1692,10 @@ class SuperintendenteAgent:
             "create_new": create_new,
         }
 
+    # Convierte los párrafos del documento en entradas con índice y metadatos.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `paragraphs` como entrada principal según la firma.
+    # Devuelve un `list[dict[str, Any]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _parse_kb_paragraphs(self, paragraphs: list[Any]) -> list[dict[str, Any]]:
         """
         Convierte los párrafos del documento en entradas con índice y metadatos.
@@ -1574,6 +1705,10 @@ class SuperintendenteAgent:
         entries: list[dict[str, Any]] = []
         current: dict[str, Any] = {"header": "", "content": "", "source": "", "paragraphs": []}
 
+        # Resuelve el flush.
+        # Se invoca dentro de `_parse_kb_paragraphs` para encapsular una parte local de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+        # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
         def _flush():
             if not any(current.values()):
                 return
@@ -1628,6 +1763,10 @@ class SuperintendenteAgent:
         _flush()
         return entries
 
+    # Elimina instrucciones o metadatos que no deben ir al documento KB.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `content` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _clean_kb_content(self, content: str) -> str:
         """Elimina instrucciones o metadatos que no deben ir al documento KB."""
         if not content:
@@ -1655,6 +1794,10 @@ class SuperintendenteAgent:
 
         return "\n".join(lines).strip()
 
+    # Revisar conversaciones recientes y sumarizar patrones.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `hotel_name`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def review_recent_conversations(
         self,
         hotel_name: str,
@@ -1681,6 +1824,10 @@ class SuperintendenteAgent:
 
         return summary
 
+    # Invoca funciones sync/async de forma segura.
+    # Se usa dentro de `SuperintendenteAgent` en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp.
+    # Recibe `func`, `*args`, `**kwargs` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def _safe_call(self, func: Optional[Any], *args, **kwargs):
         """Invoca funciones sync/async de forma segura."""
         if not func:

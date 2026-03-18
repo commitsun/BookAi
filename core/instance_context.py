@@ -34,10 +34,18 @@ _PROPERTIES_BY_CODE_CACHE_TTL_SECONDS = 30
 _properties_by_code_cache: dict[tuple[str, str], tuple[float, list[Dict[str, Any]]]] = {}
 
 
+# Normaliza teléfono número.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_phone_number(value: Optional[str]) -> str:
     return re.sub(r"\D", "", value or "").strip()
 
 
+# Normaliza base de conocimiento nombre.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
@@ -46,6 +54,10 @@ def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
     return cleaned or None
 
 
+# Extrae el payload de la operación.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `data` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_payload(data: Any) -> Dict[str, Any]:
     if isinstance(data, dict):
         inner = data.get("data")
@@ -61,6 +73,10 @@ def _extract_payload(data: Any) -> Dict[str, Any]:
     return {}
 
 
+# Resuelve el JSON.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `url`, `payload` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     if not url:
         return {}
@@ -83,10 +99,18 @@ def _post_json(url: str, payload: Dict[str, Any]) -> Dict[str, Any]:
     return _extract_payload(data)
 
 
+# Ejecuta la asincronía.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `coro` como entrada principal según la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
 def _run_async(coro):
     return run_coro_sync(coro)
 
 
+# Resuelve tool coincidencias.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `name`, `description` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _mcp_tool_matches(name: str, description: str | None = None) -> bool:
     n = (name or "").strip().lower()
     d = (description or "").strip().lower()
@@ -101,6 +125,10 @@ def _mcp_tool_matches(name: str, description: str | None = None) -> bool:
     return False
 
 
+# Consulta properties por code mcp.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[Dict[str, Any]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str, Any]]:
     if not get_tools:
         return []
@@ -116,6 +144,10 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
             return list(cached_rows or [])
         _properties_by_code_cache.pop(cache_key, None)
 
+    # Carga la tools.
+    # Se invoca dentro de `_fetch_properties_by_code_mcp` para encapsular una parte local de resolución de instancia, property y credenciales dinámicas.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede realizar llamadas externas o a modelos.
     async def _load_tools():
         for server in ("DispoPreciosAgent", "OnboardingAgent", "InfoAgent"):
             try:
@@ -195,6 +227,10 @@ def _fetch_properties_by_code_mcp(table: str, instance_id: str) -> list[Dict[str
     return rows
 
 
+# Consulta instancia por número.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `whatsapp_number` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
     normalized = _normalize_phone_number(whatsapp_number or "")
     payload = {"whatsApp_number": normalized or whatsapp_number}
@@ -236,6 +272,10 @@ def fetch_instance_by_number(whatsapp_number: str) -> Dict[str, Any]:
     return {}
 
 
+# Consulta el ID de instancia por teléfono.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `whatsapp_phone_id` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_instance_by_phone_id(whatsapp_phone_id: str) -> Dict[str, Any]:
     if not whatsapp_phone_id:
         return {}
@@ -259,6 +299,10 @@ def fetch_instance_by_phone_id(whatsapp_phone_id: str) -> Dict[str, Any]:
     return {}
 
 
+# Consulta instancia por code.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_id` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_instance_by_code(instance_id: str) -> Dict[str, Any]:
     payload = {"instance_id": instance_id}
     data = _post_json(INSTANCE_BY_CODE_WEBHOOK, payload)
@@ -283,6 +327,10 @@ def fetch_instance_by_code(instance_id: str) -> Dict[str, Any]:
     return {}
 
 
+# Consulta property por nombre.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `name` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
     if supabase:
         try:
@@ -305,6 +353,10 @@ def fetch_property_by_name(table: str, name: str) -> Dict[str, Any]:
     return {}
 
 
+# Consulta property por code.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def fetch_property_by_code(table: str, instance_id: str) -> Dict[str, Any]:
     rows = _fetch_properties_by_code_mcp(table, instance_id)
     if rows:
@@ -312,6 +364,10 @@ def fetch_property_by_code(table: str, instance_id: str) -> Dict[str, Any]:
     return {}
 
 
+# Devuelve multiples properties por instance_id si existen.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[Dict[str, Any]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any]]:
     """
     Devuelve multiples properties por instance_id si existen.
@@ -356,6 +412,10 @@ def fetch_properties_by_code(table: str, instance_id: str) -> list[Dict[str, Any
     return []
 
 
+# Busca properties por coincidencia parcial en name/property_name.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `query` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[Dict[str, Any]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
     """
     Busca properties por coincidencia parcial en name/property_name.
@@ -384,7 +444,15 @@ def fetch_properties_by_query(table: str, query: str) -> list[Dict[str, Any]]:
     return []
 
 
+# Consulta el ID de property por.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `table`, `property_id`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_property_by_id(table: str, property_id: Any, instance_id: Optional[str] = None) -> Dict[str, Any]:
+    # Resuelve la instancia.
+    # Se invoca dentro de `fetch_property_by_id` para encapsular una parte local de resolución de instancia, property y credenciales dinámicas.
+    # Recibe `row`, `expected_instance` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _matches_instance(row: Dict[str, Any], expected_instance: Optional[str]) -> bool:
         if not expected_instance:
             return True
@@ -459,6 +527,10 @@ def fetch_property_by_id(table: str, property_id: Any, instance_id: Optional[str
     return {}
 
 
+# Asegura credenciales de WhatsApp en memoria usando property_id/instance_id.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def ensure_instance_credentials(
     memory_manager: Any,
     chat_id: str,
@@ -539,6 +611,10 @@ def ensure_instance_credentials(
         log.warning("🏨 [WA_CTX] error ensuring WA creds: %s", exc)
 
 
+# Resuelve la tabla de properties activa.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_property_table(instance_payload: Dict[str, Any]) -> Optional[str]:
     for key in (
         "tabla",
@@ -556,6 +632,10 @@ def _resolve_property_table(instance_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Resuelve el ID de property.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_property_id(payload: Dict[str, Any]) -> Optional[Any]:
     for key in ("property_id", "propertyId", "pms_property_id", "pmsPropertyId", "id"):
         if key in payload and payload.get(key) is not None:
@@ -563,6 +643,10 @@ def _resolve_property_id(payload: Dict[str, Any]) -> Optional[Any]:
     return None
 
 
+# Fetch instance + property metadata and store into MemoryManager flags.
+# Se usa en el flujo de resolución de instancia, property y credenciales dinámicas para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `instance_number`, `instance_phone_id` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def hydrate_dynamic_context(
     *,
     state,

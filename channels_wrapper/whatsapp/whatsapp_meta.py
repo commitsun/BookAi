@@ -30,6 +30,10 @@ class WhatsAppChannel(BaseChannel):
         se activa la escalación automática con el agente interno ReAct.
     """
 
+    # Inicializa el estado interno y las dependencias de `WhatsAppChannel`.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `openai_api_key` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, openai_api_key: str = None):
         super().__init__(openai_api_key=openai_api_key or C.OPENAI_API_KEY)
         self.buffer_manager = MessageBufferManager(idle_seconds=BUFFER_WAIT_SECONDS)
@@ -37,10 +41,15 @@ class WhatsAppChannel(BaseChannel):
         self.interno_agent = InternoAgent()  # ✅ Inicialización del nuevo agente
         log.info("✅ WhatsAppChannel inicializado con InternoAgent v4 y MessageBufferManager")
 
-    # ---------------------------------------------------------------------
-    # Webhooks
-    # ---------------------------------------------------------------------
+    # Registra las rutas de `` sobre la aplicación FastAPI activa.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `app` como dependencias o servicios compartidos inyectados desde otras capas.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def register_routes(self, app):
+        # Atiende el endpoint `GET /webhook` y coordina la operación pública de este módulo.
+        # Se usa como punto de entrada HTTP dentro de canal WhatsApp Meta con buffer y escalación automática.
+        # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+        # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
         @app.get("/webhook")
         @app.get("/webhook/whatsapp")
         async def verify_webhook(request: Request):
@@ -53,6 +62,10 @@ class WhatsAppChannel(BaseChannel):
                 return PlainTextResponse(params.get("hub.challenge"), status_code=200)
             return PlainTextResponse("Error de verificación", status_code=403)
 
+        # Recibe eventos de Meta y delega el procesamiento en background.
+        # Se usa como punto de entrada HTTP dentro de canal WhatsApp Meta con buffer y escalación automática.
+        # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+        # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
         @app.post("/webhook")
         @app.post("/webhook/whatsapp")
         async def whatsapp_webhook(request: Request):
@@ -65,9 +78,10 @@ class WhatsAppChannel(BaseChannel):
                 log.error(f"❌ Error procesando webhook: {e}", exc_info=True)
                 return JSONResponse({"status": "error", "detail": str(e)})
 
-    # ---------------------------------------------------------------------
-    # Procesamiento de mensajes entrantes
-    # ---------------------------------------------------------------------
+    # Procesa in background.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `data` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def _process_in_background(self, data: dict):
         try:
             user_id, msg_id, msg_type, user_message = self.extract_message_data(data)
@@ -86,7 +100,10 @@ class WhatsAppChannel(BaseChannel):
             # Registrar mensaje en historial
             self._append(cid, "user", user_message)
 
-            # Callback que procesará el bloque tras el timeout de inactividad
+            # Procesa el callback.
+            # Se invoca dentro de `_process_in_background` para encapsular una parte local de canal WhatsApp Meta con buffer y escalación automática.
+            # Recibe `conversation_id`, `combined_text`, `version` como entradas relevantes junto con el contexto inyectado en la firma.
+            # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Sin efectos secundarios relevantes.
             async def process_callback(conversation_id: str, combined_text: str, version: int):
                 await self._process_block(conversation_id, combined_text)
 
@@ -96,9 +113,10 @@ class WhatsAppChannel(BaseChannel):
         except Exception as e:
             log.error(f"💥 Error en _process_in_background: {e}", exc_info=True)
 
-    # ---------------------------------------------------------------------
-    # Procesamiento principal del bloque
-    # ---------------------------------------------------------------------
+    # Procesa el bloque completo acumulado tras el tiempo de inactividad.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `cid`, `user_block` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede propagar excepciones de validación o integración. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos.
     async def _process_block(self, cid: str, user_block: str):
         """Procesa el bloque completo acumulado tras el tiempo de inactividad."""
         try:
@@ -146,9 +164,10 @@ class WhatsAppChannel(BaseChannel):
         except Exception as e:
             log.error(f"Error procesando bloque: {e}", exc_info=True)
 
-    # ---------------------------------------------------------------------
-    # Envío de mensajes a WhatsApp (Meta Graph API)
-    # ---------------------------------------------------------------------
+    # Envía el mensaje.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `user_id`, `text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Produce la acción solicitada y prioriza el efecto lateral frente a un retorno complejo. Puede realizar llamadas externas o a modelos.
     def send_message(self, user_id: str, text: str):
         phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
         token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
@@ -172,9 +191,10 @@ class WhatsAppChannel(BaseChannel):
         except Exception as e:
             log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
 
-    # ---------------------------------------------------------------------
-    # Envío de plantillas (WhatsApp)
-    # ---------------------------------------------------------------------
+    # Enmascara el teléfono.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `user_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _mask_phone(user_id: str) -> str:
         digits = "".join(ch for ch in str(user_id or "") if ch.isdigit())
@@ -186,6 +206,10 @@ class WhatsAppChannel(BaseChannel):
             return f"{digits[0]}***{digits[-1]}"
         return f"{digits[:2]}***{digits[-2:]}"
 
+    # Pre-check de cuenta WhatsApp usando /{PHONE_NUMBER_ID}/contacts.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `user_id`, `request_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def check_recipient_has_whatsapp_account(
         self,
         user_id: str,
@@ -199,6 +223,10 @@ class WhatsAppChannel(BaseChannel):
         """
         strict_precheck = bool(getattr(C, "WA_CONTACTS_PRECHECK_STRICT", False))
 
+        # Resuelve el resultado.
+        # Se invoca dentro de `check_recipient_has_whatsapp_account` para encapsular una parte local de canal WhatsApp Meta con buffer y escalación automática.
+        # Recibe `reason`, `check_status` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _uncertain_result(reason: str, check_status: str) -> dict:
             # Si /contacts no está soportado por este phone_id/token,
             # nunca bloqueamos el envío (fail-open) para no romper producción.
@@ -361,6 +389,10 @@ class WhatsAppChannel(BaseChannel):
             "provider_status": None,
         }
 
+    # Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `user_id`, `template_id`, `parameters`, `language` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def send_template_message(
         self,
         user_id: str,
@@ -379,6 +411,10 @@ class WhatsAppChannel(BaseChannel):
             log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
             return
 
+        # Resuelve el parámetros.
+        # Se invoca dentro de `send_template_message` para encapsular una parte local de canal WhatsApp Meta con buffer y escalación automática.
+        # Recibe `params` como entrada principal según la firma.
+        # Devuelve un `Iterable[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _iter_params(params: dict | list | tuple | None) -> Iterable[Any]:
             if params is None:
                 return []
@@ -390,6 +426,10 @@ class WhatsAppChannel(BaseChannel):
                 return params
             return [params]
 
+        # Normaliza parámetros para Meta evitando enviar parameter_name vacío.
+        # Se invoca dentro de `send_template_message` para encapsular una parte local de canal WhatsApp Meta con buffer y escalación automática.
+        # Recibe `val` como entrada principal según la firma.
+        # Devuelve un `dict | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _normalize_param(val: Any) -> dict | None:
             """
             Normaliza parámetros para Meta evitando enviar parameter_name vacío
@@ -498,9 +538,10 @@ class WhatsAppChannel(BaseChannel):
             )
             return False
 
-    # ---------------------------------------------------------------------
-    # Parser de payload (Meta Webhook)
-    # ---------------------------------------------------------------------
+    # Extrae (user_id, msg_id, msg_type, user_msg) del webhook de Meta.
+    # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
+    # Recibe `payload` como entrada principal según la firma.
+    # Devuelve un `Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def extract_message_data(
         self, payload: dict
     ) -> Tuple[Optional[str], Optional[str], Optional[str], Optional[str]]:

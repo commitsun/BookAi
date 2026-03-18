@@ -39,6 +39,10 @@ class OnboardingAgent:
         "- Responde breve y clara en el idioma del huésped.\n"
     )
 
+    # Inicializa el estado interno y las dependencias de `OnboardingAgent`.
+    # Se usa dentro de `OnboardingAgent` en el flujo de subagente de onboarding y reservas.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory_manager: Any = None):
         self.memory_manager = memory_manager
         self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
@@ -50,10 +54,18 @@ class OnboardingAgent:
             self.allow_reservation_creation,
         )
 
+    # Construye el prompt de la operación.
+    # Se usa dentro de `OnboardingAgent` en el flujo de subagente de onboarding y reservas.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_prompt(self) -> str:
         base_prompt = load_prompt("onboarding_prompt.txt") or self._DEFAULT_PROMPT
         return f"{get_time_context()}\n{base_prompt.strip()}"
 
+    # Construye el executor.
+    # Se usa dentro de `OnboardingAgent` en el flujo de subagente de onboarding y reservas.
+    # Recibe `tools` como entrada principal según la firma.
+    # Devuelve un `AgentExecutor` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     def _build_executor(self, tools) -> AgentExecutor:
         prompt = ChatPromptTemplate.from_messages(
             [
@@ -74,6 +86,10 @@ class OnboardingAgent:
             handle_parsing_errors=True,
         )
 
+    # Punto de entrada para SubAgentTool.
+    # Se usa dentro de `OnboardingAgent` en el flujo de subagente de onboarding y reservas.
+    # Recibe `pregunta`, `chat_id`, `chat_history` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def handle(
         self,
         pregunta: str,

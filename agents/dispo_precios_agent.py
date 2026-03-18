@@ -35,6 +35,10 @@ class DispoPreciosAgent:
     Usa MCP Tools y un LLM centralizado (gpt-4.1 por defecto).
     """
 
+    # memory_manager: instancia opcional de MemoryManager.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `model_name`, `temperature` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     def __init__(self, memory_manager=None, model_name=None, temperature=None):
         """
         memory_manager: instancia opcional de MemoryManager
@@ -76,7 +80,10 @@ class DispoPreciosAgent:
             f"(modelo={self.model_name}, temp={self.temperature})"
         )
 
-    # ----------------------------------------------------------
+    # Prompt por defecto si no existe el archivo en disco.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_default_prompt(self) -> str:
         """Prompt por defecto si no existe el archivo en disco."""
         return (
@@ -87,9 +94,16 @@ class DispoPreciosAgent:
             "(fechas, número de personas, tipo de habitación, etc.)."
         )
 
-    # ----------------------------------------------------------
+    # Crea la tool que consulta disponibilidad y precios en el PMS vía MCP.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `Tool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     def _build_tool(self) -> Tool:
         """Crea la tool que consulta disponibilidad y precios en el PMS vía MCP."""
+        # Resuelve la tool de la operación.
+        # Se invoca dentro de `_build_tool` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `query` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede realizar llamadas externas o a modelos, activar tools o agentes.
         async def _availability_tool(query: str):
             try:
                 try:
@@ -227,7 +241,10 @@ class DispoPreciosAgent:
             return_direct=True,
         )
 
-    # ----------------------------------------------------------
+    # Crea el AgentExecutor con control de iteraciones y sin pasos intermedios.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `AgentExecutor` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     def _build_agent_executor(self) -> AgentExecutor:
         """Crea el AgentExecutor con control de iteraciones y sin pasos intermedios."""
         prompt = ChatPromptTemplate.from_messages([
@@ -249,7 +266,10 @@ class DispoPreciosAgent:
             max_execution_time=60
         )
 
-    # ----------------------------------------------------------
+    # Permite ejecutar async coroutines dentro de contextos sync (LangChain).
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `coro`, `*args`, `**kwargs` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _sync_run(self, coro, *args, **kwargs):
         """Permite ejecutar async coroutines dentro de contextos sync (LangChain)."""
         try:
@@ -264,7 +284,10 @@ class DispoPreciosAgent:
 
         return loop.run_until_complete(coro(*args, **kwargs))
 
-    # ----------------------------------------------------------
+    # Convierte números escritos (es/en) en dígitos para mejorar el parseo.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `raw_text` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _replace_word_numbers(self, raw_text: str) -> str:
         """Convierte números escritos (es/en) en dígitos para mejorar el parseo."""
         num_words = {
@@ -282,6 +305,10 @@ class DispoPreciosAgent:
             flags=re.IGNORECASE,
         )
 
+    # Comprueba si ya respondimos a la misma petición (mismas fechas y occupancy).
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `new_query`, `rooms`, `dates`, `occupancy` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_same_request(self, new_query: str, rooms: list, dates, occupancy: int) -> bool:
         """
         Comprueba si ya respondimos a la misma petición (mismas fechas y occupancy)
@@ -299,7 +326,10 @@ class DispoPreciosAgent:
             return True
         return False
 
-    # ----------------------------------------------------------
+    # Extrae fechas de check-in y check-out a partir de la consulta.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _parse_dates(self, text: str):
         """
         Extrae fechas de check-in y check-out a partir de la consulta.
@@ -316,12 +346,20 @@ class DispoPreciosAgent:
         raw_lower = raw.lower()
         today = datetime.date.today()
 
+        # Resuelve el int.
+        # Se invoca dentro de `_parse_dates` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `val` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _safe_int(val):
             try:
                 return int(val)
             except Exception:
                 return None
 
+        # Convierte año de 2 a 4 dígitos y evita fechas pasadas al saltar al siguiente año.
+        # Se invoca dentro de `_parse_dates` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `y` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _normalize_year(y):
             """Convierte año de 2 a 4 dígitos y evita fechas pasadas al saltar al siguiente año."""
             if y is None:
@@ -333,6 +371,10 @@ class DispoPreciosAgent:
                 y += 2000
             return y
 
+        # Parsea el token.
+        # Se invoca dentro de `_parse_dates` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `token` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _parse_token(token):
             token = token.strip()
 
@@ -362,6 +404,10 @@ class DispoPreciosAgent:
 
             return None
 
+        # Resuelve el weekend.
+        # Se invoca dentro de `_parse_dates` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `weeks_out` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _next_weekend(weeks_out=0):
             base = today + datetime.timedelta(days=weeks_out * 7)
             days_to_friday = (4 - base.weekday()) % 7
@@ -403,7 +449,10 @@ class DispoPreciosAgent:
 
         return None
 
-    # ----------------------------------------------------------
+    # Intenta extraer el número total de huéspedes a partir de la consulta.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _parse_occupancy(self, text: str):
         """
         Intenta extraer el número total de huéspedes a partir de la consulta.
@@ -413,6 +462,10 @@ class DispoPreciosAgent:
         if not text:
             return None
 
+        # Convierte el int.
+        # Se invoca dentro de `_parse_occupancy` para encapsular una parte local de subagente de disponibilidad, precios y parsing de fechas.
+        # Recibe `val` como entrada principal según la firma.
+        # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
         def _to_int(val):
             try:
                 return int(str(val).strip())
@@ -489,6 +542,10 @@ class DispoPreciosAgent:
 
         return None
 
+    # Busca en el historial la última mención de ocupación >1.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `chat_history` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _occupancy_from_history(self, chat_history):
         """Busca en el historial la última mención de ocupación >1."""
         if not chat_history:
@@ -501,6 +558,10 @@ class DispoPreciosAgent:
                 return occ
         return None
 
+    # Recupera el último par de fechas mencionado en el historial.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `chat_history` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _dates_from_history(self, chat_history):
         """Recupera el último par de fechas mencionado en el historial."""
         if not chat_history:
@@ -513,7 +574,10 @@ class DispoPreciosAgent:
                 return dates
         return None
 
-    # ----------------------------------------------------------
+    # Entrada principal del subagente (modo asíncrono) con soporte de memoria.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `pregunta`, `chat_history`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def handle(self, pregunta: str, chat_history=None, chat_id: str = None) -> str:
         """Entrada principal del subagente (modo asíncrono) con soporte de memoria."""
         log.info(f"📩 [DispoPreciosAgent] Recibida pregunta: {pregunta}")
@@ -576,7 +640,10 @@ class DispoPreciosAgent:
                 )
             return "Ha ocurrido un problema al obtener la disponibilidad."
 
-    # ----------------------------------------------------------
+    # Versión síncrona (wrapper) para integración con DispoPreciosTool.
+    # Se usa dentro de `DispoPreciosAgent` en el flujo de subagente de disponibilidad, precios y parsing de fechas.
+    # Recibe `user_input`, `chat_history`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def invoke(self, user_input: str, chat_history=None, chat_id: str = None) -> str:
         """Versión síncrona (wrapper) para integración con DispoPreciosTool."""
         try:

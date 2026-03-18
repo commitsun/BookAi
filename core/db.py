@@ -22,6 +22,10 @@ supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.info("✅ Conexión con Supabase inicializada correctamente.")
 
 
+# Determina si el mensaje de interno non persistable cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_internal_non_persistable_message(content: str) -> bool:
     text = (content or "").strip()
     if not text:
@@ -36,12 +40,20 @@ def _is_internal_non_persistable_message(content: str) -> bool:
     return False
 
 
+# Recupera day clave.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `timezone` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _get_day_key(timezone: str = DEFAULT_TZ) -> str:
     tz = pytz.timezone(timezone)
     now = datetime.now(tz)
     return now.strftime("%Y-%m-%d")
 
 
+# Guarda una entrada temporal de KB para el dia actual.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `property_id`, `kb_name`, `property_name`, `topic`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede consultar o escribir en base de datos.
 def add_kb_daily_cache(
     *,
     property_id: str | int | None = None,
@@ -81,6 +93,10 @@ def add_kb_daily_cache(
         logging.warning("⚠️ No se pudo guardar cache temporal KB: %s", exc)
 
 
+# Recupera entradas temporales de KB para el dia actual.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `property_id`, `kb_name`, `property_name`, `day_key`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def fetch_kb_daily_cache(
     *,
     property_id: str | int | None = None,
@@ -113,9 +129,10 @@ def fetch_kb_daily_cache(
         return []
 
 
-# ======================================================
-# 💾 Guardar mensaje (sin embeddings)
-# ======================================================
+# Guarda un mensaje en la base de datos relacional de Supabase.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `role`, `content`, `escalation_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos.
 def save_message(
     conversation_id: str,
     role: str,
@@ -277,6 +294,10 @@ def save_message(
         logging.error(f"⚠️ Error guardando mensaje en Supabase: {e}", exc_info=True)
 
 
+# Replica la lógica efectiva del listado de chats:.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `property_id`, `channel`, `original_chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede consultar o escribir en base de datos.
 def is_chat_visible_in_list(
     conversation_id: str,
     *,
@@ -367,9 +388,10 @@ def is_chat_visible_in_list(
         return False
 
 
-# ======================================================
-# 🧠 Obtener historial de conversación
-# ======================================================
+# Recupera los últimos mensajes de una conversación, ordenados por fecha.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `limit`, `since`, `property_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
 def get_conversation_history(
     conversation_id: str,
     limit: int = 10,
@@ -439,6 +461,10 @@ def get_conversation_history(
         return []
 
 
+# Adjunta structured_payload al último mensaje de una conversación para un rol dado.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `structured_payload`, `table`, `role` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def attach_structured_payload_to_latest_message(
     *,
     conversation_id: str,
@@ -481,6 +507,10 @@ def attach_structured_payload_to_latest_message(
         return False
 
 
+# Marca el último mensaje `bookai` del chat con metadatos de escalación.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_chat_id`, `property_id`, `ai_request_type`, `escalation_reason`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def update_latest_bookai_escalation_metadata(
     *,
     guest_chat_id: str,
@@ -510,6 +540,10 @@ def update_latest_bookai_escalation_metadata(
         "escalation_reason": escalation_reason_value or None,
     }
 
+    # Localiza el ID de último.
+    # Se invoca dentro de `update_latest_bookai_escalation_metadata` para encapsular una parte local de persistencia de historial, reservas y metadatos en Supabase.
+    # Recibe `use_original`, `strict_property` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
     def _find_latest_id(*, use_original: bool, strict_property: bool):
         query = (
             supabase.table(table)
@@ -559,6 +593,10 @@ def update_latest_bookai_escalation_metadata(
         return False
 
 
+# Recupera el último property_id asociado a una conversación (si existe).
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `table`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str | int | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_last_property_id_for_conversation(
     conversation_id: str,
     *,
@@ -594,6 +632,10 @@ def get_last_property_id_for_conversation(
         return None
 
 
+# Recupera el último property_id asociado a un original_chat_id (ej. instancia:telefono).
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `original_chat_id`, `table`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str | int | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_last_property_id_for_original_chat(
     original_chat_id: str,
     *,
@@ -627,9 +669,10 @@ def get_last_property_id_for_original_chat(
         return None
 
 
-# ======================================================
-# 📌 Reservas por chat (persistencia ligera)
-# ======================================================
+# Normaliza el ID de chat.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_chat_id(value: str | None) -> str:
     if not value:
         return ""
@@ -643,6 +686,10 @@ def _normalize_chat_id(value: str | None) -> str:
     return cleaned or text
 
 
+# Normaliza date field.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_date_field(value: str | None) -> str | None:
     if not value:
         return None
@@ -670,6 +717,10 @@ def _normalize_date_field(value: str | None) -> str | None:
     return raw
 
 
+# Inserta/actualiza una reserva asociada a un chat.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `folio_id`, `checkin`, `checkout`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def upsert_chat_reservation(
     *,
     chat_id: str,
@@ -696,6 +747,10 @@ def upsert_chat_reservation(
 
     normalized_chat = _normalize_chat_id(chat_id)
 
+    # Resuelve el conflict.
+    # Se invoca dentro de `upsert_chat_reservation` para encapsular una parte local de persistencia de historial, reservas y metadatos en Supabase.
+    # Recibe `chat_key`, `folio`, `locator` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _locator_conflict(chat_key: str, folio: str | None, locator: str | None) -> bool:
         if not locator:
             return False
@@ -775,6 +830,10 @@ def upsert_chat_reservation(
             logging.warning("⚠️ No se pudo insertar chat_reservation (fallback): %s", exc2, exc_info=True)
 
 
+# Devuelve la reserva "activa" para un chat.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `instance_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `dict | None` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def get_active_chat_reservation(
     *,
     chat_id: str,
@@ -814,6 +873,10 @@ def get_active_chat_reservation(
     if not rows:
         return None
 
+    # Parsea el date.
+    # Se invoca dentro de `get_active_chat_reservation` para encapsular una parte local de persistencia de historial, reservas y metadatos en Supabase.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _parse_date(val):
         if not val:
             return None
@@ -843,9 +906,10 @@ def get_active_chat_reservation(
 
 
 
-# ======================================================
-# 🧹 Borrar historial (útil para pruebas o depuración)
-# ======================================================
+# Elimina todos los mensajes de una conversación.
+# Se usa en el flujo de persistencia de historial, reservas y metadatos en Supabase para preparar datos, validaciones o decisiones previas.
+# Recibe `conversation_id`, `property_id`, `table` como entradas relevantes junto con el contexto inyectado en la firma.
+# No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede consultar o escribir en base de datos.
 def clear_conversation(
     conversation_id: str,
     property_id: str | int | None = None,

@@ -15,6 +15,10 @@ from langchain_openai import ChatOpenAI
 load_dotenv()
 
 
+# Resuelve el booleano.
+# Se usa en el flujo de configuración global y fábrica de modelos para preparar datos, validaciones o decisiones previas.
+# Recibe `name`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _env_bool(name: str, default: bool = False) -> bool:
     raw = os.getenv(name)
     if raw is None:
@@ -164,6 +168,10 @@ class ModelConfig:
         },
     }
 
+    # Retorna (model_name, temperature) para el tier solicitado.
+    # Se usa dentro de `ModelConfig` en el flujo de configuración global y fábrica de modelos.
+    # Recibe `tier` como entrada principal según la firma.
+    # Devuelve un `tuple[str, float]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     @classmethod
     def get_model(cls, tier: ModelTier) -> tuple[str, float]:
         """Retorna (model_name, temperature) para el tier solicitado."""
@@ -172,6 +180,10 @@ class ModelConfig:
             raise ValueError(f"Tier desconocido: {tier}")
         return config["name"], config["temperature"]
 
+    # Devuelve un ChatOpenAI configurado con el modelo y temperatura del tier.
+    # Se usa dentro de `ModelConfig` en el flujo de configuración global y fábrica de modelos.
+    # Recibe `tier` como entrada principal según la firma.
+    # Devuelve un `ChatOpenAI` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     @classmethod
     def get_llm(cls, tier: ModelTier) -> ChatOpenAI:
         """Devuelve un ChatOpenAI configurado con el modelo y temperatura del tier."""
@@ -179,9 +191,10 @@ class ModelConfig:
         return ChatOpenAI(model=name, temperature=temp)
 
 
-# =============================================================
-# 🔍 FUNCIÓN DE DEBUG OPCIONAL
-# =============================================================
+# Imprime los modelos activos por tier (útil en desarrollo).
+# Se usa en el flujo de configuración global y fábrica de modelos para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def print_model_summary():
     """Imprime los modelos activos por tier (útil en desarrollo)."""
     print("\n✅ MODELOS LLM ACTIVOS\n" + "=" * 40)

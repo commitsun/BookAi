@@ -25,15 +25,27 @@ class MessageBufferManager:
       ✅ Llama al callback tras inactividad de `idle_seconds`
     """
 
+    # Inicializa el estado interno y las dependencias de `MessageBufferManager`.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `idle_seconds` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, idle_seconds: float = 15.0):
         self.idle_seconds = float(idle_seconds)
         self._convs: Dict[str, ConversationState] = {}
 
+    # Recupera el estado.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `cid` como entrada principal según la firma.
+    # Devuelve un `ConversationState` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_state(self, cid: str) -> ConversationState:
         if cid not in self._convs:
             self._convs[cid] = ConversationState()
         return self._convs[cid]
 
+    # Añade un mensaje al buffer y reinicia el temporizador.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `process_callback` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_id`, `text` como datos de contexto o entrada de la operación.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def add_message(
         self,
         conversation_id: str,
@@ -62,6 +74,10 @@ class MessageBufferManager:
 
         log.info(f"🧩 Buffer actualizado ({len(state.messages)} msgs) para {conversation_id}")
 
+    # Espera `idle_seconds`. Si no llegan más mensajes, procesa el bloque.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `process_callback` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_id`, `version` como datos de contexto o entrada de la operación.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def _start_timer(
         self,
         conversation_id: str,
@@ -93,6 +109,10 @@ class MessageBufferManager:
         except asyncio.CancelledError:
             return  # Timer cancelado, llega mensaje nuevo
 
+    # Inicia el procesamiento del siguiente bloque pendiente si no hay uno en curso.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `process_callback`, `state` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_id` como datos de contexto o entrada de la operación.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _launch_next(
         self,
         conversation_id: str,
@@ -113,6 +133,10 @@ class MessageBufferManager:
             self._run_block(conversation_id, combined, version, process_callback)
         )
 
+    # Ejecuta el callback y, al terminar, lanza el siguiente bloque si existe.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `process_callback` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_id`, `combined`, `version` como datos de contexto o entrada de la operación.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def _run_block(
         self,
         conversation_id: str,
@@ -135,6 +159,10 @@ class MessageBufferManager:
                 state.processing_task = None
                 self._launch_next(conversation_id, process_callback, state)
 
+    # Une mensajes en un bloque estructurado y legible para el modelo.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `messages` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _combine_messages(self, messages: List[str]) -> str:
         """
         Une mensajes en un bloque estructurado y legible para el modelo.
@@ -153,6 +181,10 @@ class MessageBufferManager:
         log.info(f"🧠 Combinando {len(cleaned)} mensajes:\n{combined}")
         return combined
 
+    # Descarta mensajes pendientes de una conversación.
+    # Se usa dentro de `MessageBufferManager` en el flujo de bufferización y debounce de mensajes entrantes.
+    # Recibe `conversation_id`, `cancel_processing` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def discard_conversation(self, conversation_id: str, cancel_processing: bool = False) -> bool:
         """
         Descarta mensajes pendientes de una conversación.

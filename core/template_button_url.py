@@ -15,6 +15,10 @@ BUTTON_BASE_URL_PARAM_KEYS: Tuple[str, ...] = (
 )
 
 
+# Extrae la URL de detalle de folio.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_folio_details_url(params: Dict[str, Any] | None) -> Optional[str]:
     if not params:
         return None
@@ -25,6 +29,10 @@ def extract_folio_details_url(params: Dict[str, Any] | None) -> Optional[str]:
     return None
 
 
+# Extrae la URL base de botones.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_button_base_url(params: Dict[str, Any] | None) -> Optional[str]:
     if not params:
         return None
@@ -35,6 +43,10 @@ def extract_button_base_url(params: Dict[str, Any] | None) -> Optional[str]:
     return None
 
 
+# Sanea base URL.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def sanitize_base_url(value: Any) -> Optional[str]:
     raw = str(value or "").strip()
     if not raw:
@@ -46,6 +58,10 @@ def sanitize_base_url(value: Any) -> Optional[str]:
     return raw
 
 
+# Prioriza base URL explicita de request y luego fallback en:.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `request_base_url`, `params`, `template_components` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def resolve_button_base_url(
     *,
     request_base_url: Optional[str] = None,
@@ -64,6 +80,10 @@ def resolve_button_base_url(
     )
 
 
+# Construye la URL de detalle de folio.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `base_url`, `dynamic_part` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def build_folio_details_url(base_url: Optional[str], dynamic_part: Optional[str]) -> Optional[str]:
     dynamic = str(dynamic_part or "").strip()
     if not dynamic:
@@ -75,6 +95,10 @@ def build_folio_details_url(base_url: Optional[str], dynamic_part: Optional[str]
     return f"{base_url}{dynamic.lstrip('/')}"
 
 
+# Meta URL buttons con {{1}} esperan la parte dinamica, no la URL completa.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_value`, `base_url` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def to_folio_dynamic_part(raw_value: Optional[str], base_url: Optional[str]) -> Optional[str]:
     """
     Meta URL buttons con {{1}} esperan la parte dinamica, no la URL completa.
@@ -100,6 +124,10 @@ def to_folio_dynamic_part(raw_value: Optional[str], base_url: Optional[str]) -> 
     return raw.lstrip("/") or None
 
 
+# Extrae URL botón indexes.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `components` como entrada principal según la firma.
+# Devuelve un `list[int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_url_button_indexes(components: Any) -> list[int]:
     if not isinstance(components, list):
         return []
@@ -120,6 +148,10 @@ def extract_url_button_indexes(components: Any) -> list[int]:
     return indexes
 
 
+# Extrae base URL fija desde components de Meta.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `components` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_button_base_url_from_components(components: Any) -> Optional[str]:
     """
     Extrae base URL fija desde components de Meta.
@@ -161,6 +193,10 @@ def extract_button_base_url_from_components(components: Any) -> Optional[str]:
     return None
 
 
+# Limpia URL control parámetros.
+# Se usa en el flujo de resolución de URLs dinámicas para botones de plantillas para preparar datos, validaciones o decisiones previas.
+# Recibe `params` como entrada principal según la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def strip_url_control_params(params: Dict[str, Any] | None) -> Dict[str, Any]:
     clean = dict(params or {})
     for key in FOLIO_URL_PARAM_KEYS + BUTTON_BASE_URL_PARAM_KEYS:

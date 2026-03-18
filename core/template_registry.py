@@ -16,6 +16,10 @@ from typing import Any, Dict, Iterable, List, Optional
 log = logging.getLogger("TemplateRegistry")
 
 
+# Normaliza el código de idioma.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `lang` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _norm_lang(lang: Optional[str]) -> str:
     """Normaliza el código de idioma."""
     if not lang:
@@ -23,11 +27,19 @@ def _norm_lang(lang: Optional[str]) -> str:
     return str(lang).split("-")[0].strip().lower() or "es"
 
 
+# Normaliza códigos/ids de plantilla.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `code` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _norm_code(code: Optional[str]) -> str:
     """Normaliza códigos/ids de plantilla."""
     return (code or "").strip().lower()
 
 
+# Código lógico para resolver plantillas aunque en BD el `code` venga como.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_code`, `language`, `whatsapp_name` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _canonical_template_code(
     raw_code: Optional[str],
     language: Optional[str],
@@ -53,6 +65,10 @@ def _canonical_template_code(
     return code
 
 
+# Resuelve la instancia.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `instance_id` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _norm_instance(instance_id: Optional[str]) -> Optional[str]:
     if instance_id is None:
         return None
@@ -60,10 +76,18 @@ def _norm_instance(instance_id: Optional[str]) -> Optional[str]:
     return clean.upper() or None
 
 
+# Resuelve parámetro clave.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `key` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _norm_param_key(key: Any) -> str:
     return re.sub(r"\s+", "_", str(key or "").strip())
 
 
+# Detecta errores de columna inexistente en Supabase/Postgrest.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `exc`, `column` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_missing_column_error(exc: Exception, column: str) -> bool:
     """
     Detecta errores de columna inexistente en Supabase/Postgrest.
@@ -86,6 +110,10 @@ def _is_missing_column_error(exc: Exception, column: str) -> bool:
     return column in text and "does not exist" in text
 
 
+# Extrae metadatos de parámetros (labels/ayudas) desde la fila de Supabase.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `data` como entrada principal según la firma.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_param_hints(data: Dict[str, Any]) -> Dict[str, str]:
     """
     Extrae metadatos de parámetros (labels/ayudas) desde la fila de Supabase.
@@ -103,6 +131,10 @@ def _extract_param_hints(data: Dict[str, Any]) -> Dict[str, str]:
 
     hints: Dict[str, str] = {}
 
+    # Selecciona la etiqueta.
+    # Se invoca dentro de `_extract_param_hints` para encapsular una parte local de carga y resolución de plantillas de WhatsApp.
+    # Recibe `val` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _pick_label(val: Any) -> Optional[str]:
         if isinstance(val, str):
             return val.strip() or None
@@ -155,6 +187,10 @@ def _extract_param_hints(data: Dict[str, Any]) -> Dict[str, str]:
     return hints
 
 
+# Intenta extraer el texto base de la plantilla desde la fila de Supabase.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp para preparar datos, validaciones o decisiones previas.
+# Recibe `data` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_template_text(data: Dict[str, Any]) -> Optional[str]:
     """
     Intenta extraer el texto base de la plantilla desde la fila de Supabase.
@@ -208,6 +244,10 @@ class TemplateDefinition:
     content: Optional[str] = None
     components: List[Dict[str, Any]] = field(default_factory=list)
 
+    # Resuelve el clave.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def key(self) -> str:
         return TemplateRegistry.build_key(
             instance_id=self.instance_id,
@@ -215,6 +255,10 @@ class TemplateDefinition:
             language=self.language,
         )
 
+    # Convierte parámetros nominales en una lista ordinal en el orden definido.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `provided` como entrada principal según la firma.
+    # Devuelve un `List[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def to_ordinal_params(self, provided: Dict[str, Any] | None) -> List[str]:
         """
         Convierte parámetros nominales en una lista ordinal en el orden definido.
@@ -236,6 +280,10 @@ class TemplateDefinition:
 
         return ordered
 
+    # Resuelve el dict.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `data` como entrada principal según la firma.
+    # Devuelve un `"TemplateDefinition"` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @classmethod
     def from_dict(cls, data: Dict[str, Any]) -> "TemplateDefinition":
         hints = _extract_param_hints(data)
@@ -264,10 +312,18 @@ class TemplateDefinition:
             components=list(data.get("components") or []) if isinstance(data.get("components"), list) else [],
         )
 
+    # Recupera parámetro etiqueta.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `name` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def get_param_label(self, name: str) -> str:
         key = _norm_param_key(name)
         return self.parameter_hints.get(key) or name
 
+    # Devuelve la lista de parámetros listos para Meta:.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `provided` como entrada principal según la firma.
+    # Devuelve un `List[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def build_meta_parameters(self, provided: Dict[str, Any] | None) -> List[Any]:
         """
         Devuelve la lista de parámetros listos para Meta:
@@ -304,6 +360,10 @@ class TemplateDefinition:
             # Para ORDINAL mantenemos compatibilidad
         return self.to_ordinal_params(provided)
 
+    # Rellena el texto base de la plantilla usando los parametros disponibles.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `provided` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def render_content(self, provided: Dict[str, Any] | None) -> Optional[str]:
         """
         Rellena el texto base de la plantilla usando los parametros disponibles.
@@ -316,6 +376,10 @@ class TemplateDefinition:
         text = base
         provided = provided or {}
 
+        # Sustituye el replace.
+        # Se invoca dentro de `render_content` para encapsular una parte local de carga y resolución de plantillas de WhatsApp.
+        # Recibe `token`, `value` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
         def _replace(token: str, value: Any) -> None:
             nonlocal text
             pattern = r"\{\{\s*" + re.escape(token) + r"\s*\}\}"
@@ -335,6 +399,10 @@ class TemplateDefinition:
 
         return text
 
+    # Genera un resumen minimo a partir de parametros si no hay content.
+    # Se usa dentro de `TemplateDefinition` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `provided` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def render_fallback_summary(self, provided: Dict[str, Any] | None) -> Optional[str]:
         """
         Genera un resumen minimo a partir de parametros si no hay content.
@@ -365,30 +433,47 @@ class TemplateDefinition:
 class TemplateRegistry:
     """Registro en memoria de plantillas (fuente Supabase)."""
 
+    # Inicializa el estado interno y las dependencias de `TemplateRegistry`.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `templates` como entrada principal según la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, templates: Iterable[TemplateDefinition] | None = None) -> None:
         self._templates: Dict[str, TemplateDefinition] = {}
         for tpl in templates or []:
             self.register(tpl)
 
-    # ------------------------------------------------------------------
+    # Construye el clave.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `instance_id`, `template_code`, `language` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def build_key(instance_id: Optional[str], template_code: str, language: str | None) -> str:
         return f"{_norm_instance(instance_id) or '*'}|{_norm_code(template_code)}|{_norm_lang(language)}"
 
-    # ------------------------------------------------------------------
+    # Resuelve el supabase.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `supabase_client` como dependencias o servicios compartidos inyectados desde otras capas, y `table` como datos de contexto o entrada de la operación.
+    # Devuelve un `"TemplateRegistry"` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     @classmethod
     def from_supabase(cls, supabase_client, table: str = "whatsapp_templates") -> "TemplateRegistry":
         registry = cls()
         registry.load_supabase(supabase_client, table=table)
         return registry
 
-    # ------------------------------------------------------------------
+    # Carga definiciones desde Supabase.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `supabase_client` como dependencias o servicios compartidos inyectados desde otras capas, y `table` como datos de contexto o entrada de la operación.
+    # Devuelve un `None` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos.
     def load_supabase(self, supabase_client, table: str = "whatsapp_templates") -> None:
         """Carga definiciones desde Supabase."""
         if not supabase_client:
             log.warning("TemplateRegistry: supabase_client no disponible.")
             return
         try:
+            # Resuelve la consulta de la operación.
+            # Se invoca dentro de `load_supabase` para encapsular una parte local de carga y resolución de plantillas de WhatsApp.
+            # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+            # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede consultar o escribir en base de datos.
             def _base_query():
                 return supabase_client.table(table).select("*").limit(1000)
 
@@ -414,15 +499,20 @@ class TemplateRegistry:
         except Exception as exc:
             log.error("TemplateRegistry: error cargando desde Supabase: %s", exc, exc_info=True)
 
-    # ------------------------------------------------------------------
-    # ------------------------------------------------------------------
+    # Registra el register.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `template` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def register(self, template: TemplateDefinition) -> None:
         if not template.active:
             return
         key = template.key()
         self._templates[key] = template
 
-    # ------------------------------------------------------------------
+    # Busca plantilla por hotel + código + idioma con varios fallbacks.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # Recibe `instance_id`, `template_code`, `language` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[TemplateDefinition]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def resolve(self, instance_id: Optional[str], template_code: str, language: str | None = None) -> Optional[TemplateDefinition]:
         """Busca plantilla por hotel + código + idioma con varios fallbacks."""
         lang = _norm_lang(language)
@@ -450,6 +540,9 @@ class TemplateRegistry:
                 return tpl
         return None
 
-    # ------------------------------------------------------------------
+    # Lista el plantillas.
+    # Se usa dentro de `TemplateRegistry` en el flujo de carga y resolución de plantillas de WhatsApp.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `List[TemplateDefinition]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def list_templates(self) -> List[TemplateDefinition]:
         return list(self._templates.values())

@@ -25,6 +25,10 @@ DEFAULT_TZ = "Europe/Madrid"
 DEFAULT_LOCALE = "es_ES.UTF-8"
 
 
+# Devuelve una cadena con la fecha y hora actuales en formato natural y legible por el LLM.
+# Se usa en el flujo de inyección de contexto temporal en prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `timezone` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_time_context(timezone: str = DEFAULT_TZ) -> str:
     """
     Devuelve una cadena con la fecha y hora actuales en formato natural y legible por el LLM.
@@ -53,6 +57,10 @@ def get_time_context(timezone: str = DEFAULT_TZ) -> str:
         return "La fecha y hora actuales no pudieron obtenerse en este momento."
 
 
+# Inyecta el contexto temporal al principio de un prompt existente.
+# Se usa en el flujo de inyección de contexto temporal en prompts para preparar datos, validaciones o decisiones previas.
+# Recibe `base_prompt`, `timezone` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def inject_time_context(base_prompt: str, timezone: str = DEFAULT_TZ) -> str:
     """
     Inyecta el contexto temporal al principio de un prompt existente.

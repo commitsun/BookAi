@@ -11,6 +11,10 @@ from tools.interno_tool import ESCALATIONS_STORE
 log = logging.getLogger("MessageUtils")
 
 
+# Recupera metadatos de una escalación desde memoria o DB.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id` como entrada principal según la firma.
+# Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def get_escalation_metadata(escalation_id: str) -> dict:
     """Recupera metadatos de una escalación desde memoria o DB."""
     if not escalation_id:
@@ -41,6 +45,10 @@ def get_escalation_metadata(escalation_id: str) -> dict:
     return {}
 
 
+# Devuelve solo el borrador limpio generado por el InternoAgent,.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def extract_clean_draft(text: str) -> str:
     """
     Devuelve solo el borrador limpio generado por el InternoAgent,
@@ -101,6 +109,10 @@ def extract_clean_draft(text: str) -> str:
     return result or text
 
 
+# Devuelve un mensaje corto y limpio para WhatsApp.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `msg` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def sanitize_wa_message(msg: str) -> str:
     """
     Devuelve un mensaje corto y limpio para WhatsApp.
@@ -115,6 +127,10 @@ def sanitize_wa_message(msg: str) -> str:
     return compact.strip().strip('\"“”')
 
 
+# Aplica un formato ligero y conversacional a las respuestas del Superintendente.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def format_superintendente_message(text: str) -> str:
     """Aplica un formato ligero y conversacional a las respuestas del Superintendente."""
     if not text:
@@ -139,6 +155,10 @@ def format_superintendente_message(text: str) -> str:
     return "\n".join(compact).strip()
 
 
+# Determina si parecido a new instruction cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def looks_like_new_instruction(text: str) -> bool:
     if not text:
         return False
@@ -175,6 +195,10 @@ def looks_like_new_instruction(text: str) -> bool:
     return any(term in lowered for term in action_terms)
 
 
+# Previsualización consistente para propuestas de KB.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `topic`, `category`, `content` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def build_kb_preview(topic: str, category: str, content: str) -> str:
     """Previsualización consistente para propuestas de KB."""
     return (
@@ -188,6 +212,10 @@ def build_kb_preview(topic: str, category: str, content: str) -> str:
     )
 
 
+# Extrae campos básicos de KB desde un texto de respuesta.
+# Se usa en el flujo de sanitización de mensajes y utilidades de borradores para preparar datos, validaciones o decisiones previas.
+# Recibe `response` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name` como datos de contexto o entrada de la operación.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
 def extract_kb_fields(response: str, hotel_name: str):
     """Extrae campos básicos de KB desde un texto de respuesta."""
     topic = "Información"

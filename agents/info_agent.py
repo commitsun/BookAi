@@ -32,6 +32,10 @@ log = logging.getLogger("InfoAgent")
 ESCALATION_TOKEN = "ESCALATION_REQUIRED"
 
 
+# Consulta la herramienta `google` expuesta por el MCP para InfoAgent.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas para preparar datos, validaciones o decisiones previas.
+# Recibe `query` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 async def _invoke_google_search(query: str) -> Optional[str]:
     """
     Consulta la herramienta `google` expuesta por el MCP para InfoAgent.
@@ -79,6 +83,10 @@ class GoogleSearchTool(BaseTool):
     )
     args_schema: ClassVar[type[BaseModel]] = GoogleSearchInput
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `GoogleSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `query` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _arun(self, query: str) -> str:
         query = (query or "").strip()
         if not query:
@@ -94,6 +102,10 @@ class GoogleSearchTool(BaseTool):
             log.error("Error en GoogleSearchTool: %s", exc, exc_info=True)
             return f"Error buscando en Google: {exc}"
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `GoogleSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `query` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _run(self, query: str) -> str:
         try:
             loop = asyncio.get_event_loop()
@@ -122,6 +134,10 @@ class KBSearchTool(BaseTool):
     memory_manager: Optional[object] = None
     chat_id: str = ""
 
+    # Elimina duplicados de el chunks.
+    # Se usa dentro de `KBSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `chunks` como entrada principal según la firma.
+    # Devuelve un `List[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _dedupe_chunks(chunks: List[str]) -> List[str]:
         seen = set()
@@ -137,6 +153,10 @@ class KBSearchTool(BaseTool):
             out.append(chunk.strip())
         return out
 
+    # Selecciona top indices.
+    # Se usa dentro de `KBSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `raw_text`, `max_idx`, `top_k` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `List[int]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _pick_top_indices(raw_text: str, max_idx: int, top_k: int) -> List[int]:
         text = (raw_text or "").strip()
@@ -171,6 +191,10 @@ class KBSearchTool(BaseTool):
 
         return list(range(min(top_k, max_idx)))
 
+    # Resuelve el chunks.
+    # Se usa dentro de `KBSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `question`, `chunks`, `top_k` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `List[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _rerank_chunks(self, question: str, chunks: List[str], top_k: int = 3) -> List[str]:
         clean_chunks = self._dedupe_chunks(chunks)
         if not clean_chunks:
@@ -204,6 +228,10 @@ class KBSearchTool(BaseTool):
             log.debug("KBSearchTool: rerank fallback por error: %s", exc)
             return clean_chunks[:top_k]
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `KBSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `query` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _arun(self, query: str) -> Optional[str]:
         question = (query or "").strip()
         if not question:
@@ -217,6 +245,10 @@ class KBSearchTool(BaseTool):
             .replace("check in", "checkin")
         )
 
+        # Normaliza base de conocimiento nombre.
+        # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+        # Recibe `value` como entrada principal según la firma.
+        # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
             if not value:
                 return None
@@ -224,6 +256,10 @@ class KBSearchTool(BaseTool):
             cleaned = cleaned.replace("ponferrrada", "ponferrada")
             return cleaned or None
 
+        # Extrae focus term.
+        # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+        # Recibe `text` como entrada principal según la firma.
+        # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _extract_focus_term(text: str) -> Optional[str]:
             normalized = (
                 text.lower()
@@ -243,10 +279,18 @@ class KBSearchTool(BaseTool):
             focus = [w for w in words if w not in stop]
             return focus[-1] if focus else words[-1]
 
+        # Resuelve el previsualización.
+        # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+        # Recibe `text`, `max_len` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _preview(text: str, max_len: int = 240) -> str:
             one_line = " ".join((text or "").split())
             return (one_line[:max_len] + "…") if len(one_line) > max_len else one_line
 
+        # Elimina duplicados de keep order.
+        # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+        # Recibe `items` como entrada principal según la firma.
+        # Devuelve un `List[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _dedupe_keep_order(items: List[str]) -> List[str]:
             seen = set()
             out: List[str] = []
@@ -319,6 +363,10 @@ class KBSearchTool(BaseTool):
 
             base_payload = payload.copy()
 
+            # Determina si el invalid cumple la condición necesaria en este punto del flujo.
+            # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+            # Recibe `text` como entrada principal según la firma.
+            # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
             def _is_invalid(text: str) -> Tuple[bool, str]:
                 if not text or len(text) < 10:
                     return True, "empty_or_short"
@@ -345,6 +393,10 @@ class KBSearchTool(BaseTool):
                     return True, "no_info_pattern"
                 return False, "ok"
 
+            # Determina si parecido a no answer cumple la condición necesaria en este punto del flujo.
+            # Se invoca dentro de `_arun` para encapsular una parte local de subagente de base de conocimiento, Google y verificación de respuestas.
+            # Recibe `text` como entrada principal según la firma.
+            # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
             def _looks_like_no_answer(text: str) -> bool:
                 lowered = (text or "").lower()
                 markers = [
@@ -418,6 +470,10 @@ class KBSearchTool(BaseTool):
             log.error("KBSearchTool error: %s", exc, exc_info=True)
             return None
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `KBSearchTool` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `query` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _run(self, query: str) -> Optional[str]:
         try:
             loop = asyncio.get_event_loop()
@@ -430,6 +486,10 @@ class KBSearchTool(BaseTool):
 class InfoAgent:
     """Agente factual basado en AgentExecutor con múltiples herramientas."""
 
+    # Inicializa el estado interno y las dependencias de `InfoAgent`.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede activar tools o agentes.
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
         self.llm = ModelConfig.get_llm(ModelTier.SUBAGENT)
@@ -443,6 +503,10 @@ class InfoAgent:
 
         log.info("InfoAgent v5 inicializado con AgentExecutor y herramientas múltiples.")
 
+    # Orquesta la ejecución principal de `InfoAgent` para la consulta o evento actual.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `user_input`, `chat_id`, `chat_history`, `context_window` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede activar tools o agentes.
     async def ainvoke(
         self,
         user_input: str,
@@ -499,6 +563,10 @@ class InfoAgent:
 
         return ESCALATION_TOKEN
 
+    # Orquesta la ejecución principal de `InfoAgent` para la consulta o evento actual.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `pregunta`, `chat_id`, `chat_history`, `_` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def handle(self, pregunta: str, chat_id: str, chat_history=None, **_) -> str:
         return await self.ainvoke(
             user_input=pregunta,
@@ -506,6 +574,10 @@ class InfoAgent:
             chat_history=chat_history,
         )
 
+    # Determina si el escalation cumple la condición necesaria en este punto del flujo.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     @staticmethod
     def _needs_escalation(text: str) -> bool:
         lowered = text.lower()
@@ -519,6 +591,10 @@ class InfoAgent:
         ]
         return any(token in lowered for token in triggers)
 
+    # Resuelve needs location hint.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _google_needs_location_hint(text: str) -> bool:
         lowered = (text or "").lower()
@@ -531,6 +607,10 @@ class InfoAgent:
         ]
         return any(token in lowered for token in hints)
 
+    # Construye la consulta de contextual Google.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `chat_id`, `user_input` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_contextual_google_query(self, chat_id: str, user_input: str) -> str:
         base = (user_input or "").strip()
         if not base or not self.memory_manager or not chat_id:
@@ -550,6 +630,10 @@ class InfoAgent:
         except Exception:
             return base
 
+    # Reduce to question scope.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `question`, `source_text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _reduce_to_question_scope(self, question: str, source_text: str) -> Optional[str]:
         q = (question or "").strip()
         src = (source_text or "").strip()
@@ -600,6 +684,10 @@ class InfoAgent:
             log.warning("InfoAgent reducer: fallo al reducir respuesta: %s", exc)
             return None
 
+    # Verifica answer supported.
+    # Se usa dentro de `InfoAgent` en el flujo de subagente de base de conocimiento, Google y verificación de respuestas.
+    # Recibe `question`, `answer`, `source_text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _verify_answer_supported(self, question: str, answer: str, source_text: str) -> bool:
         q = (question or "").strip()
         a = (answer or "").strip()
@@ -638,6 +726,10 @@ class InfoAgent:
             return False
 
 
+# Carga el prompt de info.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _load_info_prompt() -> Optional[str]:
     try:
         return load_prompt("info_hotel_prompt.txt").strip()

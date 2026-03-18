@@ -24,6 +24,10 @@ LANG_ALIASES = {
     "ca": {"catalan", "catalán"},
 }
 
+# Normaliza códigos ISO de idioma.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `code` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_iso_lang_code(code: str) -> Optional[str]:
     """
     Normaliza códigos ISO de idioma.
@@ -36,6 +40,10 @@ def _normalize_iso_lang_code(code: str) -> Optional[str]:
         return value
     return None
 
+# Lista configurable de tokens de acuse/saludo que no deben cambiar el idioma.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 @lru_cache(maxsize=1)
 def _ack_tokens() -> set[str]:
     """
@@ -76,6 +84,10 @@ def _ack_tokens() -> set[str]:
     }
 
 
+# Normaliza un acuse breve para compararlo con la lista de tokens.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_ack(text: str) -> str:
     """
     Normaliza un acuse breve para compararlo con la lista de tokens.
@@ -92,6 +104,10 @@ def _normalize_ack(text: str) -> str:
     return txt
 
 
+# Heurística rápida para saludos cortos que langdetect suele confundir.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _short_greeting_lang(text: str) -> Optional[str]:
     """
     Heurística rápida para saludos cortos que langdetect suele confundir.
@@ -113,6 +129,10 @@ def _short_greeting_lang(text: str) -> Optional[str]:
     return greetings.get(token)
 
 
+# Intenta detectar idioma de forma rápida sin LLM.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `Optional[Tuple[str, float]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _langdetect_guess(text: str) -> Optional[Tuple[str, float]]:
     """
     Intenta detectar idioma de forma rápida sin LLM.
@@ -135,6 +155,10 @@ def _langdetect_guess(text: str) -> Optional[Tuple[str, float]]:
         return None
 
 
+# Detecta si el usuario pide explícitamente hablar en un idioma concreto.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _explicit_language_request(text: str) -> Optional[str]:
     """
     Detecta si el usuario pide explícitamente hablar en un idioma concreto.
@@ -175,6 +199,10 @@ def _explicit_language_request(text: str) -> Optional[str]:
     return None
 
 
+# Detecta fragmentos muy cortos y ambiguos (p.ej. nombres de hotel/ciudad).
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_short_ambiguous_snippet(text: str) -> bool:
     """
     Detecta fragmentos muy cortos y ambiguos (p.ej. nombres de hotel/ciudad)
@@ -195,6 +223,10 @@ def _is_short_ambiguous_snippet(text: str) -> bool:
     return True
 
 
+# Detecta mensajes cortos de seguimiento (fechas, cantidades, datos sueltos).
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_low_information_followup(text: str) -> bool:
     """
     Detecta mensajes cortos de seguimiento (fechas, cantidades, datos sueltos)
@@ -215,6 +247,10 @@ def _is_low_information_followup(text: str) -> bool:
     return has_digit or len(words) <= 2
 
 
+# Detecta señales fuertes de español para evitar quedarse anclado.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _has_strong_spanish_signal(text: str) -> bool:
     """
     Detecta señales fuertes de español para evitar quedarse anclado
@@ -244,6 +280,10 @@ def _has_strong_spanish_signal(text: str) -> bool:
     return hits >= 2
 
 
+# Detecta señales fuertes de inglés para evitar arrastre del idioma previo.
+# Se usa en el flujo de detección, normalización y reescritura de idioma para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _has_strong_english_signal(text: str) -> bool:
     """
     Detecta señales fuertes de inglés para evitar arrastre del idioma previo.
@@ -276,9 +316,17 @@ class LanguageManager:
     Gestión de idioma + tono diplomático hacia el huésped.
     """
 
+    # Inicializa el estado interno y las dependencias de `LanguageManager`.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `model`, `temperature` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede realizar llamadas externas o a modelos.
     def __init__(self, model: Optional[str] = None, temperature: float = 0.0):
         self.llm = ChatOpenAI(model=model or OPENAI_MODEL, temperature=temperature)
 
+    # Normaliza el confidence.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `value`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _normalize_confidence(value: float, default: float = 0.0) -> float:
         try:
@@ -291,6 +339,10 @@ class LanguageManager:
             return 1.0
         return confidence
 
+    # Resuelve detect idioma code.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `text`, `fallback` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def _llm_detect_lang_code(self, text: str, fallback: str = "es") -> str:
         prompt = [
             {
@@ -310,6 +362,10 @@ class LanguageManager:
         except Exception:
             return fallback or "es"
 
+    # Detecta la idioma.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `text`, `prev_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @lru_cache(maxsize=4096)
     def detect_language(self, text: str, prev_lang: Optional[str] = None) -> str:
         raw_text = (text or "").strip()
@@ -423,6 +479,10 @@ class LanguageManager:
             print(f"⚠️ Error detectando idioma: {e}")
             return base_lang
 
+    # Detecta idioma reutilizando `detect_language` (incluye fallback LLM) y.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `text`, `prev_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Tuple[str, float]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def detect_language_with_confidence(self, text: str, prev_lang: Optional[str] = None) -> Tuple[str, float]:
         """
         Detecta idioma reutilizando `detect_language` (incluye fallback LLM) y
@@ -461,6 +521,10 @@ class LanguageManager:
 
         return detected, 0.8
 
+    # Asegura la idioma.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `text`, `lang_code` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def ensure_language(self, text: str, lang_code: str) -> str:
         if not text:
             return text
@@ -491,6 +555,10 @@ class LanguageManager:
             print(f"⚠️ Error forzando idioma: {e}")
             return text
 
+    # Traduce if needed.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `text`, `lang_from`, `lang_to` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def translate_if_needed(self, text: str, lang_from: str, lang_to: str) -> str:
         lf = (lang_from or "").strip().lower()
         lt = (lang_to or "").strip().lower()
@@ -498,6 +566,10 @@ class LanguageManager:
             return text
         return self.ensure_language(text, lt or "es")
 
+    # Resuelve el phrase.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `meaning`, `lang_code` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def short_phrase(self, meaning: str, lang_code: str) -> str:
         lang_code = (lang_code or "es").lower().strip()
         prompt = [
@@ -524,6 +596,10 @@ class LanguageManager:
             print(f"⚠️ Error generando frase corta: {e}")
             return meaning
 
+    # Pulido diplomático:.
+    # Se usa dentro de `LanguageManager` en el flujo de detección, normalización y reescritura de idioma.
+    # Recibe `raw_message`, `guest_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     def polish_for_guest(self, raw_message: str, guest_lang: str) -> str:
         """
         Pulido diplomático:

@@ -26,23 +26,38 @@ class MemoryManager:
     - 🆕 Añade soporte para flags de estado (ej. escalación activa)
     """
 
+    # Inicializa el estado interno y las dependencias de `MemoryManager`.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `max_runtime_messages`, `db_history_days` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, max_runtime_messages: int = 40, db_history_days: int = 7):
         self.runtime_memory: Dict[str, List[Dict[str, Any]]] = {}
         self.state_flags: Dict[str, Dict[str, Any]] = {}  # 🆕 flags de sesión por chat_id
         self.max_runtime_messages = max_runtime_messages
         self.db_history_days = db_history_days
 
-    # ----------------------------------------------------------------------
+    # Normaliza el ID (quita '+' y espacios).
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _clean_id(self, conversation_id: str) -> str:
         """Normaliza el ID (quita '+' y espacios)."""
         return str(conversation_id).replace("+", "").strip()
 
+    # Normaliza el teléfono.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_phone(self, value: str) -> str:
         digits = re.sub(r"\D", "", value or "")
         if digits:
             return digits
         return str(value or "").replace("+", "").strip()
 
+    # Resuelve los aliases de sala para un chat.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `values` como entrada principal según la firma.
+    # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _chat_room_aliases(self, *values: str) -> list[str]:
         aliases: list[str] = []
         seen: set[str] = set()
@@ -69,6 +84,10 @@ class MemoryManager:
                 aliases.append(current)
         return aliases
 
+    # Resuelve el ID de base de datos conversación.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_db_conversation_id(self, conversation_id: str) -> str:
         guest_number = self.get_flag(conversation_id, "guest_number")
         if guest_number:
@@ -78,6 +97,10 @@ class MemoryManager:
             return self._normalize_phone(tail)
         return self._normalize_phone(str(conversation_id))
 
+    # Resuelve el ID de property.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def _resolve_property_id(self, conversation_id: str):
         prop_id = self.get_flag(conversation_id, "property_id") or self.get_flag(
             conversation_id,
@@ -176,10 +199,18 @@ class MemoryManager:
             return None
         return prop_id
 
+    # Resuelve historial tabla.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_history_table(self, conversation_id: str) -> str:
         table = self.get_flag(conversation_id, "history_table")
         return str(table).strip() if table else "chat_history"
 
+    # Evita persistir duplicados consecutivos muy próximos del mismo mensaje.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `role`, `content`, `channel`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_recent_runtime_duplicate(
         self,
         conversation_id: str,
@@ -209,6 +240,10 @@ class MemoryManager:
         now = datetime.utcnow()
         return (now - last_ts).total_seconds() <= max(1, int(window_seconds))
 
+    # Busca el último property_id en el historial, incluso si no está en memoria.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[int]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def get_last_property_id_hint(self, conversation_id: str, limit: int = 30) -> Optional[int]:
         """
         Busca el último property_id en el historial, incluso si no está en memoria.
@@ -234,6 +269,10 @@ class MemoryManager:
         except Exception:
             return None
 
+    # Devuelve True si hay historial (RAM o DB) para el conversation_id.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede consultar o escribir en base de datos.
     def has_history(self, conversation_id: str, limit: int = 1) -> bool:
         """
         Devuelve True si hay historial (RAM o DB) para el conversation_id.
@@ -254,7 +293,10 @@ class MemoryManager:
         except Exception:
             return False
 
-    # ----------------------------------------------------------------------
+    # Recupera el contexto (mensajes recientes) combinando Supabase + memoria local.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `List[Dict[str, Any]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def get_memory(self, conversation_id: str, limit: int = 40) -> List[Dict[str, Any]]:
         """
         Recupera el contexto (mensajes recientes) combinando Supabase + memoria local.
@@ -297,7 +339,10 @@ class MemoryManager:
             # Fusionar ambos
             combined = db_msgs + local_msgs
 
-            # Ordenar por fecha
+            # Parsea un timestamp tolerando formatos heterogéneos.
+            # Se invoca dentro de `get_memory` para encapsular una parte local de memoria híbrida runtime + Supabase y flags de conversación.
+            # Recibe `msg` como entrada principal según la firma.
+            # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
             def parse_ts(msg):
                 ts = msg.get("created_at")
                 if isinstance(ts, (int, float)):
@@ -353,7 +398,10 @@ class MemoryManager:
             log.error(f"⚠️ Error recuperando contexto de {cid}: {e}", exc_info=True)
             return []
 
-    # ----------------------------------------------------------------------
+    # Guarda un mensaje tanto en memoria local como en Supabase.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `role`, `content`, `escalation_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede consultar o escribir en base de datos.
     def save(
         self,
         conversation_id: str,
@@ -551,7 +599,10 @@ class MemoryManager:
         except Exception as e:
             log.warning(f"⚠️ Error guardando mensaje en Supabase: {e}")
 
-    # ----------------------------------------------------------------------
+    # Guarda un mensaje solo en RAM (sin persistir en Supabase).
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `role`, `content`, `escalation_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def add_runtime_message(
         self,
         conversation_id: str,
@@ -617,7 +668,10 @@ class MemoryManager:
         if len(self.runtime_memory[cid]) > self.max_runtime_messages:
             self.runtime_memory[cid] = self.runtime_memory[cid][-self.max_runtime_messages:]
 
-    # ----------------------------------------------------------------------
+    # Limpia la memoria temporal de una conversación.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id` como entrada principal según la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def clear(self, conversation_id: str) -> None:
         """Limpia la memoria temporal de una conversación."""
         cid = self._clean_id(conversation_id)
@@ -628,7 +682,10 @@ class MemoryManager:
             del self.state_flags[cid]
             log.info(f"🧹 Flags de estado limpiados para {cid}")
 
-    # ----------------------------------------------------------------------
+    # Alias retrocompatible de `save()` usado por agentes antiguos.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `role`, `content` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     def update_memory(self, conversation_id: str, role: str, content: str) -> None:
         """Alias retrocompatible de `save()` usado por agentes antiguos."""
         try:
@@ -636,7 +693,10 @@ class MemoryManager:
         except Exception as e:
             log.warning(f"⚠️ Error en update_memory (alias de save): {e}")
 
-    # ----------------------------------------------------------------------
+    # 🔄 Devuelve la memoria en formato LangChain (HumanMessage / AIMessage / SystemMessage).
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `limit` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     def get_memory_as_messages(self, conversation_id: str, limit: int = 30):
         """
         🔄 Devuelve la memoria en formato LangChain (HumanMessage / AIMessage / SystemMessage).
@@ -672,9 +732,10 @@ class MemoryManager:
             log.error(f"⚠️ Error al convertir memoria a mensajes LangChain: {e}", exc_info=True)
             return []
 
-    # ======================================================================
-    # 🆕  MÉTODOS NUEVOS: Flags persistentes (estado de escalación, etc.)
-    # ======================================================================
+    # Marca un flag de estado (ej. escalación activa).
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `flag_name`, `value` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Puede emitir eventos socket.
     def set_flag(self, conversation_id: str, flag_name: str, value: Any = True) -> None:
         """Marca un flag de estado (ej. escalación activa)."""
         cid = self._clean_id(conversation_id)
@@ -820,11 +881,19 @@ class MemoryManager:
                         del self.state_flags[key]["pending_property_room_chat_list_updated"]
         log.debug(f"🚩 Flag '{flag_name}' = {value} para {cid}")
 
+    # Recupera un flag de estado (None si no existe).
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `flag_name` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def get_flag(self, conversation_id: str, flag_name: str) -> Optional[Any]:
         """Recupera un flag de estado (None si no existe)."""
         cid = self._clean_id(conversation_id)
         return self.state_flags.get(cid, {}).get(flag_name)
 
+    # Elimina un flag de estado.
+    # Se usa dentro de `MemoryManager` en el flujo de memoria híbrida runtime + Supabase y flags de conversación.
+    # Recibe `conversation_id`, `flag_name` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor de negocio; deja aplicado el cambio de estado o registro correspondiente. Sin efectos secundarios relevantes.
     def clear_flag(self, conversation_id: str, flag_name: str) -> None:
         """Elimina un flag de estado."""
         cid = self._clean_id(conversation_id)

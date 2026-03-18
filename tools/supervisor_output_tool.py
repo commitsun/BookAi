@@ -36,9 +36,10 @@ _SUP_INPUT_PROMPT = load_prompt("supervisor_input_prompt.txt") or (
 _llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)  # ✅ Usa modelo y temperatura del .env
 
 
-# =============================================================
-# 🧩 FUNCIÓN PRINCIPAL
-# =============================================================
+# Devuelve EXACTAMENTE:.
+# Se usa en el flujo de tool de auditoría previa de salida para preparar datos, validaciones o decisiones previas.
+# Recibe `mensaje_usuario` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def _run_supervisor_input(mensaje_usuario: str) -> str:
     """
     Devuelve EXACTAMENTE:

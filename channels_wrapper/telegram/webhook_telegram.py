@@ -33,6 +33,10 @@ log.setLevel(logging.INFO)
 AUTO_KB_PROMPT_ENABLED = os.getenv("AUTO_KB_PROMPT_ENABLED", "false").lower() == "true"
 
 
+# Registra el endpoint de Telegram y comparte estado con el pipeline.
+# Se usa en el flujo de webhook de Telegram, borradores y acciones internas para preparar datos, validaciones o decisiones previas.
+# Recibe `app`, `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos.
 def register_telegram_routes(app, state):
     """Registra el endpoint de Telegram y comparte estado con el pipeline."""
     internal_markers = (
@@ -45,6 +49,10 @@ def register_telegram_routes(app, state):
         "[SUPER_SESSION]|",
     )
 
+    # Extrae el primer número estilo teléfono con 6-15 dígitos.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `str | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_phone(text: str) -> str | None:
         """Extrae el primer número estilo teléfono con 6-15 dígitos."""
         if not text:
@@ -52,6 +60,10 @@ def register_telegram_routes(app, state):
         match = re.search(r"\+?\d{6,15}", text.replace(" ", ""))
         return match.group(0) if match else None
 
+    # Extrae el ID de property.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `int | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_property_id(text: str) -> int | None:
         if not text:
             return None
@@ -63,6 +75,10 @@ def register_telegram_routes(app, state):
         except ValueError:
             return None
 
+    # Confirma solo respuestas cortas (ej. 'ok', 'sí') y evita frases largas.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_short_confirmation(text: str) -> bool:
         """
         Confirma solo respuestas cortas (ej. 'ok', 'sí') y evita frases largas
@@ -77,6 +93,10 @@ def register_telegram_routes(app, state):
 
         return 0 < len(tokens) <= 2 and all(tok in yes_words for tok in tokens)
 
+    # Detecta cancelaciones breves (ej. 'no', 'cancelar') para flujos con confirmación.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_short_rejection(text: str) -> bool:
         """
         Detecta cancelaciones breves (ej. 'no', 'cancelar') para flujos con confirmación.
@@ -90,6 +110,10 @@ def register_telegram_routes(app, state):
 
         return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
 
+    # Confirma envío WA solo con respuestas breves (ej. 'si', 'ok', 'enviar').
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_short_wa_confirmation(text: str) -> bool:
         """
         Confirma envío WA solo con respuestas breves (ej. 'si', 'ok', 'enviar')
@@ -104,6 +128,10 @@ def register_telegram_routes(app, state):
 
         return 0 < len(tokens) <= 2 and all(tok in confirm_words for tok in tokens)
 
+    # Cancela envío WA solo con respuestas breves (ej. 'no', 'cancelar').
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_short_wa_cancel(text: str) -> bool:
         """
         Cancela envío WA solo con respuestas breves (ej. 'no', 'cancelar')
@@ -118,9 +146,17 @@ def register_telegram_routes(app, state):
 
         return 0 < len(tokens) <= 2 and all(tok in cancel_words for tok in tokens)
 
+    # Normaliza el ID de huésped.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `guest_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_guest_id(guest_id: str | None) -> str:
         return str(guest_id or "").replace("+", "").strip()
 
+    # Mantiene el idioma del huésped al reenviar mensajes del superintendente.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `msg`, `guest_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _ensure_guest_language(msg: str, guest_id: str) -> str:
         """Mantiene el idioma del huésped al reenviar mensajes del superintendente."""
         if not msg or not getattr(state, "memory_manager", None):
@@ -181,6 +217,10 @@ def register_telegram_routes(app, state):
         except Exception:
             return msg
 
+    # Asegura owner idioma.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `msg`, `owner_id`, `owner_lang_hint` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _ensure_owner_language(msg: str, owner_id: str, owner_lang_hint: str | None = None) -> str:
         if not msg:
             return msg
@@ -201,6 +241,10 @@ def register_telegram_routes(app, state):
         except Exception:
             return msg
 
+    # Detecta si el encargado está cambiando de tema (ej. mandar mensaje, pedir historial).
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _looks_like_new_instruction(text: str) -> bool:
         """
         Detecta si el encargado está cambiando de tema (ej. mandar mensaje, pedir historial)
@@ -208,6 +252,10 @@ def register_telegram_routes(app, state):
         """
         return looks_like_new_instruction(text) or bool(_extract_phone(text))
 
+    # Recupera y deduplica mensajes del huésped desde DB + runtime.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `guest_id`, `limit`, `property_id`, `channel` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Sin efectos secundarios relevantes.
     async def _collect_conversations(
         guest_id: str,
         limit: int = 10,
@@ -230,6 +278,10 @@ def register_telegram_routes(app, state):
             channel,
         )
 
+        # Parsea un timestamp tolerando formatos heterogéneos.
+        # Se invoca dentro de `_collect_conversations` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+        # Recibe `ts` como entrada principal según la firma.
+        # Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _parse_ts(ts: Any) -> float:
             try:
                 if isinstance(ts, datetime):
@@ -257,6 +309,10 @@ def register_telegram_routes(app, state):
 
         return deduped
 
+    # Devuelve texto listo para enviar (raw o resumen IA).
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `guest_id`, `mode`, `limit`, `property_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _render_history(
         guest_id: str,
         mode: str,
@@ -274,6 +330,10 @@ def register_telegram_routes(app, state):
         if not convos:
             return f"🧠 Historial ({guest_id})\nNo hay mensajes recientes."
 
+        # Resuelve un timestamp tolerando formatos heterogéneos.
+        # Se invoca dentro de `_render_history` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+        # Recibe `ts` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _fmt_ts(ts: Any) -> str:
             try:
                 if isinstance(ts, datetime):
@@ -327,6 +387,10 @@ def register_telegram_routes(app, state):
             log.warning("No se pudo resumir historial: %s", exc)
             return f"🧠 Historial ({len(convos)})\n{formatted}\n\n(No se pudo generar resumen: {exc})"
 
+    # Texto amigable para mostrar borrador de eliminación de KB.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `pending` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_removal_preview(pending: dict) -> str:
         """Texto amigable para mostrar borrador de eliminación de KB."""
         total = int(pending.get("total_matches", 0) or 0)
@@ -335,6 +399,10 @@ def register_telegram_routes(app, state):
         date_from = pending.get("date_from") or ""
         date_to = pending.get("date_to") or ""
 
+        # Sanea previsualización snippet.
+        # Se invoca dentro de `_format_removal_preview` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+        # Recibe `text` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _sanitize_preview_snippet(text: str) -> str:
             if not text:
                 return ""
@@ -371,6 +439,10 @@ def register_telegram_routes(app, state):
 
         return "\n".join(header) + footer
 
+    # Refina la selección:.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `pending`, `manager_text` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _apply_removal_adjustments(pending: dict, manager_text: str) -> dict:
         """
         Refina la selección:
@@ -426,6 +498,10 @@ def register_telegram_routes(app, state):
             "total_matches": len(target_ids),
         }
 
+    # Reescribe un borrador de WhatsApp con instrucciones adicionales.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `base_message`, `adjustments` como datos de contexto o entrada de la operación.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
         """
         Reescribe un borrador de WhatsApp con instrucciones adicionales.
@@ -475,6 +551,10 @@ def register_telegram_routes(app, state):
             log.warning("No se pudo reformular borrador WA: %s", exc)
             return _clean_wa_payload(clean_adj or clean_base)
 
+    # Limpia un borrador de WA para dejar solo el mensaje al huésped,.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `msg` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _clean_wa_payload(msg: str) -> str:
         """
         Limpia un borrador de WA para dejar solo el mensaje al huésped,
@@ -504,6 +584,10 @@ def register_telegram_routes(app, state):
 
         return base.strip()
 
+    # Extrae uno o varios borradores [WA_DRAFT]|guest|msg de una respuesta.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `raw_text` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _parse_wa_drafts(raw_text: str) -> list[dict]:
         """
         Extrae uno o varios borradores [WA_DRAFT]|guest|msg de una respuesta
@@ -529,6 +613,10 @@ def register_telegram_routes(app, state):
             drafts.append({"guest_id": guest_id, "message": msg_clean})
         return drafts
 
+    # Construye el panel de confirmación para uno o varios borradores WA.
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `drafts` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_wa_preview(drafts: list[dict]) -> str:
         """
         Construye el panel de confirmación para uno o varios borradores WA.
@@ -558,6 +646,10 @@ def register_telegram_routes(app, state):
         lines.append("❌ Responde 'no' para descartar.")
         return "\n".join(lines)
 
+    # Extrae guest_id y mensaje desde respuestas tipo "Borrador preparado..." sin marcador [WA_DRAFT].
+    # Se invoca dentro de `register_telegram_routes` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+    # Recibe `raw_text` como entrada principal según la firma.
+    # Devuelve un `tuple[str | None, str | None]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _extract_wa_preview(raw_text: str) -> tuple[str | None, str | None]:
         """
         Extrae guest_id y mensaje desde respuestas tipo "Borrador preparado..." sin marcador [WA_DRAFT].
@@ -587,6 +679,10 @@ def register_telegram_routes(app, state):
         message = "\n".join([ln.strip() for ln in msg_lines]).strip()
         return guest_id, message or None
 
+    # Webhook único para manejar:.
+    # Se usa como punto de entrada HTTP dentro de webhook de Telegram, borradores y acciones internas.
+    # Recibe `request` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos.
     @app.post("/webhook/telegram")
     async def telegram_webhook_handler(request: Request):
         """
@@ -1272,6 +1368,10 @@ def register_telegram_routes(app, state):
             # Solo considera 'original' explícito como modo directo; 'historial' es solo intención
             raw_words = {"original", "completo", "raw", "crudo", "mensajes"}
 
+            # Detecta el mode.
+            # Se invoca dentro de `telegram_webhook_handler` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+            # Recibe `text_l` como entrada principal según la firma.
+            # Devuelve un `str | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _detect_mode(text_l: str) -> str | None:
                 if any(w in text_l for w in summary_words):
                     return "resumen"
@@ -1279,6 +1379,10 @@ def register_telegram_routes(app, state):
                     return "original"
                 return None
 
+            # Determina si revisión intent cumple la condición necesaria en este punto del flujo.
+            # Se invoca dentro de `telegram_webhook_handler` para encapsular una parte local de webhook de Telegram, borradores y acciones internas.
+            # Recibe `text_l` como entrada principal según la firma.
+            # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
             def _is_review_intent(text_l: str) -> bool:
                 return any(term in text_l for term in {"historial", "convers", "mensajes", "chat"})
 

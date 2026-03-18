@@ -52,10 +52,18 @@ class SubAgentTool(BaseTool):
     class Config:
         arbitrary_types_allowed = True
 
+    # Normaliza el texto.
+    # Se usa dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _normalize_text(text: str) -> str:
         return " ".join(str(text or "").strip().lower().split())
 
+    # Normaliza el ID de chat.
+    # Se usa dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Recibe `chat_id` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     @staticmethod
     def _normalize_chat_id(chat_id: str) -> str:
         raw = str(chat_id or "").strip()
@@ -63,6 +71,10 @@ class SubAgentTool(BaseTool):
             raw = raw.split(":")[-1].strip()
         return re.sub(r"\D", "", raw).strip() or raw
 
+    # Comprueba si la consulta de la tool sigue alineada con la pregunta original del usuario.
+    # Se usa dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Recibe `canonical_question`, `tool_query` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Puede realizar llamadas externas o a modelos.
     async def _is_query_aligned(self, canonical_question: str, tool_query: str) -> bool:
         canonical = self._normalize_text(canonical_question)
         query = self._normalize_text(tool_query)
@@ -93,6 +105,10 @@ class SubAgentTool(BaseTool):
             # En caso de fallo, no bloquear el flujo.
             return True
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Recibe `query`, `pregunta`, `mensaje_cliente`, `motivo`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _arun(
         self,
         query: str | None = None,
@@ -234,6 +250,10 @@ class SubAgentTool(BaseTool):
             )
             return f"Error procesando consulta en {self.name}: {exc}"
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Recibe `query`, `pregunta`, `mensaje_cliente`, `motivo`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _run(
         self,
         query: str | None = None,
@@ -267,6 +287,10 @@ class SubAgentTool(BaseTool):
             return f"Error: {exc}"
 
 
+# Factory function para crear sub-agent tools.
+# Se usa en el flujo de wrapper para exponer subagentes como tools para preparar datos, validaciones o decisiones previas.
+# Recibe `sub_agent`, `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `name`, `description`, `chat_id`, `hotel_name` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_sub_agent_tool(
     name: str,
     description: str,

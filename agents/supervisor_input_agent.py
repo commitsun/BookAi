@@ -19,6 +19,10 @@ mcp = FastMCP("SupervisorInputAgent")
 llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
 
+# Compacta el texto.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# Recibe `value`, `max_len` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _collapse_text(value: str, max_len: int = 240) -> str:
     text = re.sub(r"\s+", " ", (value or "")).strip()
     if len(text) <= max_len:
@@ -26,6 +30,10 @@ def _collapse_text(value: str, max_len: int = 240) -> str:
     return text[: max_len - 1].rstrip() + "…"
 
 
+# Intenta rescatar un motivo útil cuando Interno({...}) viene con JSON inválido.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# Recibe `inner` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reason_from_invalid_json(inner: str) -> str:
     """
     Intenta rescatar un motivo útil cuando Interno({...}) viene con JSON inválido.
@@ -51,6 +59,10 @@ def _extract_reason_from_invalid_json(inner: str) -> str:
     return "Mensaje marcado para revisión manual por el supervisor de entrada."
 
 
+# Normaliza el texto.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_text(value: str) -> str:
     text = (value or "").strip().lower()
     if not text:
@@ -61,6 +73,10 @@ def _normalize_text(value: str) -> str:
     return text.strip()
 
 
+# Detecta si la consulta parece una petición operativa segura del hotel.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# Recibe `mensaje_usuario` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
     """
     Permite pasar consultas hoteleras habituales no sensibles.
@@ -111,6 +127,10 @@ def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
     return any(term in text for term in operational_keywords)
 
 
+# Recupera el prompt de la operación.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _get_prompt() -> str:
     prompt = load_prompt("supervisor_input_prompt.txt")
     log.info("📜 Prompt SupervisorInput cargado (%d chars)", len(prompt or ""))
@@ -120,6 +140,10 @@ def _get_prompt() -> str:
 # 🧩 FUNCIÓN PRINCIPAL DE EVALUACIÓN
 # =============================================================
 
+# Evalúa si el mensaje del huésped es apropiado según el prompt.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema para preparar datos, validaciones o decisiones previas.
+# Recibe `mensaje_usuario` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _evaluar_input_func(mensaje_usuario: str) -> str:
     """
     Evalúa si el mensaje del huésped es apropiado según el prompt.
@@ -166,9 +190,17 @@ class SupervisorInputAgent:
     Ahora guarda en memoria cada evaluación realizada.
     """
 
+    # Inicializa el estado interno y las dependencias de `SupervisorInputAgent`.
+    # Se usa dentro de `SupervisorInputAgent` en el flujo de supervisor de entrada antes de pasar mensajes al sistema.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory_manager=None):
         self.memory_manager = memory_manager
 
+    # Devuelve un diccionario con el campo 'estado' como mínimo.
+    # Se usa dentro de `SupervisorInputAgent` en el flujo de supervisor de entrada antes de pasar mensajes al sistema.
+    # Recibe `mensaje_usuario`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def validate(self, mensaje_usuario: str, chat_id: str = None) -> dict:
         """
         Devuelve un diccionario con el campo 'estado' como mínimo.

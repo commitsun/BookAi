@@ -172,6 +172,10 @@ class ConsultaReservaPersonaInput(BaseModel):
     )
 
 
+# Resuelve las variantes de `instance_id`.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _instance_id_variants(raw: Optional[str]) -> list[str]:
     clean = (raw or "").strip()
     if not clean:
@@ -179,6 +183,10 @@ def _instance_id_variants(raw: Optional[str]) -> list[str]:
     return [clean]
 
 
+# Resuelve la tabla de properties activa.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_property_table(memory_manager: Any, chat_id: str) -> str:
     if memory_manager and chat_id:
         try:
@@ -190,15 +198,27 @@ def _resolve_property_table(memory_manager: Any, chat_id: str) -> str:
     return DEFAULT_PROPERTY_TABLE
 
 
+# Limpia el teléfono.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_phone(value: str) -> str:
     return re.sub(r"\D", "", str(value or "")).strip()
 
 
+# Comprueba si el valor recibido tiene forma de teléfono.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_phone(value: str) -> bool:
     digits = _clean_phone(value)
     return len(digits) >= 6
 
 
+# Normaliza el nombre.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_name(value: str) -> str:
     raw = str(value or "").strip().lower()
     if not raw:
@@ -210,6 +230,10 @@ def _normalize_name(value: str) -> str:
     return re.sub(r"\s+", " ", cleaned).strip()
 
 
+# Parsea un timestamp tolerando formatos heterogéneos.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_ts(value: Any) -> float:
     try:
         if isinstance(value, datetime):
@@ -220,6 +244,10 @@ def _parse_ts(value: Any) -> float:
         return 0.0
 
 
+# Divide los tokens de identificación del huésped.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _split_guest_tokens(raw: str) -> list[str]:
     raw = (raw or "").strip()
     if not raw:
@@ -231,6 +259,10 @@ def _split_guest_tokens(raw: str) -> list[str]:
     return [raw]
 
 
+# Resuelve los IDs de huésped.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `raw`, `property_id`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve un `tuple[list[str], list[str], list[dict]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_guest_ids(
     raw: str,
     property_id: Optional[int] = None,
@@ -272,6 +304,10 @@ def _resolve_guest_ids(
     return display, clean_ids, unresolved
 
 
+# Formatea los huéspedes sin resolver.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `unresolved` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_unresolved_guests(unresolved: list[dict]) -> str:
     if not unresolved:
         return ""
@@ -289,6 +325,10 @@ def _format_unresolved_guests(unresolved: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Resuelve huésped ID por nombre.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `name`, `property_id`, `limit`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve un `tuple[Optional[str], list[dict]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _resolve_guest_id_by_name(
     name: str,
     property_id: Optional[int] = None,
@@ -302,6 +342,10 @@ def _resolve_guest_id_by_name(
 
     query_name = _normalize_name(name)
 
+    # Resuelve el score.
+    # Se invoca dentro de `_resolve_guest_id_by_name` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `candidate` como entrada principal según la firma.
+    # Devuelve un `int` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _score(candidate: dict) -> int:
         candidate_name = _normalize_name(candidate.get("client_name"))
         if candidate_name == query_name:
@@ -312,6 +356,10 @@ def _resolve_guest_id_by_name(
             return 2
         return 3
 
+    # Resuelve la coincidencia.
+    # Se invoca dentro de `_resolve_guest_id_by_name` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `query`, `candidate` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _token_match(query: str, candidate: str) -> bool:
         if not query or not candidate:
             return False
@@ -389,6 +437,10 @@ def _resolve_guest_id_by_name(
     except Exception:
         pass
 
+    # Ejecuta la consulta de reserva.
+    # Se invoca dentro de `_resolve_guest_id_by_name` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `filter_property` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _run_reservation_query(filter_property: bool) -> list[dict]:
         query = (
             supabase.table(Settings.CHAT_RESERVATIONS_TABLE)
@@ -448,6 +500,10 @@ def _resolve_guest_id_by_name(
                 return next(iter(phones)), unique
             return None, unique
 
+    # Ejecuta la consulta de la operación.
+    # Se invoca dentro de `_resolve_guest_id_by_name` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `filter_property` como entrada principal según la firma.
+    # Devuelve un `list[dict]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _run_query(filter_property: bool) -> list[dict]:
         query = (
             supabase.table("chat_history")
@@ -515,6 +571,10 @@ def _resolve_guest_id_by_name(
     return None, unique
 
 
+# Fija instancia contexto.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `property_id`, `instance_id` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _set_instance_context(
     memory_manager: Any,
     chat_id: str,
@@ -632,18 +692,34 @@ class SendTemplateDraftInput(BaseModel):
     )
 
 
+# Construye la tool `list_templates` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `template_registry`, `supabase_client` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede consultar o escribir en base de datos, activar tools o agentes.
 def create_list_templates_tool(
     hotel_name: str,
     template_registry: Any = None,
     supabase_client: Any = None,
 ):
+    # Formatea el panel.
+    # Se invoca dentro de `create_list_templates_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `lines` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_panel(lines: list[str]) -> str:
         # Panel sin recuadro extra para evitar duplicados en el chat.
         return "\n".join(lines)
 
+    # Normaliza la idioma.
+    # Se invoca dentro de `create_list_templates_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `lang` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_lang(lang: str) -> str:
         return (lang or "es").split("-")[0].strip().lower() or "es"
 
+    # Lista el plantillas.
+    # Se invoca dentro de `create_list_templates_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `language`, `instance_id`, `refresh` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     async def _list_templates(
         language: str = "es",
         instance_id: Optional[str] = None,
@@ -731,6 +807,10 @@ def create_list_templates_tool(
     )
 
 
+# Construye la tool `send_template` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `channel_manager`, `template_registry`, `supabase_client`, `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede consultar o escribir en base de datos, activar tools o agentes.
 def create_send_template_tool(
     hotel_name: str,
     channel_manager: Any,
@@ -741,17 +821,33 @@ def create_send_template_tool(
 ):
     from core.template_registry import TemplateDefinition
 
+    # Formatea el panel.
+    # Se invoca dentro de `create_send_template_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `lines` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_panel(lines: list[str]) -> str:
         # Panel sin recuadro extra para evitar doble borde.
         return "\n".join(lines)
 
+    # Normaliza la idioma.
+    # Se invoca dentro de `create_send_template_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `lang` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_lang(lang: str) -> str:
         return (lang or "es").split("-")[0].strip().lower() or "es"
 
+    # Formatea parámetro etiqueta.
+    # Se invoca dentro de `create_send_template_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `tpl`, `name` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _format_param_label(tpl: TemplateDefinition, name: str) -> str:
         label = tpl.get_param_label(name) if tpl else name
         return f"{name} ({label})" if label and label != name else name
 
+    # Acepta dict, lista u otras entradas y devuelve dict nominal.
+    # Se invoca dentro de `create_send_template_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `raw_params`, `tpl` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _normalize_parameters(raw_params: Any, tpl: TemplateDefinition) -> dict:
         """Acepta dict, lista u otras entradas y devuelve dict nominal."""
         if raw_params is None:
@@ -773,6 +869,10 @@ def create_send_template_tool(
             return {name: raw_params[idx] for idx, name in enumerate(tpl.parameter_order) if idx < len(raw_params)}
         return {}
 
+    # Envía la plantilla.
+    # Se invoca dentro de `create_send_template_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `template_code`, `guest_ids`, `parameters`, `language`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     async def _send_template(
         template_code: str,
         guest_ids: str,
@@ -924,11 +1024,19 @@ def create_send_template_tool(
     )
 
 
+# Construye la tool `add_to_kb` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `append_func` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_add_to_kb_tool(
     hotel_name: str,
     append_func: Callable[[str, str, str, str], Any],
     llm: Any = None,
 ):
+    # Reformula el borrador con IA para que sea apto para huéspedes y devuelva.
+    # Se invoca dentro de `create_add_to_kb_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `topic`, `category`, `content` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `tuple[str, str, str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _rewrite_with_ai(topic: str, category: str, content: str) -> tuple[str, str, str]:
         """
         Reformula el borrador con IA para que sea apto para huéspedes y devuelva
@@ -983,6 +1091,10 @@ def create_add_to_kb_tool(
             log.warning("No se pudo reformular KB con IA: %s", exc)
             return topic, category, content
 
+    # Genera un borrador pendiente de confirmación para agregar a la KB.
+    # Se invoca dentro de `create_add_to_kb_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `topic`, `content`, `category` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _add_to_kb(topic: str, content: str, category: str = "general") -> str:
         """
         Genera un borrador pendiente de confirmación para agregar a la KB.
@@ -1017,6 +1129,10 @@ def create_add_to_kb_tool(
     )
 
 
+# Construye la tool `send_broadcast` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `channel_manager`, `supabase_client`, `template_registry`, `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede enviar mensajes o plantillas, activar tools o agentes.
 def create_send_broadcast_tool(
     hotel_name: str,
     channel_manager: Any,
@@ -1027,6 +1143,10 @@ def create_send_broadcast_tool(
 ):
     from core.template_registry import TemplateRegistry
 
+    # Envía el broadcast.
+    # Se invoca dentro de `create_send_broadcast_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `template_id`, `guest_ids`, `parameters`, `language`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede enviar mensajes o plantillas.
     async def _send_broadcast(
         template_id: str,
         guest_ids: str,
@@ -1117,6 +1237,10 @@ def create_send_broadcast_tool(
     )
 
 
+# Construye la tool `send_broadcast_checkin` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `channel_manager`, `supabase_client`, `template_registry`, `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos, activar tools o agentes.
 def create_send_broadcast_checkin_tool(
     hotel_name: str,
     channel_manager: Any,
@@ -1125,6 +1249,10 @@ def create_send_broadcast_checkin_tool(
     memory_manager: Any = None,
     chat_id: str = "",
 ):
+    # Envía broadcast check-in.
+    # Se invoca dentro de `create_send_broadcast_checkin_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `template_id`, `date`, `parameters`, `language`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede enviar mensajes o plantillas, realizar llamadas externas o a modelos, activar tools o agentes.
     async def _send_broadcast_checkin(
         template_id: str,
         date: Optional[str] = None,
@@ -1199,9 +1327,17 @@ def create_send_broadcast_checkin_tool(
         if not isinstance(data, list):
             return f"⚠️ No encontré reservas válidas para {target_date}."
 
+        # Normaliza el teléfono.
+        # Se invoca dentro de `_send_broadcast_checkin` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+        # Recibe `raw_phone` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _normalize_phone(raw_phone: Any) -> str:
             return re.sub(r"\D", "", str(raw_phone or ""))
 
+        # Resuelve parámetros desde folio.
+        # Se invoca dentro de `_send_broadcast_checkin` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+        # Recibe `folio`, `hotel_label` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un `dict` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _auto_params_from_folio(folio: dict, hotel_label: str | None) -> dict:
             return {
                 "buyer_name": folio.get("partner_name"),
@@ -1306,7 +1442,15 @@ def create_send_broadcast_checkin_tool(
     )
 
 
+# Construye la tool `review_conversations` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `hotel_name`, `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede consultar o escribir en base de datos, activar tools o agentes.
 def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_id: str = ""):
+    # Resuelve el conversaciones.
+    # Se invoca dentro de `create_review_conversations_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `limit`, `guest_id`, `mode`, `property_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     async def _review_conversations(
         limit: int = 10,
         guest_id: Optional[str] = None,
@@ -1419,6 +1563,10 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
                 )
             combined = (db_msgs or [])
 
+            # Parsea un timestamp tolerando formatos heterogéneos.
+            # Se invoca dentro de `_review_conversations` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+            # Recibe `ts` como entrada principal según la firma.
+            # Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _parse_ts(ts: Any) -> float:
                 try:
                     if isinstance(ts, datetime):
@@ -1451,6 +1599,10 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
             if not convos:
                 return f"🧠 Resumen de conversaciones recientes (0)\nNo hay mensajes recientes para {guest_id}."
 
+            # Resuelve un timestamp tolerando formatos heterogéneos.
+            # Se invoca dentro de `_review_conversations` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+            # Recibe `ts` como entrada principal según la firma.
+            # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _fmt_ts(ts: Any) -> str:
                 try:
                     if isinstance(ts, datetime):
@@ -1575,7 +1727,15 @@ def create_review_conversations_tool(hotel_name: str, memory_manager: Any, chat_
     )
 
 
+# Construye la tool `send_message_main` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `channel_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `encargado_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede enviar mensajes o plantillas, activar tools o agentes.
 def create_send_message_main_tool(encargado_id: str, channel_manager: Any):
+    # Envía mensaje main.
+    # Se invoca dentro de `create_send_message_main_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `message` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede enviar mensajes o plantillas.
     async def _send_message_main(message: str) -> str:
         try:
             if not channel_manager:
@@ -1602,7 +1762,15 @@ def create_send_message_main_tool(encargado_id: str, channel_manager: Any):
     )
 
 
+# Construye la tool `send_whatsapp` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `channel_manager`, `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, chat_id: str = ""):
+    # Genera un borrador para envío por WhatsApp.
+    # Se invoca dentro de `create_send_whatsapp_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `guest_id`, `message`, `property_id`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _send_whatsapp(
         guest_id: str,
         message: str,
@@ -1676,10 +1844,18 @@ def create_send_whatsapp_tool(channel_manager: Any, memory_manager: Any = None, 
     )
 
 
+# Construye la tool `remove_from_kb` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `hotel_name`, `preview_func` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_remove_from_kb_tool(
     hotel_name: str,
     preview_func: Optional[Callable[[str, Optional[str], Optional[str]], Any]] = None,
 ):
+    # Prepara borrador de eliminación en la KB (no borra sin confirmación).
+    # Se invoca dentro de `create_remove_from_kb_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `criterio`, `fecha_inicio`, `fecha_fin` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _remove_from_kb(
         criterio: str,
         fecha_inicio: Optional[str] = None,
@@ -1726,6 +1902,10 @@ def create_remove_from_kb_tool(
     )
 
 
+# Reutiliza la tool 'buscar_token' expuesta por MCP (igual que DispoPreciosAgent).
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `tools` como entrada principal según la firma.
+# Devuelve un `tuple[Optional[str], Optional[str]]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 async def _obtener_token_mcp(tools: list[Any]) -> tuple[Optional[str], Optional[str]]:
     """
     Reutiliza la tool 'buscar_token' expuesta por MCP (igual que DispoPreciosAgent).
@@ -1752,7 +1932,15 @@ async def _obtener_token_mcp(tools: list[Any]) -> tuple[Optional[str], Optional[
         return None, f"Error obteniendo token desde MCP: {exc}"
 
 
+# Construye la tool `consulta_reserva_general` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = ""):
+    # Consulta folios/reservas en un rango de fechas vía MCP → n8n.
+    # Se invoca dentro de `create_consulta_reserva_general_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `fecha_inicio`, `fecha_fin`, `property_id`, `pms_property_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _consulta_reserva_general(
         fecha_inicio: str,
         fecha_fin: str,
@@ -1838,6 +2026,10 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                 log.error("Consulta de reservas devolvió respuesta vacía (raw_response=None)")
                 return "❌ No se pudo obtener respuesta del PMS (respuesta vacía)."
 
+            # Intenta parsear la respuesta a JSON y devuelve el error en claro si no es posible.
+            # Se invoca dentro de `_consulta_reserva_general` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+            # Recibe `data` como entrada principal según la firma.
+            # Devuelve un `tuple[Optional[Any], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _parse_response(data: Any) -> tuple[Optional[Any], Optional[str]]:
                 """
                 Intenta parsear la respuesta a JSON y devuelve el error en claro si no es posible.
@@ -1863,7 +2055,10 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             if parse_err:
                 return f"❌ Error consultando reservas: {parse_err}"
 
-            # 🔎 Filtrar folios para reflejar solo el rango solicitado (tolerancia de 1 día al inicio)
+            # Parsea el date.
+            # Se invoca dentro de `_consulta_reserva_general` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+            # Recibe `val` como entrada principal según la firma.
+            # Devuelve un `Optional[datetime]` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _parse_date(val: Any) -> Optional[datetime]:
                 try:
                     return datetime.fromisoformat(str(val).split("T")[0])
@@ -1889,7 +2084,10 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
             else:
                 filtered = parsed
 
-            # 🔎 Simplificar salida para que el agente formatee panel consistente
+            # Resuelve el date.
+            # Se invoca dentro de `_consulta_reserva_general` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+            # Recibe `val` como entrada principal según la firma.
+            # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
             def _fmt_date(val: Any) -> str:
                 try:
                     return str(val).split("T")[0]
@@ -1928,6 +2126,10 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
                     chat_id=chat_id,
                 )
 
+                # Extrae el contacto.
+                # Se invoca dentro de `_consulta_reserva_general` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+                # Recibe `detail` como entrada principal según la firma.
+                # Devuelve un `tuple[Optional[str], Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
                 def _extract_contact(detail: Any) -> tuple[Optional[str], Optional[str]]:
                     if not isinstance(detail, dict):
                         return None, None
@@ -1998,7 +2200,15 @@ def create_consulta_reserva_general_tool(memory_manager=None, chat_id: str = "")
     )
 
 
+# Construye la tool `consulta_reserva_persona` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_consulta_reserva_persona_tool(memory_manager=None, chat_id: str = ""):
+    # Consulta los detalles de un folio específico vía MCP → n8n.
+    # Se invoca dentro de `create_consulta_reserva_persona_tool` para encapsular una parte local de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas.
+    # Recibe `folio_id`, `property_id`, `pms_property_id`, `instance_url`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _consulta_reserva_persona(
         folio_id: str,
         property_id: Optional[int] = None,

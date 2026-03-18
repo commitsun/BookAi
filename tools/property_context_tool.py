@@ -53,6 +53,10 @@ class PropertyContextInput(BaseModel):
     )
 
 
+# Resuelve nombre variantes.
+# Se usa en el flujo de tool de identificación y fijación de property context para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _property_name_variants(raw: Optional[str]) -> list[str]:
     clean = (raw or "").strip()
     if not clean:
@@ -63,6 +67,10 @@ def _property_name_variants(raw: Optional[str]) -> list[str]:
             variants.append(f"{prefix}{clean}")
     return list(dict.fromkeys(variants))
 
+# Limpia hotel entrada.
+# Se usa en el flujo de tool de identificación y fijación de property context para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_hotel_input(raw: Optional[str]) -> Optional[str]:
     text = (raw or "").strip()
     if not text:
@@ -90,6 +98,10 @@ def _clean_hotel_input(raw: Optional[str]) -> Optional[str]:
             break
     return text or None
 
+# Determina si valid hotel etiqueta cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de tool de identificación y fijación de property context para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_valid_hotel_label(raw: Optional[str]) -> bool:
     clean = (raw or "").strip().lower()
     if not clean or len(clean) < 3:
@@ -113,6 +125,10 @@ def _is_valid_hotel_label(raw: Optional[str]) -> bool:
         return False
     return True
 
+# Normaliza el texto de coincidencia.
+# Se usa en el flujo de tool de identificación y fijación de property context para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_match_text(value: Optional[str]) -> str:
     text = (value or "").strip().lower()
     if not text:
@@ -128,11 +144,19 @@ def _normalize_match_text(value: Optional[str]) -> str:
 class PropertyContextTool:
     """Herramienta para fijar el contexto de property en memoria."""
 
+    # Inicializa el estado interno y las dependencias de `PropertyContextTool`.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(self, memory_manager=None, chat_id: str = ""):
         self.memory_manager = memory_manager
         self.chat_id = chat_id
         log.info("✅ PropertyContextTool inicializado para chat %s", chat_id)
 
+    # Resuelve la tabla.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # Recibe `property_table` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_table(self, property_table: Optional[str]) -> str:
         if property_table:
             return str(property_table)
@@ -145,6 +169,10 @@ class PropertyContextTool:
                 pass
         return DEFAULT_PROPERTY_TABLE
 
+    # Fija el flags.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # Recibe `property_id`, `property_name`, `property_table`, `display_name`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _set_flags(
         self,
         property_id: Optional[Any],
@@ -174,6 +202,10 @@ class PropertyContextTool:
 
         # No persistimos mensajes internos de contexto en chat_history para evitar ruido en chatter.
 
+    # Ejecuta la asincronía.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # Recibe `property_name`, `property_id`, `instance_id`, `property_table` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     async def _run_async(
         self,
         property_name: Optional[str] = None,
@@ -397,6 +429,10 @@ class PropertyContextTool:
             return f"Perfecto, ya identifique el hotel {label}."
         return "Perfecto, ya identifique la propiedad."
 
+    # Ejecuta la operación interna que LangChain usa al disparar esta tool.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # Recibe `property_name`, `property_id`, `instance_id`, `property_table` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _run(
         self,
         property_name: Optional[str] = None,
@@ -426,6 +462,10 @@ class PropertyContextTool:
             )
         )
 
+    # Expone esta lógica como tool reutilizable para que el agente pueda invocarla.
+    # Se usa dentro de `PropertyContextTool` en el flujo de tool de identificación y fijación de property context.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
     def as_tool(self) -> StructuredTool:
         return StructuredTool(
             name="identificar_property",
@@ -439,6 +479,10 @@ class PropertyContextTool:
         )
 
 
+# Construye la tool `property_context` con las dependencias que necesita al ejecutarse.
+# Se usa en el flujo de tool de identificación y fijación de property context para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_property_context_tool(memory_manager=None, chat_id: str = "") -> StructuredTool:
     tool_instance = PropertyContextTool(memory_manager=memory_manager, chat_id=chat_id)
     return tool_instance.as_tool()

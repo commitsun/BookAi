@@ -39,6 +39,10 @@ _SUP_INPUT_PROMPT = load_prompt("supervisor_input_prompt.txt") or (
 _llm = ModelConfig.get_llm(ModelTier.SUPERVISOR)
 
 
+# Normaliza el texto.
+# Se usa en el flujo de tool de validación previa de entrada para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_text(value: str) -> str:
     text = (value or "").strip().lower()
     if not text:
@@ -48,6 +52,10 @@ def _normalize_text(value: str) -> str:
     return re.sub(r"\s+", " ", text).strip()
 
 
+# Detecta si la consulta parece una petición operativa segura del hotel.
+# Se usa en el flujo de tool de validación previa de entrada para preparar datos, validaciones o decisiones previas.
+# Recibe `mensaje_usuario` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
     text = _normalize_text(mensaje_usuario)
     if not text:
@@ -92,9 +100,10 @@ def _looks_like_safe_hotel_operational_query(mensaje_usuario: str) -> bool:
     return any(term in text for term in operational_keywords)
 
 
-# =============================================================
-# 🧩 FUNCIÓN PRINCIPAL
-# =============================================================
+# Devuelve EXACTAMENTE:.
+# Se usa en el flujo de tool de validación previa de entrada para preparar datos, validaciones o decisiones previas.
+# Recibe `mensaje_usuario` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 def _run_supervisor_input(mensaje_usuario: str) -> str:
     """
     Devuelve EXACTAMENTE:

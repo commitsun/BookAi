@@ -37,6 +37,10 @@ from tools.interno_tool import (
 log = logging.getLogger("InternoAgent")
 
 
+# Convierte utc iso.
+# Se usa en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _to_utc_iso(value: Any) -> Optional[str]:
     if value is None:
         return None
@@ -55,6 +59,10 @@ def _to_utc_iso(value: Any) -> Optional[str]:
     return dt.astimezone(timezone.utc).isoformat()
 
 
+# Resuelve escalation created at.
+# Se usa en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado para preparar datos, validaciones o decisiones previas.
+# Recibe `escalation_id`, `esc_record`, `escalation_row` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_escalation_created_at(
     escalation_id: str,
     *,
@@ -82,6 +90,10 @@ def _resolve_escalation_created_at(
     return None
 
 
+# Resuelve BookAI enabled flag.
+# Se usa en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `keys` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_bookai_enabled_flag(memory_manager: Any, *keys: str) -> Optional[bool]:
     if not memory_manager:
         return None
@@ -100,6 +112,10 @@ def _resolve_bookai_enabled_flag(memory_manager: Any, *keys: str) -> Optional[bo
 class InternoAgent:
     """Agente interno independiente con creación de executor por invocación."""
 
+    # Inicializa el estado interno y las dependencias de `InternoAgent`.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `memory_manager`, `channel_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `escalation_db`, `model_tier` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Sin efectos secundarios relevantes.
     def __init__(
         self,
         memory_manager: Optional[Any] = None,
@@ -116,6 +132,10 @@ class InternoAgent:
         self.llm = ModelConfig.get_llm(model_tier)
         log.info("InternoAgent inicializado (modelo: %s)", self.llm.model_name)
 
+    # Orquesta la ejecución principal de `InternoAgent` para la consulta o evento actual.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `user_input`, `chat_id`, `escalation_id`, `escalation_context`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def ainvoke(
         self,
         user_input: str,
@@ -200,6 +220,10 @@ class InternoAgent:
             log.error("Error en InternoAgent.ainvoke: %s", exc, exc_info=True)
             raise
 
+    # Resuelve el interacción.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `chat_id`, `user_input`, `output`, `escalation_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     async def _persist_interaction(
         self,
         *,
@@ -234,6 +258,10 @@ class InternoAgent:
                 escalation_id=escalation_id,
             )
 
+    # Orquesta huésped escalation.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `chat_id`, `guest_message`, `reason`, `escalation_type`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def handle_guest_escalation(
         self,
         chat_id: str,
@@ -270,6 +298,10 @@ class InternoAgent:
                     pass
             raise
 
+    # Resuelve el escalate.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `guest_chat_id`, `guest_message`, `escalation_type`, `reason`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos, emitir eventos socket, realizar llamadas externas o a modelos.
     async def escalate(
         self,
         guest_chat_id: str,
@@ -279,6 +311,10 @@ class InternoAgent:
         context: str,
         property_id: Optional[str | int] = None,
     ) -> str:
+        # Resuelve el idioma del huésped.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _guest_lang() -> str:
             msg = (guest_message or "").strip()
             fresh_lang = None
@@ -306,6 +342,10 @@ class InternoAgent:
                 return fresh_lang
             return "es"
 
+        # Determina si acción es cumple la condición necesaria en este punto del flujo.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `lang` como entrada principal según la firma.
+        # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
         def _needs_action_es(lang: str) -> str:
             raw = (reason or "").strip() or (guest_message or "").strip()
             if not raw:
@@ -321,6 +361,10 @@ class InternoAgent:
                         text_es = raw
             return f"El huésped solicita: {text_es} (Idioma huésped: {lang})"
 
+        # Limpia el ID de chat.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `value` como entrada principal según la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _clean_chat_id(value: str) -> str:
             raw = str(value or "").strip()
             if ":" in raw:
@@ -328,6 +372,10 @@ class InternoAgent:
                 raw = raw.split(":")[-1].strip()
             return re.sub(r"\D", "", raw).strip() or raw
 
+        # Resuelve el aliases.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `values` como entrada principal según la firma.
+        # Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _chat_aliases(*values: str) -> list[str]:
             aliases: list[str] = []
             seen: set[str] = set()
@@ -373,10 +421,18 @@ class InternoAgent:
             except Exception:
                 escalation_flag_targets = []
 
+        # Resuelve el tokens.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `value` como entrada principal según la firma.
+        # Devuelve un `set[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _text_tokens(value: str) -> set[str]:
             words = re.findall(r"[a-z0-9áéíóúñü]{3,}", str(value or "").lower())
             return set(words)
 
+        # Determina si parecido a seguimiento cumple la condición necesaria en este punto del flujo.
+        # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `prev_message`, `new_message`, `reason_text`, `context_text` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
         def _looks_like_followup(prev_message: str, new_message: str, reason_text: str, context_text: str) -> bool:
             ctx = f"{reason_text}\n{context_text}".lower()
             if any(token in ctx for token in ("ampliación", "ampliacion", "escalación en progreso", "escalacion en progreso", "follow-up", "seguimiento")):
@@ -445,6 +501,10 @@ class InternoAgent:
                 ).strip()
                 prev_context = str((existing_pending or {}).get("context") or "").strip()
 
+                # Fusiona el lines.
+                # Se invoca dentro de `escalate` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+                # Recibe `base`, `extra` como entradas relevantes junto con el contexto inyectado en la firma.
+                # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
                 def _merge_lines(base: str, extra: str) -> str:
                     b = str(base or "").strip()
                     e = str(extra or "").strip()
@@ -625,6 +685,10 @@ class InternoAgent:
                     pass
             raise
 
+    # Procesa manager respuesta.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `escalation_id`, `manager_reply`, `chat_id` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def process_manager_reply(
         self,
         escalation_id: str,
@@ -646,6 +710,10 @@ class InternoAgent:
             draft_result=draft_result,
         )
 
+    # Envía la respuesta de confirmed.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `escalation_id`, `confirmed`, `adjustments` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def send_confirmed_response(
         self,
         escalation_id: str,
@@ -670,6 +738,10 @@ class InternoAgent:
             context_window=20,
         )
 
+    # Construye el prompt de system.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `escalation_context` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _build_system_prompt(self, escalation_context: str) -> str:
         base = load_prompt("interno_prompt.txt") or self._get_default_prompt()
         ctx = get_time_context()
@@ -688,6 +760,10 @@ class InternoAgent:
 
         return f"{ctx}\n{base}{extra}"
 
+    # Recupera el prompt de default.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _get_default_prompt(self) -> str:
         return (
             "Eres el Agente Interno del Sistema de IA Hotelera.\n"
@@ -698,6 +774,10 @@ class InternoAgent:
             "- confirmar_y_enviar_respuesta\n"
         )
 
+    # Preguntar al encargado si quiere agregar la respuesta a KB.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `superintendente_agent` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `escalation_id`, `topic`, `response_content`, ... como datos de contexto o entrada de la operación.
+    # Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def ask_add_to_knowledge_base(
         self,
         chat_id: str,
@@ -743,6 +823,10 @@ Responde:
             log.error("Error en ask_add_to_knowledge_base: %s", exc)
             raise
 
+    # Procesar respuesta del encargado sobre agregar a KB.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `superintendente_agent` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `escalation_id`, `manager_response`, `topic`, ... como datos de contexto o entrada de la operación.
+    # Devuelve un `str` con el resultado de esta operación. Puede activar tools o agentes.
     async def process_kb_response(
         self,
         chat_id: str,
@@ -826,6 +910,10 @@ Responde:
         )
         return preview
 
+    # Crear borrador limpio y estructurado para KB.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `topic`, `content` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _create_kb_draft(self, topic: str, content: str) -> str:
         """Crear borrador limpio y estructurado para KB"""
 
@@ -840,6 +928,10 @@ Responde:
 
         return "\n".join(lines)
 
+    # Aplica heurísticas simples para incorporar correcciones del encargado.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `topic`, `content`, `feedback` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `tuple[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _apply_kb_feedback(self, topic: str, content: str, feedback: str) -> tuple[str, str]:
         """
         Aplica heurísticas simples para incorporar correcciones del encargado
@@ -870,7 +962,10 @@ Responde:
                 target_hint = (swap_match.group(1) or "").strip(" .")
                 replacement = (swap_match.group(2) or "").strip(" .")
 
-        # Si hay replacement, reemplazar primer término relevante en topic y content
+        # Resuelve el swap.
+        # Se invoca dentro de `_apply_kb_feedback` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # Recibe `text`, `target` como entradas relevantes junto con el contexto inyectado en la firma.
+        # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
         def _swap(text: str, target: str) -> str:
             if not target or not text or not replacement:
                 return text
@@ -916,6 +1011,10 @@ Responde:
 
         return topic, content
 
+    # Detecta confirmaciones cortas para KB y evita dispararse con frases largas.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_affirmative_kb_response(self, text: str) -> bool:
         """
         Detecta confirmaciones cortas para KB y evita dispararse con frases largas
@@ -930,6 +1029,10 @@ Responde:
 
         return 0 < len(tokens) <= 2 and all(tok in affirmative for tok in tokens)
 
+    # Determina si la respuesta de rejection base de conocimiento cumple la condición necesaria en este punto del flujo.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_rejection_kb_response(self, text: str) -> bool:
         clean = re.sub(r"[¡!¿?.]", "", text or "").strip()
         tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -940,6 +1043,10 @@ Responde:
 
         return 0 < len(tokens) <= 3 and all(tok in negative or tok == "gracias" for tok in tokens)
 
+    # Usa el LLM interno para reescribir el borrador de KB según el feedback del encargado.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `topic`, `category`, `draft_content`, `feedback` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `tuple[str, str, str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
     async def _refine_kb_with_ai(
         self,
         *,
@@ -1000,6 +1107,10 @@ Responde:
             log.warning("No se pudo refinar KB con IA: %s", exc, exc_info=True)
             return topic, category, draft_content
 
+    # Refuerza el flujo de borradores:.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `escalation_id`, `manager_reply`, `draft_result` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede consultar o escribir en base de datos.
     def _ensure_draft_preview(self, escalation_id: str, manager_reply: str, draft_result: str) -> str:
         """
         Refuerza el flujo de borradores:
@@ -1038,10 +1149,18 @@ Responde:
             "✅ Si estás conforme, responde con 'OK' para enviarlo al huésped."
         )
 
+    # Resuelve flag limpieza.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `chat_id`, `delay` como entradas relevantes junto con el contexto inyectado en la firma.
+    # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
     def _schedule_flag_cleanup(self, chat_id: str, delay: int = 90) -> None:
         if not self.memory_manager:
             return
 
+        # Resuelve la limpieza.
+        # Se invoca dentro de `_schedule_flag_cleanup` para encapsular una parte local de agente interno de escalaciones, borradores y coordinación con el encargado.
+        # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
         async def cleanup():
             await asyncio.sleep(delay)
             try:
@@ -1055,6 +1174,10 @@ Responde:
         except RuntimeError:
             pass
 
+    # Resuelve el ID de chat del huésped.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `escalation_id` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _resolve_guest_chat_id(self, escalation_id: str) -> Optional[str]:
 
         esc = self.escalations.get(escalation_id)
@@ -1071,6 +1194,10 @@ Responde:
 
         return None
 
+    # Resuelve la llamada.
+    # Se usa dentro de `InternoAgent` en el flujo de agente interno de escalaciones, borradores y coordinación con el encargado.
+    # Recibe `func`, `*args`, `**kwargs` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve el resultado calculado para que el siguiente paso lo consuma. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
     async def _safe_call(self, func: Optional[Any], *args, **kwargs):
         if not func:
             return None

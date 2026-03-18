@@ -31,6 +31,10 @@ class InfoHotelTool:
     Herramienta que delega consultas de información general al subagente especializado.
     """
 
+    # Inicializa el estado interno y las dependencias de `InfoHotelTool`.
+    # Se usa dentro de `InfoHotelTool` en el flujo de tool de información factual del hotel.
+    # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+    # No devuelve valor; deja la instancia preparada con sus dependencias y estado inicial. Puede activar tools o agentes.
     def __init__(self, memory_manager=None, chat_id: str = ""):
         self.memory_manager = memory_manager
         self.chat_id = chat_id
@@ -39,7 +43,10 @@ class InfoHotelTool:
 
         log.info(f"✅ InfoHotelTool inicializado para chat {chat_id}")
 
-    # ----------------------------------------------------------
+    # Delega la consulta al subagente de información del hotel.
+    # Se usa dentro de `InfoHotelTool` en el flujo de tool de información factual del hotel.
+    # Recibe `consulta` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos, activar tools o agentes.
     async def _procesar_consulta(self, consulta: str) -> str:
         """Delega la consulta al subagente de información del hotel."""
         try:
@@ -80,7 +87,10 @@ class InfoHotelTool:
                 "Por favor, reformula tu consulta o contacta directamente con el hotel."
             )
 
-    # ----------------------------------------------------------
+    # Detecta si la respuesta requiere escalar al encargado.
+    # Se usa dentro de `InfoHotelTool` en el flujo de tool de información factual del hotel.
+    # Recibe `respuesta` como entrada principal según la firma.
+    # Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
     def _is_escalation_needed(self, respuesta: str) -> bool:
         """Detecta si la respuesta requiere escalar al encargado."""
         keywords = [
@@ -93,7 +103,10 @@ class InfoHotelTool:
         ]
         return any(k in respuesta.lower() for k in keywords)
 
-    # ----------------------------------------------------------
+    # Convierte la clase en una tool compatible con LangChain.
+    # Se usa dentro de `InfoHotelTool` en el flujo de tool de información factual del hotel.
+    # No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+    # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
     def as_tool(self) -> StructuredTool:
         """Convierte la clase en una tool compatible con LangChain."""
         return StructuredTool(
@@ -111,7 +124,10 @@ class InfoHotelTool:
             args_schema=InfoHotelInput,
         )
 
-    # ----------------------------------------------------------
+    # Permite usar el tool desde entornos sin soporte async.
+    # Se usa dentro de `InfoHotelTool` en el flujo de tool de información factual del hotel.
+    # Recibe `consulta` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _sync_wrapper(self, consulta: str) -> str:
         """Permite usar el tool desde entornos sin soporte async."""
         try:
@@ -125,7 +141,10 @@ class InfoHotelTool:
         return loop.run_until_complete(self._procesar_consulta(consulta))
 
 
-# ----------------------------------------------------------
+# Factory para crear la herramienta de información del hotel.
+# Se usa en el flujo de tool de información factual del hotel para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
+# Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede activar tools o agentes.
 def create_info_hotel_tool(memory_manager=None, chat_id: str = "") -> StructuredTool:
     """Factory para crear la herramienta de información del hotel."""
     return InfoHotelTool(memory_manager=memory_manager, chat_id=chat_id).as_tool()

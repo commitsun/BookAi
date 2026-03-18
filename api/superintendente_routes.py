@@ -63,9 +63,10 @@ class CreateSessionRequest(SuperintendenteContext):
     title: Optional[str] = Field(default=None, description="Título visible del chat")
 
 
-# ---------------------------------------------------------------------------
-# Utilidades
-# ---------------------------------------------------------------------------
+# Parsea el mapa token->instancia.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# No recibe parámetros externos; trabaja con estado capturado por el cierre o atributos de instancia.
+# Devuelve un `Dict[str, str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_token_instance_map() -> Dict[str, str]:
     parsed: Dict[str, str] = {}
     token_test = str(Settings.ROOMDOO_BOOKAI_TOKEN_TEST or "").strip()
@@ -107,6 +108,10 @@ def _parse_token_instance_map() -> Dict[str, str]:
     return parsed
 
 
+# Verifica Bearer Token usando mapa multi-instancia o token único.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `auth_header` como entrada principal según la firma.
+# Devuelve un `Dict[str, Optional[str]]` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorization")) -> Dict[str, Optional[str]]:
     """Verifica Bearer Token usando mapa multi-instancia o token único."""
     if not auth_header or not auth_header.lower().startswith("bearer "):
@@ -128,6 +133,10 @@ def _verify_bearer(auth_header: Optional[str] = Header(None, alias="Authorizatio
     return {"token": token, "instance_id": None}
 
 
+# Resuelve el sessions.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `dict[str, dict[str, dict[str, Any]]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _tracking_sessions(state) -> dict[str, dict[str, dict[str, Any]]]:
     sessions = state.tracking.setdefault("superintendente_sessions", {})
     if not isinstance(sessions, dict):
@@ -136,11 +145,19 @@ def _tracking_sessions(state) -> dict[str, dict[str, dict[str, Any]]]:
     return sessions
 
 
+# Resuelve el ID de session.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `length` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _generate_session_id(length: int = 12) -> str:
     alphabet = string.ascii_lowercase
     return "".join(secrets.choice(alphabet) for _ in range(length))
 
 
+# Parsea el título de sesión.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_session_title(content: str) -> Optional[str]:
     if not content:
         return None
@@ -153,6 +170,10 @@ def _parse_session_title(content: str) -> Optional[str]:
     return None
 
 
+# Resuelve session title base de datos.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_id`, `owner_key`, `title` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Puede consultar o escribir en base de datos.
 def _persist_session_title_db(
     state: Any,
     *,
@@ -178,6 +199,10 @@ def _persist_session_title_db(
         log.debug("No se pudo persistir session_title en DB: %s", exc)
 
 
+# Comprueba si el título de sesión es demasiado genérico para mostrarlo tal cual.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `title` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_generic_session_title(title: Optional[str]) -> bool:
     text = re.sub(r"\s+", " ", str(title or "").strip().lower())
     if not text:
@@ -187,6 +212,10 @@ def _is_generic_session_title(title: Optional[str]) -> bool:
     return text.startswith("chat ") or text.startswith("nueva conversación ") or text.startswith("nueva conversacion ")
 
 
+# Detecta mensajes internos del superintendente que no deben tratarse como conversación visible.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_internal_super_message(content: str) -> bool:
     text = str(content or "").strip()
     if not text:
@@ -206,6 +235,10 @@ def _is_internal_super_message(content: str) -> bool:
     return text.startswith(internal_prefixes)
 
 
+# Resuelve el mensaje de interno super.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _render_internal_super_message(content: str) -> Optional[str]:
     text = str(content or "").strip()
     if not text:
@@ -224,6 +257,10 @@ def _render_internal_super_message(content: str) -> Optional[str]:
     return None
 
 
+# Normaliza content para render de historial en frontend.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `content` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_history_content(content: str) -> str:
     """Normaliza content para render de historial en frontend."""
     text = str(content or "")
@@ -233,6 +270,10 @@ def _format_history_content(content: str) -> str:
     return text
 
 
+# Sanea generated title.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _sanitize_generated_title(raw: str) -> Optional[str]:
     text = re.sub(r"\s+", " ", str(raw or "").strip())
     if not text:
@@ -252,6 +293,10 @@ def _sanitize_generated_title(raw: str) -> Optional[str]:
     return text
 
 
+# Resuelve title desde seed.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `seed` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _fallback_title_from_seed(seed: str) -> str:
     text = re.sub(r"\s+", " ", str(seed or "").strip())
     text = text.strip("\"'`")
@@ -266,6 +311,10 @@ def _fallback_title_from_seed(seed: str) -> str:
     return text or "Conversación"
 
 
+# Resuelve session title con ai.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `user_seed`, `assistant_seed`, `hotel_name` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _generate_session_title_with_ai(
     llm: Any,
     *,
@@ -304,6 +353,10 @@ async def _generate_session_title_with_ai(
         return None
 
 
+# Resuelve el ID de owner.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Sin efectos secundarios relevantes.
 def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     owner = str(payload.owner_id).strip() if payload.owner_id is not None else ""
     if owner:
@@ -314,10 +367,18 @@ def _resolve_owner_id(payload: SuperintendenteContext) -> str:
     raise HTTPException(status_code=422, detail="owner_id requerido")
 
 
+# Limpia el ID de chat.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_chat_id(chat_id: str) -> str:
     return re.sub(r"\D", "", str(chat_id or "")).strip()
 
 
+# Resuelve el configuración.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `dict[str, bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_settings(state: Any) -> dict[str, bool]:
     load_tracking = getattr(state, "load_tracking", None)
     if callable(load_tracking):
@@ -332,6 +393,10 @@ def _bookai_settings(state: Any) -> dict[str, bool]:
     return settings
 
 
+# Resuelve flag claves.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `chat_id`, `property_id`, `instance_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `list[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Optional[str] = None) -> list[str]:
     clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
     prop = None if property_id is None else str(property_id).strip()
@@ -348,6 +413,10 @@ def _bookai_flag_keys(chat_id: str, property_id: Any = None, instance_id: Option
     return keys
 
 
+# Resuelve flag valor.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id`, `property_id`, `instance_id`, `default` como datos de contexto o entrada de la operación.
+# Devuelve un `bool` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_value(
     state: Any,
     *,
@@ -367,6 +436,10 @@ def _bookai_flag_value(
     return bool(resolution["value"])
 
 
+# Parsea BookAI flag.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `Optional[bool]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_bookai_flag(raw: Any) -> Optional[bool]:
     if isinstance(raw, bool):
         return raw
@@ -380,6 +453,10 @@ def _parse_bookai_flag(raw: Any) -> Optional[bool]:
     return None
 
 
+# Resuelve flag resolution.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `settings`, `chat_id`, `property_id`, `instance_id`, ... como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `Dict[str, Any]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _bookai_flag_resolution(
     settings: Dict[str, Any],
     *,
@@ -463,6 +540,10 @@ def _bookai_flag_resolution(
     }
 
 
+# Consulta global cliente contexto.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `property_id`, `instance_id`, `channel`, `limit` como datos de contexto o entrada de la operación.
+# Devuelve un `list[dict[str, Any]]` con el resultado de esta operación. Puede consultar o escribir en base de datos.
 def _fetch_global_client_context(
     state: Any,
     *,
@@ -609,6 +690,10 @@ def _fetch_global_client_context(
         return []
 
 
+# Resuelve global cliente contexto.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `items`, `max_rows` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _render_global_client_context(items: list[dict[str, Any]], max_rows: int = 80) -> str:
     if not items:
         return ""
@@ -639,6 +724,10 @@ def _render_global_client_context(items: list[dict[str, Any]], max_rows: int = 8
     return f"CLIENTES_ACTIVOS total={total} mostrados={shown}\n" + "\n".join(lines)
 
 
+# Normaliza el ID de property.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_property_id(value: Optional[str]) -> Optional[str]:
     if value is None:
         return None
@@ -646,6 +735,10 @@ def _normalize_property_id(value: Optional[str]) -> Optional[str]:
     return text or None
 
 
+# Resuelve owner clave.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `tuple[str, str, Optional[str]]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_owner_key(payload: SuperintendenteContext) -> tuple[str, str, Optional[str]]:
     owner_id = _resolve_owner_id(payload)
     property_id = _normalize_property_id(payload.property_id)
@@ -654,6 +747,10 @@ def _resolve_owner_key(payload: SuperintendenteContext) -> tuple[str, str, Optio
     return f"{owner_id}:{property_id}", owner_id, property_id
 
 
+# Evita pseudo-sesiones internas cuando alt_key coincide con property_id.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `alt_key`, `property_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _should_persist_alt_internal_markers(alt_key: Optional[str], property_id: Optional[str]) -> bool:
     """
     Evita pseudo-sesiones internas cuando alt_key coincide con property_id
@@ -672,10 +769,18 @@ def _should_persist_alt_internal_markers(alt_key: Optional[str], property_id: Op
     return True
 
 
+# Normaliza el ID de huésped.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `guest_id` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_guest_id(guest_id: str | None) -> str:
     return str(guest_id or "").replace("+", "").strip()
 
 
+# Extrae JSON object.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw` como entrada principal según la firma.
+# Devuelve un `dict[str, Any] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
     if not raw:
         return None
@@ -689,6 +794,10 @@ def _extract_json_object(raw: str) -> dict[str, Any] | None:
         return None
 
 
+# Resuelve el float.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `value`, `default` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `float` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _safe_float(value: Any, default: float = 0.0) -> float:
     try:
         return float(value)
@@ -696,6 +805,10 @@ def _safe_float(value: Any, default: float = 0.0) -> float:
         return default
 
 
+# Clasifica el mensaje de oferta estado desde WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `message` como datos de contexto o entrada de la operación.
+# Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _classify_offer_state_from_wa_message(llm: Any, message: str) -> dict[str, Any]:
     text = (message or "").strip()
     if not llm or not text:
@@ -748,6 +861,10 @@ async def _classify_offer_state_from_wa_message(llm: Any, message: str) -> dict[
     }
 
 
+# Resuelve huésped oferta estado desde sent WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `guest_id`, `sent_message`, `owner_id`, `session_id`, ... como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 async def _sync_guest_offer_state_from_sent_wa(
     state: Any,
     *,
@@ -801,6 +918,10 @@ async def _sync_guest_offer_state_from_sent_wa(
             pass
 
 
+# Normaliza super role.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_role` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_super_role(raw_role: Any) -> str:
     role = str(raw_role or "").strip().lower()
     if role in {"assistant", "bookai", "system", "tool"}:
@@ -810,6 +931,10 @@ def _normalize_super_role(raw_role: Any) -> str:
     return "assistant"
 
 
+# Normaliza super remitente.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_role` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_super_sender(raw_role: Any) -> str:
     role = str(raw_role or "").strip().lower()
     if role in {"assistant", "bookai", "system", "tool"}:
@@ -819,6 +944,10 @@ def _normalize_super_sender(raw_role: Any) -> str:
     return "bookai"
 
 
+# Determina si short WhatsApp confirmation cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_short_wa_confirmation(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -830,6 +959,10 @@ def _is_short_wa_confirmation(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in confirm_words for tok in tokens)
 
 
+# Determina si short WhatsApp cancel cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_short_wa_cancel(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -841,10 +974,18 @@ def _is_short_wa_cancel(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in cancel_words for tok in tokens)
 
 
+# Determina si parecido a new instruction cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_new_instruction(text: str) -> bool:
     return looks_like_new_instruction(text)
 
 
+# Limpia el payload de WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `msg` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_wa_payload(msg: str) -> str:
     base = sanitize_wa_message(msg or "")
     if not base:
@@ -866,6 +1007,10 @@ def _clean_wa_payload(msg: str) -> str:
     return base.strip()
 
 
+# Resuelve reciente reservas.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `keys`, `max_age_seconds` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pull_recent_reservations(state, *keys: str, max_age_seconds: int = 180) -> Optional[dict]:
     if not getattr(state, "memory_manager", None):
         return None
@@ -888,6 +1033,10 @@ def _pull_recent_reservations(state, *keys: str, max_age_seconds: int = 180) -> 
     return None
 
 
+# Resuelve el escape.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _csv_escape(value: Any) -> str:
     text = "" if value is None else str(value)
     if any(ch in text for ch in [';', '\n', '"']):
@@ -895,6 +1044,10 @@ def _csv_escape(value: Any) -> str:
     return text
 
 
+# Construye reservas csv.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_reservations_csv(payload: dict) -> Optional[str]:
     if not isinstance(payload, dict):
         return None
@@ -933,6 +1086,10 @@ def _build_reservations_csv(payload: dict) -> Optional[str]:
     return "\n".join(lines)
 
 
+# Resuelve reciente reserva detail.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `keys`, `max_age_seconds` como datos de contexto o entrada de la operación.
+# Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _pull_recent_reservation_detail(state, *keys: str, max_age_seconds: int = 180) -> Optional[dict]:
     if not getattr(state, "memory_manager", None):
         return None
@@ -955,6 +1112,10 @@ def _pull_recent_reservation_detail(state, *keys: str, max_age_seconds: int = 18
     return None
 
 
+# Normaliza reserva detail.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `payload` como entrada principal según la firma.
+# Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_reservation_detail(payload: dict) -> Optional[dict]:
     if not isinstance(payload, dict):
         return None
@@ -981,6 +1142,10 @@ def _normalize_reservation_detail(payload: dict) -> Optional[dict]:
     }
 
 
+# Construye reserva detail csv.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `detail` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _build_reservation_detail_csv(detail: dict) -> Optional[str]:
     if not isinstance(detail, dict):
         return None
@@ -1013,12 +1178,20 @@ def _build_reservation_detail_csv(detail: dict) -> Optional[str]:
     return ";".join(header) + "\n" + ";".join(_csv_escape(v) for v in row)
 
 
+# Extrae el texto de detail desde.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_detail_from_text(text: str) -> Optional[dict]:
     if not text:
         return None
     if "Folio ID:" not in text:
         return None
 
+    # Limpia el clean.
+    # Se invoca dentro de `_extract_detail_from_text` para encapsular una parte local de API operativa del superintendente y sus borradores internos.
+    # Recibe `value` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _clean(value: Optional[str]) -> Optional[str]:
         if value is None:
             return None
@@ -1028,6 +1201,10 @@ def _extract_detail_from_text(text: str) -> Optional[dict]:
         v = re.sub(r"^\*+|\*+$", "", v).strip()
         return v or None
 
+    # Resuelve el m.
+    # Se invoca dentro de `_extract_detail_from_text` para encapsular una parte local de API operativa del superintendente y sus borradores internos.
+    # Recibe `pattern` como entrada principal según la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _m(pattern: str) -> Optional[str]:
         m = re.search(pattern, text, re.IGNORECASE | re.MULTILINE)
         return _clean(m.group(1)) if m else None
@@ -1060,10 +1237,18 @@ def _extract_detail_from_text(text: str) -> Optional[dict]:
     }
 
 
+# Extrae el texto de reservas desde.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `Optional[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_reservations_from_text(text: str) -> Optional[dict]:
     if not text or "Folio ID:" not in text or text.count("Folio ID:") < 2:
         return None
 
+    # Selecciona el pick.
+    # Se invoca dentro de `_extract_reservations_from_text` para encapsular una parte local de API operativa del superintendente y sus borradores internos.
+    # Recibe `raw`, `label` como entradas relevantes junto con el contexto inyectado en la firma.
+    # Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _pick(raw: str, label: str) -> Optional[str]:
         m = re.search(rf"{label}\s*:\s*([^|\n]+)", raw, re.IGNORECASE)
         return m.group(1).strip() if m else None
@@ -1101,10 +1286,18 @@ def _extract_reservations_from_text(text: str) -> Optional[dict]:
     }
 
 
+# Asegura huésped idioma.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `guest_id` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _ensure_guest_language(msg: str, guest_id: str) -> str:
     return _ensure_guest_language_with_target(msg, guest_id, target_lang=None)
 
 
+# Normaliza target idioma.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `target_lang` como entrada principal según la firma.
+# Devuelve un `Optional[str]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _normalize_target_lang(target_lang: Optional[str]) -> Optional[str]:
     raw = (target_lang or "").strip().lower()
     if not raw:
@@ -1116,6 +1309,10 @@ def _normalize_target_lang(target_lang: Optional[str]) -> Optional[str]:
     return None
 
 
+# Interpreta semánticamente si el encargado está pidiendo un cambio de idioma.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un `dict[str, Any]` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _detect_language_adjustment_with_llm(text: str) -> dict[str, Any]:
     """
     Interpreta semánticamente si el encargado está pidiendo un cambio de idioma
@@ -1158,6 +1355,10 @@ async def _detect_language_adjustment_with_llm(text: str) -> dict[str, Any]:
     return {"target_lang": target, "language_only": language_only}
 
 
+# Asegura huésped idioma con target.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `guest_id`, `target_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _ensure_guest_language_with_target(msg: str, guest_id: str, target_lang: Optional[str] = None) -> str:
     if not msg:
         return msg
@@ -1226,6 +1427,10 @@ def _ensure_guest_language_with_target(msg: str, guest_id: str, target_lang: Opt
         return msg
 
 
+# Asegura owner idioma.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `owner_lang` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _ensure_owner_language(msg: str, owner_lang: Optional[str]) -> str:
     if not msg:
         return msg
@@ -1240,6 +1445,10 @@ def _ensure_owner_language(msg: str, owner_lang: Optional[str]) -> str:
         return msg
 
 
+# Parsea los borradores de WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_text` como entrada principal según la firma.
+# Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_wa_drafts(raw_text: str) -> list[dict]:
     if "[WA_DRAFT]|" not in (raw_text or ""):
         return []
@@ -1261,6 +1470,10 @@ def _parse_wa_drafts(raw_text: str) -> list[dict]:
     return drafts
 
 
+# Resuelve WhatsApp borradores desde memory.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `conversation_ids` como datos de contexto o entrada de la operación.
+# Devuelve un `list[dict]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _recover_wa_drafts_from_memory(state, *conversation_ids: str) -> list[dict]:
     if not state or not state.memory_manager:
         return []
@@ -1280,6 +1493,10 @@ def _recover_wa_drafts_from_memory(state, *conversation_ids: str) -> list[dict]:
     return []
 
 
+# Resuelve pendiente WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `key`, `payload` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _persist_pending_wa(state, key: str, payload: Any) -> None:
     if not state or not key:
         return
@@ -1297,6 +1514,10 @@ def _persist_pending_wa(state, key: str, payload: Any) -> None:
         pass
 
 
+# Carga pendiente WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `key` como datos de contexto o entrada de la operación.
+# Devuelve un `Any` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _load_pending_wa(state, key: str) -> Any:
     if not state or not key:
         return None
@@ -1309,6 +1530,10 @@ def _load_pending_wa(state, key: str) -> Any:
     return None
 
 
+# Resuelve last pendiente WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id`, `payload` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _persist_last_pending_wa(state, owner_id: str, payload: Any) -> None:
     if not state or not owner_id:
         return
@@ -1326,6 +1551,10 @@ def _persist_last_pending_wa(state, owner_id: str, payload: Any) -> None:
         pass
 
 
+# Carga last pendiente WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id` como datos de contexto o entrada de la operación.
+# Devuelve un `Any` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _load_last_pending_wa(state, owner_id: str) -> Any:
     if not state or not owner_id:
         return None
@@ -1338,6 +1567,10 @@ def _load_last_pending_wa(state, owner_id: str) -> Any:
     return None
 
 
+# Parsea base de conocimiento borrador marker.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_text` como entrada principal según la firma.
+# Devuelve un `dict[str, str] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_kb_draft_marker(raw_text: str) -> dict[str, str] | None:
     if not raw_text or "[KB_DRAFT]|" not in raw_text:
         return None
@@ -1354,6 +1587,10 @@ def _parse_kb_draft_marker(raw_text: str) -> dict[str, str] | None:
     }
 
 
+# Parsea base de conocimiento remove borrador marker.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `raw_text` como entrada principal según la firma.
+# Devuelve un `dict[str, Any] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _parse_kb_remove_draft_marker(raw_text: str) -> dict[str, Any] | None:
     if not raw_text or "[KB_REMOVE_DRAFT]|" not in raw_text:
         return None
@@ -1371,6 +1608,10 @@ def _parse_kb_remove_draft_marker(raw_text: str) -> dict[str, Any] | None:
     return {"hotel_name": hotel_name.strip(), "payload": payload}
 
 
+# Resuelve pendiente base de conocimiento.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `key`, `payload` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _persist_pending_kb(state, key: str, payload: Any) -> None:
     if not state or not key:
         return
@@ -1388,6 +1629,10 @@ def _persist_pending_kb(state, key: str, payload: Any) -> None:
         pass
 
 
+# Carga pendiente base de conocimiento.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `key` como datos de contexto o entrada de la operación.
+# Devuelve un `Any` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _load_pending_kb(state, key: str) -> Any:
     if not state or not key:
         return None
@@ -1400,6 +1645,10 @@ def _load_pending_kb(state, key: str) -> Any:
     return None
 
 
+# Resuelve pendiente acción.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id`, `action_type`, `payload`, `session_id` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _record_pending_action(state, owner_id: str, action_type: str, payload: Any, session_id: str | None) -> None:
     if not state or not owner_id or not action_type:
         return
@@ -1427,6 +1676,10 @@ def _record_pending_action(state, owner_id: str, action_type: str, payload: Any,
         pass
 
 
+# Recupera last pendiente acción.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id` como datos de contexto o entrada de la operación.
+# Devuelve un `dict[str, Any] | None` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _get_last_pending_action(state, owner_id: str) -> dict[str, Any] | None:
     if not state or not owner_id:
         return None
@@ -1441,6 +1694,10 @@ def _get_last_pending_action(state, owner_id: str) -> dict[str, Any] | None:
     return None
 
 
+# Actualiza last pendiente acción.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id`, `payload` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _update_last_pending_action(state, owner_id: str, payload: Any) -> None:
     if not state or not owner_id:
         return
@@ -1458,6 +1715,10 @@ def _update_last_pending_action(state, owner_id: str, payload: Any) -> None:
         pass
 
 
+# Resuelve last pendiente acción.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _pop_last_pending_action(state, owner_id: str) -> None:
     if not state or not owner_id:
         return
@@ -1475,6 +1736,10 @@ def _pop_last_pending_action(state, owner_id: str) -> None:
         pass
 
 
+# Resuelve trailing pendiente type.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `owner_id`, `action_type` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _pop_trailing_pending_type(state, owner_id: str, action_type: str) -> None:
     if not state or not owner_id or not action_type:
         return
@@ -1493,6 +1758,10 @@ def _pop_trailing_pending_type(state, owner_id: str, action_type: str) -> None:
         pass
 
 
+# Determina si short confirmation cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_short_confirmation(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -1502,6 +1771,10 @@ def _is_short_confirmation(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in yes_words for tok in tokens)
 
 
+# Determina si short rejection cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _is_short_rejection(text: str) -> bool:
     clean = re.sub(r"[¡!¿?.]", "", (text or "").lower()).strip()
     tokens = [t for t in re.findall(r"[a-záéíóúñ]+", clean) if t]
@@ -1511,6 +1784,10 @@ def _is_short_rejection(text: str) -> bool:
     return 0 < len(tokens) <= 2 and all(tok in no_words for tok in tokens)
 
 
+# Determina si parecido a base de conocimiento confirmation cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_kb_confirmation(text: str) -> bool:
     if not text:
         return False
@@ -1539,6 +1816,10 @@ def _looks_like_kb_confirmation(text: str) -> bool:
     return any(term in low for term in confirm_terms)
 
 
+# Determina si parecido a adjustment cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_adjustment(text: str) -> bool:
     if not text:
         return False
@@ -1547,6 +1828,10 @@ def _looks_like_adjustment(text: str) -> bool:
     return any(term in low for term in adjustment_terms)
 
 
+# Detecta consultas operativas de reserva para no tratarlas como ajuste de un WA_DRAFT pendiente.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_reservation_query(text: str) -> bool:
     """
     Detecta consultas operativas de reserva para no tratarlas como ajuste de un WA_DRAFT pendiente.
@@ -1579,6 +1864,10 @@ def _looks_like_reservation_query(text: str) -> bool:
     return False
 
 
+# Determina si parecido a send confirmation cumple la condición necesaria en este punto del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text` como entrada principal según la firma.
+# Devuelve un booleano que gobierna la rama de ejecución siguiente. Sin efectos secundarios relevantes.
 def _looks_like_send_confirmation(text: str) -> bool:
     if not text:
         return False
@@ -1588,6 +1877,10 @@ def _looks_like_send_confirmation(text: str) -> bool:
     return any(t in low for t in send_terms) and any(t in low for t in confirm_hints)
 
 
+# Clasifica el mensaje del encargado cuando hay un borrador pendiente.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `text`, `pending_type` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _classify_pending_action(text: str, pending_type: str) -> str:
     """
     Clasifica el mensaje del encargado cuando hay un borrador pendiente.
@@ -1624,6 +1917,10 @@ async def _classify_pending_action(text: str, pending_type: str) -> str:
     return "new"
 
 
+# Formatea la previsualización de WhatsApp.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `drafts` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_wa_preview(drafts: list[dict]) -> str:
     if not drafts:
         return ""
@@ -1650,6 +1947,10 @@ def _format_wa_preview(drafts: list[dict]) -> str:
     return "\n".join(lines)
 
 
+# Formatea base de conocimiento remove previsualización.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `pending` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _format_kb_remove_preview(pending: dict) -> str:
     total = int(pending.get("total_matches", 0) or 0)
     preview = pending.get("preview") or []
@@ -1657,6 +1958,10 @@ def _format_kb_remove_preview(pending: dict) -> str:
     date_from = pending.get("date_from") or ""
     date_to = pending.get("date_to") or ""
 
+    # Sanea previsualización snippet.
+    # Se invoca dentro de `_format_kb_remove_preview` para encapsular una parte local de API operativa del superintendente y sus borradores internos.
+    # Recibe `text` como entrada principal según la firma.
+    # Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
     def _sanitize_preview_snippet(text: str) -> str:
         if not text:
             return ""
@@ -1693,6 +1998,10 @@ def _format_kb_remove_preview(pending: dict) -> str:
     return "\n".join(header) + footer
 
 
+# Reescribe WhatsApp borrador.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `base_message`, `adjustments` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
     clean_base = sanitize_wa_message(base_message or "")
     clean_adj = sanitize_wa_message(adjustments or "")
@@ -1732,6 +2041,10 @@ async def _rewrite_wa_draft(llm, base_message: str, adjustments: str) -> str:
         return _clean_wa_payload(clean_adj or clean_base)
 
 
+# Reformula follow-ups cortos usando el contexto reciente del chat.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `llm` como dependencias o servicios compartidos inyectados desde otras capas, y `message`, `recent_messages` como datos de contexto o entrada de la operación.
+# Devuelve un `str` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
 async def _expand_followup_with_context(
     llm: Any,
     message: str,
@@ -1802,14 +2115,19 @@ async def _expand_followup_with_context(
         return raw
 
 
-# ---------------------------------------------------------------------------
-# Registro de rutas
-# ---------------------------------------------------------------------------
+# Registra las rutas de `superintendente` sobre la aplicación FastAPI activa.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos para preparar datos, validaciones o decisiones previas.
+# Recibe `app`, `state` como dependencias o servicios compartidos inyectados desde otras capas.
+# Devuelve un `None` con el resultado de esta operación. Puede propagar excepciones de validación o integración. Puede consultar o escribir en base de datos, enviar mensajes o plantillas, realizar llamadas externas o a modelos.
 def register_superintendente_routes(app, state) -> None:
     global _SUPER_STATE
     _SUPER_STATE = state
     router = APIRouter(prefix="/api/v1/superintendente", tags=["superintendente"])
 
+    # Atiende el endpoint `POST /ask` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API operativa del superintendente y sus borradores internos.
+    # Recibe `payload`, `auth_ctx` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos, enviar mensajes o plantillas, realizar llamadas externas o a modelos.
     @router.post("/ask")
     async def ask_superintendente(
         payload: AskSuperintendenteRequest,
@@ -1827,6 +2145,10 @@ def register_superintendente_routes(app, state) -> None:
         message = (payload.message or "").strip()
         original_message = message
 
+        # Resuelve la respuesta de visible super.
+        # Se invoca dentro de `ask_superintendente` para encapsular una parte local de API operativa del superintendente y sus borradores internos.
+        # Recibe `reply_text`, `persist_user` como entradas relevantes junto con el contexto inyectado en la firma.
+        # No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
         def _persist_visible_super_response(reply_text: str, *, persist_user: bool = False) -> None:
             if not getattr(state, "memory_manager", None):
                 return
@@ -2629,6 +2951,10 @@ def register_superintendente_routes(app, state) -> None:
             return response
         return {"result": result}
 
+    # Atiende el endpoint `POST /sessions` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API operativa del superintendente y sus borradores internos.
+    # Recibe `payload`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Sin efectos secundarios relevantes.
     @router.post("/sessions")
     async def create_session(payload: CreateSessionRequest, _: None = Depends(_verify_bearer)):
         owner_key, owner_id, property_id = _resolve_owner_key(payload)
@@ -2679,6 +3005,10 @@ def register_superintendente_routes(app, state) -> None:
             "label": title,
         }
 
+    # Atiende el endpoint `GET /sessions` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API operativa del superintendente y sus borradores internos.
+    # Recibe `owner_id`, `property_id`, `limit`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.get("/sessions")
     async def list_sessions(
         owner_id: Optional[int | str] = Query(default=None),
@@ -2832,6 +3162,10 @@ def register_superintendente_routes(app, state) -> None:
 
         return {"items": items}
 
+    # Atiende el endpoint `GET /sessions/{session_id}/messages` y coordina la operación pública de este módulo.
+    # Se usa como punto de entrada HTTP dentro de API operativa del superintendente y sus borradores internos.
+    # Recibe `session_id`, `limit`, `include_internal`, `_` desde path, query, body o dependencias HTTP según la firma del endpoint.
+    # Devuelve la respuesta HTTP del endpoint o lanza errores de validación cuando corresponde. Puede consultar o escribir en base de datos.
     @router.get("/sessions/{session_id}/messages")
     async def list_session_messages(
         session_id: str,
