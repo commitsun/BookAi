@@ -16,6 +16,10 @@ from core.config import ModelConfig, ModelTier
 log = logging.getLogger("SubAgentTool")
 
 
+# Schema de entrada para sub-agentes.
+# Se usa en el flujo de wrapper para exponer subagentes como tools como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SubAgentToolInput(BaseModel):
     """Schema de entrada para sub-agentes."""
 
@@ -36,6 +40,10 @@ class SubAgentToolInput(BaseModel):
     )
 
 
+# Wrapper que expone un sub-agente completo como herramienta.
+# Se usa en el flujo de wrapper para exponer subagentes como tools como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class SubAgentTool(BaseTool):
     """Wrapper que expone un sub-agente completo como herramienta."""
 
@@ -49,6 +57,10 @@ class SubAgentTool(BaseTool):
 
     args_schema: Type[BaseModel] = SubAgentToolInput
 
+    # Agrupa estado y comportamiento relacionado con config.
+    # Se usa como tipo anidado dentro de `SubAgentTool` en el flujo de wrapper para exponer subagentes como tools.
+    # Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+    # Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
     class Config:
         arbitrary_types_allowed = True
 

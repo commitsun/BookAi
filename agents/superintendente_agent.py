@@ -44,6 +44,10 @@ log = logging.getLogger("SuperintendenteAgent")
 log.setLevel(logging.INFO)
 
 
+# Agente Superintendente - Gestor de Conocimiento.
+# Se usa en el flujo de agente del superintendente para operar conversaciones, base de conocimiento y WhatsApp como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class SuperintendenteAgent:
     """
     Agente Superintendente - Gestor de Conocimiento

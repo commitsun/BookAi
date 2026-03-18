@@ -53,12 +53,20 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Modelos de entrada
 # ---------------------------------------------------------------------------
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SourceHotel(BaseModel):
     id: Optional[int] = Field(default=None, description="ID interno en Odoo/Roomdoo")
     external_code: str = Field(..., description="Código externo del hotel (ej: H_PORTONOVO)")
     name: Optional[str] = Field(default=None, description="Nombre descriptivo del hotel")
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class OriginFolio(BaseModel):
     id: Optional[int] = Field(default=None, description="ID del folio en Roomdoo")
     code: Optional[str] = Field(default=None, description="Código del folio (ej: F2600107)")
@@ -73,6 +81,10 @@ class OriginFolio(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class Source(BaseModel):
     instance_url: str = Field(..., description="URL de la instancia en Roomdoo")
     db: Optional[str] = Field(default=None, description="Nombre de la base de datos")
@@ -84,6 +96,10 @@ class Source(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class Recipient(BaseModel):
     phone: str = Field(..., description="Teléfono en formato E.164 (+34...)")
     country: Optional[str] = Field(default=None, description="Código de país ISO (opcional)")
@@ -101,6 +117,10 @@ class Recipient(BaseModel):
         return data
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class TemplatePayload(BaseModel):
     code: str = Field(..., description="Código interno de la plantilla (BookAi/Odoo)")
     language: str = Field(default="es", description="Código ISO del idioma")
@@ -111,6 +131,10 @@ class TemplatePayload(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class MetaInfo(BaseModel):
     trigger: Optional[str] = None
     reservation_id: Optional[int] = None
@@ -120,6 +144,10 @@ class MetaInfo(BaseModel):
     idempotency_key: Optional[str] = None
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API de recepción y envío de plantillas desde Roomdoo/Odoo como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendTemplateRequest(BaseModel):
     source: Source
     recipient: Recipient

@@ -228,6 +228,10 @@ def _extract_template_text(data: Dict[str, Any]) -> Optional[str]:
     return None
 
 
+# Definición de plantilla WhatsApp.
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias encapsulan datos ya tipados y suelen viajar entre capas sin depender de I/O externo.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 @dataclass
 class TemplateDefinition:
     """Definición de plantilla WhatsApp."""
@@ -430,6 +434,10 @@ class TemplateDefinition:
         return "\n".join(lines)
 
 
+# Registro en memoria de plantillas (fuente Supabase).
+# Se usa en el flujo de carga y resolución de plantillas de WhatsApp como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class TemplateRegistry:
     """Registro en memoria de plantillas (fuente Supabase)."""
 

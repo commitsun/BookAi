@@ -29,6 +29,10 @@ from core.instance_context import (
 log = logging.getLogger("PropertyContextTool")
 
 
+# Input schema para resolver el contexto de property.
+# Se usa en el flujo de tool de identificación y fijación de property context como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class PropertyContextInput(BaseModel):
     """Input schema para resolver el contexto de property."""
 
@@ -141,6 +145,10 @@ def _normalize_match_text(value: Optional[str]) -> str:
     return " ".join(tokens)
 
 
+# Herramienta para fijar el contexto de property en memoria.
+# Se usa en el flujo de tool de identificación y fijación de property context como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class PropertyContextTool:
     """Herramienta para fijar el contexto de property en memoria."""
 

@@ -25,6 +25,10 @@ from tools.superintendente_tool import create_consulta_reserva_persona_tool
 log = logging.getLogger("OnboardingAgent")
 
 
+# Agente para gestionar reservas iniciales via MCP.
+# Se usa en el flujo de subagente de onboarding y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class OnboardingAgent:
     """Agente para gestionar reservas iniciales via MCP."""
 

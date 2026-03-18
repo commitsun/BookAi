@@ -28,6 +28,10 @@ TELEGRAM_REPLY_TRACKER = {}
 # ============================================================
 # 🚀 Canal Telegram - Comunicación con encargado
 # ============================================================
+# Canal Telegram: encargado ↔ huésped (gestión de escalaciones y confirmaciones).
+# Se usa en el flujo de integración de Telegram como canal operativo como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class TelegramChannel(BaseChannel):
     """Canal Telegram: encargado ↔ huésped (gestión de escalaciones y confirmaciones)."""
 

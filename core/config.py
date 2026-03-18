@@ -29,6 +29,10 @@ def _env_bool(name: str, default: bool = False) -> bool:
 # =============================================================
 # ⚙️ CONFIGURACIÓN GENERAL (.env)
 # =============================================================
+# Variables de entorno globales accesibles desde todo el sistema.
+# Se usa en el flujo de configuración global y fábrica de modelos como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class Settings:
     """Variables de entorno globales accesibles desde todo el sistema."""
 
@@ -128,6 +132,10 @@ class Settings:
 # =============================================================
 # ⚙️ ENUM DE TIER
 # =============================================================
+# Agrupa estado y comportamiento relacionado con model tier.
+# Se usa en el flujo de configuración global y fábrica de modelos como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class ModelTier(str, Enum):
     MAIN = "main"              # Orquestador principal
     SUBAGENT = "subagent"      # Subagentes (InfoAgent, DispoPreciosAgent)
@@ -139,6 +147,10 @@ class ModelTier(str, Enum):
 # =============================================================
 # 🧠 CONFIGURACIÓN CENTRALIZADA DE MODELOS LLM
 # =============================================================
+# Configuración centralizada de modelos LLM.
+# Se usa en el flujo de configuración global y fábrica de modelos como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class ModelConfig:
     """
     Configuración centralizada de modelos LLM.

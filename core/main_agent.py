@@ -61,6 +61,10 @@ FLAG_PROPERTY_LAST_PRESENTED_CANDIDATES = "property_last_presented_candidates"
 NO_GUEST_REPLY = "__NO_GUEST_REPLY__"
 
 
+# Agente principal que orquesta todas las operaciones del sistema.
+# Se usa en el flujo de orquestación principal del huésped, property context y subagentes como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class MainAgent:
     """Agente principal que orquesta todas las operaciones del sistema."""
 

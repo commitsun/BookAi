@@ -16,6 +16,10 @@ from agents.info_agent import InfoAgent
 log = logging.getLogger("InfoHotelTool")
 
 
+# Input schema para la herramienta de información del hotel.
+# Se usa en el flujo de tool de información factual del hotel como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class InfoHotelInput(BaseModel):
     """Input schema para la herramienta de información del hotel."""
     consulta: str = Field(
@@ -26,6 +30,10 @@ class InfoHotelInput(BaseModel):
     )
 
 
+# Herramienta que delega consultas de información general al subagente especializado.
+# Se usa en el flujo de tool de información factual del hotel como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class InfoHotelTool:
     """
     Herramienta que delega consultas de información general al subagente especializado.

@@ -11,6 +11,10 @@ from channels_wrapper.utils.text_utils import send_fragmented_async
 log = logging.getLogger("channel")
 
 
+# Plantilla base común para todos los canales.
+# Se usa en el flujo de capa base de canales y procesamiento común de mensajes como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class BaseChannel(ABC):
     """Plantilla base común para todos los canales."""
 

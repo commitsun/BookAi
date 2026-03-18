@@ -22,6 +22,10 @@ from core.db import supabase
 TRACK_FILE = "/tmp/escalation_tracking.pkl"
 
 
+# Contenedor liviano del estado global y dependencias compartidas.
+# Se usa en el flujo de estado compartido de aplicación y persistencia de tracking como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias concentran flags o buffers de estado que otros componentes consultan durante el flujo.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class AppState:
     """Contenedor liviano del estado global y dependencias compartidas."""
 

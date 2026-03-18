@@ -33,6 +33,10 @@ log = logging.getLogger("InternoTool")
 # 🧠 ESTRUCTURAS DE DATOS GLOBALES
 # =============================================================
 
+# Define un contenedor tipado para mover estado y metadatos dentro del sistema.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias encapsulan datos ya tipados y suelen viajar entre capas sin depender de I/O externo.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 @dataclass
 class Escalation:
     escalation_id: str
@@ -508,6 +512,10 @@ def _get_or_restore_escalation(escalation_id: str) -> Optional[Escalation]:
 # 📥 INPUT SCHEMAS
 # =============================================================
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendToEncargadoInput(BaseModel):
     escalation_id: str
     guest_chat_id: str
@@ -517,11 +525,19 @@ class SendToEncargadoInput(BaseModel):
     context: str
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class GenerarBorradorInput(BaseModel):
     escalation_id: str
     manager_response: str
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools internas de escalación, borradores y confirmaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ConfirmarYEnviarInput(BaseModel):
     escalation_id: str
     confirmed: bool

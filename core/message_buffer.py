@@ -6,6 +6,10 @@ from typing import Callable, Awaitable, Dict, List, Optional, Tuple
 log = logging.getLogger("MessageBufferManager")
 
 
+# Define un contenedor tipado para mover estado y metadatos dentro del sistema.
+# Se usa en el flujo de bufferización y debounce de mensajes entrantes como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias encapsulan datos ya tipados y suelen viajar entre capas sin depender de I/O externo.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 @dataclass
 class ConversationState:
     messages: List[str] = field(default_factory=list)
@@ -16,6 +20,10 @@ class ConversationState:
     version: int = 0  # aumenta con cada mensaje para invalidar procesos antiguos
 
 
+# Administra un buffer por conversación:.
+# Se usa en el flujo de bufferización y debounce de mensajes entrantes como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class MessageBufferManager:
     """
     Administra un buffer por conversación:

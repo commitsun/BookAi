@@ -2,6 +2,10 @@
 import random
 from typing import List
 
+# Generador de mensajes de escalación aleatorios y naturales.
+# Se usa en el flujo de mensajes predefinidos para escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class EscalationMessages:
     """
     Generador de mensajes de escalación aleatorios y naturales.

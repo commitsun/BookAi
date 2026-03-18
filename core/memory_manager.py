@@ -16,6 +16,10 @@ from core.db import (
 log = logging.getLogger("MemoryManager")
 
 
+# 🧠 Memoria híbrida (RAM + Supabase) para cada conversación.
+# Se usa en el flujo de memoria híbrida runtime + Supabase y flags de conversación como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class MemoryManager:
     """
     🧠 Memoria híbrida (RAM + Supabase) para cada conversación.

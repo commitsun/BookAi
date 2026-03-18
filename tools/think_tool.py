@@ -16,6 +16,10 @@ from core.utils.utils_prompt import load_prompt
 log = logging.getLogger("ThinkTool")
 
 
+# Input schema para la herramienta Think.
+# Se usa en el flujo de tool de razonamiento auxiliar del agente como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ThinkInput(BaseModel):
     """Input schema para la herramienta Think."""
     pregunta: str = Field(
@@ -23,6 +27,10 @@ class ThinkInput(BaseModel):
     )
 
 
+# Herramienta de razonamiento que permite al agente pensar paso a paso.
+# Se usa en el flujo de tool de razonamiento auxiliar del agente como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class ThinkTool:
     """
     Herramienta de razonamiento que permite al agente pensar paso a paso

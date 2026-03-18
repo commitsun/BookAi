@@ -66,6 +66,10 @@ auditar_respuesta = mcp.tool()(_auditar_respuesta_func)
 # 🚦 CLASE PRINCIPAL CON MEMORIA Y CONTROL ANTI-LOOP
 # =============================================================
 
+# Agente de auditoría de salida con integración de memoria y detección de loops.
+# Se usa en el flujo de supervisor de salida antes de enviar respuestas al huésped como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class SupervisorOutputAgent:
     """
     Agente de auditoría de salida con integración de memoria y detección de loops.

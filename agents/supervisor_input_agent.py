@@ -184,6 +184,10 @@ evaluar_input = mcp.tool()(_evaluar_input_func)
 # 🚦 CLASE PRINCIPAL CON MEMORIA
 # =============================================================
 
+# Evalúa los mensajes entrantes del huésped para detectar si son apropiados.
+# Se usa en el flujo de supervisor de entrada antes de pasar mensajes al sistema como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class SupervisorInputAgent:
     """
     Evalúa los mensajes entrantes del huésped para detectar si son apropiados.

@@ -311,6 +311,10 @@ def _has_strong_english_signal(text: str) -> bool:
     return hits >= 2
 
 
+# Gestión de idioma + tono diplomático hacia el huésped.
+# Se usa en el flujo de detección, normalización y reescritura de idioma como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class LanguageManager:
     """
     Gestión de idioma + tono diplomático hacia el huésped.

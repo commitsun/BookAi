@@ -12,6 +12,10 @@ log = logging.getLogger("SocketManager")
 _GLOBAL_SOCKET_MANAGER = None
 
 
+# Administra Socket.IO y expone helpers de emisión.
+# Se usa en el flujo de Socket.IO, autenticación y eventos en tiempo real como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class SocketManager:
     """Administra Socket.IO y expone helpers de emisión."""
 

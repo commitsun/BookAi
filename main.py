@@ -66,6 +66,10 @@ if not cors_origins:
     log.warning("CORS_ORIGINS vacío. Se permite cualquier origen por defecto.")
     cors_origins = ["*"]
 
+# Evita duplicar headers CORS en rutas que ya los manejan (p.ej. Socket.IO).
+# Se usa en el flujo de arranque FastAPI, CORS, sockets y registro de rutas como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class ConditionalCORSMiddleware:
     """Evita duplicar headers CORS en rutas que ya los manejan (p.ej. Socket.IO)."""
 

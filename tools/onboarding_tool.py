@@ -297,6 +297,10 @@ async def _obtener_token(
 # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
 # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_room_type_tool(memory_manager=None, chat_id: str = ""):
+    # Define el esquema de datos que valida y transporta esta parte del flujo.
+    # Se usa en el flujo de tools de reservas, room types y consultas de onboarding como pieza de organización, contrato de datos o punto de extensión.
+    # Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+    # No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
     class RoomTypeInput(BaseModel):
         property_id: Optional[int] = Field(
             default=None,
@@ -397,6 +401,10 @@ def create_room_type_tool(memory_manager=None, chat_id: str = ""):
 # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
 # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede consultar o escribir en base de datos, realizar llamadas externas o a modelos, activar tools o agentes.
 def create_reservation_tool(memory_manager=None, chat_id: str = ""):
+    # Define el esquema de datos que valida y transporta esta parte del flujo.
+    # Se usa en el flujo de tools de reservas, room types y consultas de onboarding como pieza de organización, contrato de datos o punto de extensión.
+    # Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+    # No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
     class ReservationInput(BaseModel):
         checkin: str = Field(..., description="Fecha check-in YYYY-MM-DD")
         checkout: str = Field(..., description="Fecha check-out YYYY-MM-DD")
@@ -818,6 +826,10 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
         create_consulta_reserva_persona_tool,
     )
 
+    # Define el esquema de datos que valida y transporta esta parte del flujo.
+    # Se usa en el flujo de tools de reservas, room types y consultas de onboarding como pieza de organización, contrato de datos o punto de extensión.
+    # Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+    # No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
     class ConsultaReservaPropiaInput(BaseModel):
         folio_id: Optional[str] = Field(
             default=None,
@@ -1056,6 +1068,10 @@ def create_consulta_reserva_propia_tool(memory_manager=None, chat_id: str = ""):
 # Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `chat_id` como datos de contexto o entrada de la operación.
 # Devuelve una tool configurada para que el agente la pueda invocar directamente. Puede realizar llamadas externas o a modelos, activar tools o agentes.
 def create_multireserva_tool(memory_manager=None, chat_id: str = ""):
+    # Define el esquema de datos que valida y transporta esta parte del flujo.
+    # Se usa en el flujo de tools de reservas, room types y consultas de onboarding como pieza de organización, contrato de datos o punto de extensión.
+    # Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+    # No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
     class MultiReservaInput(BaseModel):
         chat_id: Optional[str] = Field(default=None, description="Chat ID del huésped.")
         property_id: Optional[int] = Field(default=None, description="Propiedad (property_id).")

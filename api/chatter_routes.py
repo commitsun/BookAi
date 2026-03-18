@@ -60,6 +60,10 @@ except Exception:
 # ---------------------------------------------------------------------------
 # Modelos de entrada
 # ---------------------------------------------------------------------------
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendMessageRequest(BaseModel):
     user_id: Optional[int | str] = Field(
         default=None,
@@ -78,6 +82,10 @@ class SendMessageRequest(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ToggleBookAiRequest(BaseModel):
     bookai_enabled: bool = Field(..., description="Activa o desactiva BookAI para el hilo")
     property_id: Optional[int | str] = Field(
@@ -86,6 +94,10 @@ class ToggleBookAiRequest(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendTemplateRequest(BaseModel):
     chat_id: str = Field(..., description="ID del chat (telefono)")
     template_code: str = Field(..., description="Codigo interno de la plantilla")
@@ -107,6 +119,10 @@ class SendTemplateRequest(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ProposedResponseRequest(BaseModel):
     instruction: str = Field(..., description="Instrucciones para ajustar la respuesta")
     original_response: Optional[str] = Field(
@@ -119,10 +135,18 @@ class ProposedResponseRequest(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class EscalationChatRequest(BaseModel):
     message: str = Field(..., description="Mensaje del operador hacia la IA")
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API del chatter, historial, mensajes, templates y escalaciones como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ResolveEscalationRequest(BaseModel):
     property_id: Optional[int | str] = Field(
         default=None,

@@ -21,6 +21,10 @@ log = logging.getLogger("whatsapp")
 BUFFER_WAIT_SECONDS = 8
 
 
+# Canal WhatsApp (Meta Graph API) con integración a InternoAgent v4.
+# Se usa en el flujo de canal WhatsApp Meta con buffer y escalación automática como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class WhatsAppChannel(BaseChannel):
     """
     Canal WhatsApp (Meta Graph API) con integración a InternoAgent v4.

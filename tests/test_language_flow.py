@@ -8,6 +8,10 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 
+# Centraliza el estado y las operaciones transversales de esta capa.
+# Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class _FakeLanguageManager:
     # Inicializa el estado interno y las dependencias de `_FakeLanguageManager`.
     # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
@@ -31,6 +35,10 @@ class _FakeLanguageManager:
         return f"[{lang_code}] {text}"
 
 
+# Agrupa estado y comportamiento relacionado con fake supervisor.
+# Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class _FakeSupervisor:
     # Valida el validate.
     # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
@@ -40,6 +48,10 @@ class _FakeSupervisor:
         return {"estado": "Aprobado", "motivo": ""}
 
 
+# Agrupa estado y comportamiento relacionado con fake interno.
+# Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class _FakeInterno:
     # Resuelve el escalate.
     # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
@@ -49,6 +61,10 @@ class _FakeInterno:
         return None
 
 
+# Agrupa estado y comportamiento relacionado con fake memory.
+# Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class _FakeMemory:
     # Inicializa el estado interno y las dependencias de `_FakeMemory`.
     # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
@@ -102,6 +118,10 @@ class _FakeMemory:
         return []
 
 
+# Representa el estado estructurado que comparte esta parte del flujo.
+# Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+# Sus instancias concentran flags o buffers de estado que otros componentes consultan durante el flujo.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class _FakeState:
     # Inicializa el estado interno y las dependencias de `_FakeState`.
     # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.
@@ -124,6 +144,10 @@ def _load_pipeline_with_stubs(detected_lang: str, agent_reply: str = "ok"):
     fake_lang_mod = types.ModuleType("core.language_manager")
     fake_lang_mod.language_manager = _FakeLanguageManager(detected_lang)
 
+    # Agrupa la lógica principal del agente para esta responsabilidad del sistema.
+    # Se usa desde la batería de tests para montar dobles, payloads o escenarios de tests del flujo de idioma y pipeline.
+    # Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+    # Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
     class _DummyMainAgent:
         # Orquesta la ejecución principal de `_DummyMainAgent` para la consulta o evento actual.
         # Se usa desde la batería de tests para cubrir el comportamiento esperado de tests del flujo de idioma y pipeline.

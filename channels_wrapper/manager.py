@@ -10,6 +10,10 @@ from channels_wrapper.base_channel import BaseChannel  # 👈 Verificación de h
 log = logging.getLogger("ChannelManager")
 
 
+# Administra los canales (WhatsApp, Telegram, etc.).
+# Se usa en el flujo de carga dinámica y envío por canales externos como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class ChannelManager:
     """
     Administra los canales (WhatsApp, Telegram, etc.)

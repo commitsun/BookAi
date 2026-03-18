@@ -109,11 +109,19 @@ def _mark_as_read(message_id: str, phone_id: str | None = None, token: str | Non
         log.debug("No se pudo enviar read receipt: %s", exc)
 
 
+# Limpia teléfono parecido a.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `value` como entrada principal según la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _clean_phone_like(value: str | None) -> str:
     raw_value = str(value or "").strip()
     return re.sub(r"\D", "", raw_value).strip() or raw_value
 
 
+# Resuelve el ID de remitente teléfono.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `contacts`, `msg` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _resolve_sender_phone_id(contacts: list[dict] | None, msg: dict) -> str:
     primary_contact = contacts[0] if contacts else {}
     wa_id = primary_contact.get("wa_id")
@@ -122,6 +130,10 @@ def _resolve_sender_phone_id(contacts: list[dict] | None, msg: dict) -> str:
     return str(msg.get("from") or "").strip()
 
 
+# Hidrata el payload de instancia contexto desde.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `memory_manager` como dependencias o servicios compartidos inyectados desde otras capas, y `memory_id`, `payload`, `resolve_property_table` como datos de contexto o entrada de la operación.
+# No devuelve un valor relevante; deja preparado el estado o ejecuta la acción necesaria. Sin efectos secundarios relevantes.
 def _hydrate_instance_context_from_payload(memory_manager, memory_id: str, payload: dict | None, resolve_property_table) -> None:
     if not (memory_manager and payload):
         return
@@ -145,6 +157,10 @@ def _hydrate_instance_context_from_payload(memory_manager, memory_id: str, paylo
             memory_manager.set_flag(memory_id, key, value)
 
 
+# Hidrata webhook contexto.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `state` como dependencias o servicios compartidos inyectados desde otras capas, y `memory_id`, `sender_phone_id`, `normalized_instance_number`, `instance_phone_id` como datos de contexto o entrada de la operación.
+# Devuelve un `tuple[str | None, str | None]` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _hydrate_webhook_context(
     state,
     memory_id: str,
@@ -192,10 +208,18 @@ def _hydrate_webhook_context(
     return resolved_instance_phone_id, instance_token
 
 
+# Extrae texto mensaje body.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `_` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_text_message_body(msg: dict, _: str | None = None) -> str:
     return msg.get("text", {}).get("body", "")
 
 
+# Extrae el texto de audio mensaje.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `instance_token` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_audio_message_text(msg: dict, instance_token: str | None = None) -> str:
     from channels_wrapper.utils.media_utils import transcribe_audio
 
@@ -211,6 +235,10 @@ def _extract_audio_message_text(msg: dict, instance_token: str | None = None) ->
     return text
 
 
+# Extrae el texto de incoming WhatsApp.
+# Se usa en el flujo de webhook WhatsApp del flujo principal multipropiedad para preparar datos, validaciones o decisiones previas.
+# Recibe `msg`, `instance_token` como entradas relevantes junto con el contexto inyectado en la firma.
+# Devuelve un `str` con el resultado de esta operación. Sin efectos secundarios relevantes.
 def _extract_incoming_whatsapp_text(msg: dict, instance_token: str | None = None) -> str:
     message_type = str(msg.get("type") or "").strip().lower()
     message_handlers = {

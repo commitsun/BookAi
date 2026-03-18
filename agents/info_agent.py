@@ -63,6 +63,10 @@ async def _invoke_google_search(query: str) -> Optional[str]:
         return None
 
 
+# Schema para búsqueda en Google.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class GoogleSearchInput(BaseModel):
     """Schema para búsqueda en Google."""
 
@@ -73,6 +77,10 @@ class GoogleSearchInput(BaseModel):
     )
 
 
+# Tool que realiza búsquedas en Google usando un placeholder.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class GoogleSearchTool(BaseTool):
     """Tool que realiza búsquedas en Google usando un placeholder."""
 
@@ -115,6 +123,10 @@ class GoogleSearchTool(BaseTool):
         return loop.run_until_complete(self._arun(query))
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class KBSearchInput(BaseModel):
     query: str = Field(
         ...,
@@ -122,6 +134,10 @@ class KBSearchInput(BaseModel):
     )
 
 
+# Tool que consulta la base de conocimientos (MCP).
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas como pieza de organización, contrato de datos o punto de extensión.
+# Agrupa atributos y métodos de una responsabilidad concreta; la configuración real entra por su constructor o por sus campos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class KBSearchTool(BaseTool):
     """Tool que consulta la base de conocimientos (MCP)."""
 
@@ -483,6 +499,10 @@ class KBSearchTool(BaseTool):
         return loop.run_until_complete(self._arun(query))
 
 
+# Agente factual basado en AgentExecutor con múltiples herramientas.
+# Se usa en el flujo de subagente de base de conocimiento, Google y verificación de respuestas como pieza de organización, contrato de datos o punto de extensión.
+# Se instancia con configuración, managers, clients o callbacks externos y luego delega el trabajo en sus métodos.
+# Los efectos reales ocurren cuando sus métodos se invocan; la definición de clase solo organiza estado y responsabilidades.
 class InfoAgent:
     """Agente factual basado en AgentExecutor con múltiples herramientas."""
 

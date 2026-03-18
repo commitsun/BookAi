@@ -30,6 +30,10 @@ import pytz
 log = logging.getLogger("SuperintendenteTools")
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class AddToKBInput(BaseModel):
     topic: str = Field(..., description="Tema o categoría (ej: 'Servicios de Spa')")
     content: str = Field(..., description="Contenido detallado de la información")
@@ -39,6 +43,10 @@ class AddToKBInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendBroadcastInput(BaseModel):
     template_id: str = Field(..., description="ID de la plantilla de WhatsApp")
     guest_ids: str = Field(..., description="IDs de huéspedes separados por comas")
@@ -60,6 +68,10 @@ class SendBroadcastInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendBroadcastCheckinInput(BaseModel):
     template_id: str = Field(..., description="ID de la plantilla de WhatsApp")
     date: Optional[str] = Field(
@@ -84,6 +96,10 @@ class SendBroadcastCheckinInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ReviewConversationsInput(BaseModel):
     limit: int = Field(
         default=10,
@@ -107,6 +123,10 @@ class ReviewConversationsInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendMessageMainInput(BaseModel):
     message: str = Field(
         ...,
@@ -114,6 +134,10 @@ class SendMessageMainInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendWhatsAppInput(BaseModel):
     guest_id: str = Field(..., description="ID del huésped en WhatsApp (con prefijo país)")
     message: str = Field(..., description="Mensaje de texto a enviar (sin plantilla)")
@@ -127,6 +151,10 @@ class SendWhatsAppInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ConsultaReservaGeneralInput(BaseModel):
     fecha_inicio: str = Field(..., description="Fecha de inicio en formato YYYY-MM-DD")
     fecha_fin: str = Field(..., description="Fecha final en formato YYYY-MM-DD")
@@ -152,6 +180,10 @@ class ConsultaReservaGeneralInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ConsultaReservaPersonaInput(BaseModel):
     folio_id: str = Field(..., description="ID del folio de la reserva")
     property_id: Optional[int] = Field(
@@ -638,6 +670,10 @@ def _set_instance_context(
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class RemoveFromKBInput(BaseModel):
     criterio: str = Field(
         ...,
@@ -653,6 +689,10 @@ class RemoveFromKBInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class ListTemplatesInput(BaseModel):
     language: str = Field(
         default="es", description="Idioma a listar (ej: es, en, fr)"
@@ -667,6 +707,10 @@ class ListTemplatesInput(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tools operativas del superintendente para base de conocimiento, WhatsApp, broadcasts y reservas como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SendTemplateDraftInput(BaseModel):
     template_code: str = Field(..., description="Código interno de la plantilla.")
     guest_ids: str = Field(

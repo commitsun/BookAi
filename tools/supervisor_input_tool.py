@@ -23,6 +23,10 @@ log = logging.getLogger("SupervisorInputTool")
 # =============================================================
 # 📄 SCHEMA DE ENTRADA
 # =============================================================
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de tool de validación previa de entrada como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class _SISchema(BaseModel):
     mensaje_usuario: str = Field(..., description="Mensaje original del usuario a validar")
 

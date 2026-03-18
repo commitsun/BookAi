@@ -36,6 +36,10 @@ _INTERNAL_MARKERS = (
 # ---------------------------------------------------------------------------
 # Modelos de entrada
 # ---------------------------------------------------------------------------
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class SuperintendenteContext(BaseModel):
     owner_id: Optional[int | str] = Field(
         default=None,
@@ -53,12 +57,20 @@ class SuperintendenteContext(BaseModel):
     )
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class AskSuperintendenteRequest(SuperintendenteContext):
     message: str = Field(..., description="Mensaje para el Superintendente")
     context_window: int = Field(default=50, ge=1, le=200)
     chat_history: Optional[list[Any]] = Field(default=None, description="Historial opcional en formato mensajes")
 
 
+# Define el esquema de datos que valida y transporta esta parte del flujo.
+# Se usa en el flujo de API operativa del superintendente y sus borradores internos como pieza de organización, contrato de datos o punto de extensión.
+# Sus instancias reciben los campos declarados y validan payloads antes de entrar en endpoints, tools o agentes.
+# No produce efectos por sí sola; sirve como estructura tipada para mover información entre capas.
 class CreateSessionRequest(SuperintendenteContext):
     title: Optional[str] = Field(default=None, description="Título visible del chat")
 
