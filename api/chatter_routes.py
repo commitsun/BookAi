@@ -5122,13 +5122,6 @@ def register_chatter_routes(app, state) -> None:
                 )
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
-            state.memory_manager.save(
-                session_id,
-                role="system",
-                content=f"[TEMPLATE_SENT] plantilla={template_name} lang={language}",
-                channel="whatsapp",
-                original_chat_id=context_id or None,
-            )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)
         try:
