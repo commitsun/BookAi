@@ -21,12 +21,16 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
 logging.info("✅ Conexión con Supabase inicializada correctamente.")
 
+_INTERNAL_CONTROL_MARKER_RE = re.compile(r"^__[A-Z0-9_]+__$")
+
 
 def _is_internal_non_persistable_message(content: str) -> bool:
     text = (content or "").strip()
     if not text:
         return False
     lowered = text.lower()
+    if _INTERNAL_CONTROL_MARKER_RE.fullmatch(text):
+        return True
     if lowered.startswith("salida modelo:"):
         return True
     if "api debug" in lowered:
