@@ -404,7 +404,7 @@ class WhatsAppChannel(BaseChannel):
         parameters: dict | list | tuple | None = None,
         *,
         language: str = "es",
-    ) -> bool:
+    ) -> dict | bool | None:
         """
         Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
         Soporta parámetros opcionales en orden de aparición.
@@ -531,7 +531,10 @@ class WhatsAppChannel(BaseChannel):
                 r.status_code,
                 payload.get("template", {}).get("components"),
             )
-            return True
+            try:
+                return r.json()
+            except Exception:
+                return {"ok": True}
         except Exception as e:
             log.error(
                 "⚠️ Error enviando plantilla WhatsApp (%s → %s): %s",
