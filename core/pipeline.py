@@ -811,6 +811,37 @@ async def process_user_message(
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
         guest_lang_confidence = 0.0
+
+        def _recent_guest_messages(limit: int = 6) -> list[str]:
+            if not state.memory_manager:
+                return []
+            try:
+                raw_history = state.memory_manager.get_memory(mem_id, limit=max(limit * 4, 12)) or []
+            except TypeError:
+                try:
+                    raw_history = state.memory_manager.get_memory(mem_id) or []
+                except Exception:
+                    raw_history = []
+            except Exception:
+                raw_history = []
+
+            guest_msgs: list[str] = []
+            fallback_user_msgs: list[str] = []
+            current_clean = str(user_message or "").strip()
+            for item in raw_history:
+                if not isinstance(item, dict):
+                    continue
+                role = str(item.get("role") or "").strip().lower()
+                content = str(item.get("content") or "").strip()
+                if not content or content == current_clean:
+                    continue
+                if role == "guest":
+                    guest_msgs.append(content)
+                elif role == "user":
+                    fallback_user_msgs.append(content)
+
+            return (guest_msgs or fallback_user_msgs)[-limit:]
+
         if state.memory_manager:
             if property_id is not None:
                 # Asegura que los saves posteriores persistan property_id en chat_history.
@@ -822,21 +853,25 @@ async def process_user_message(
             state.memory_manager.set_flag(mem_id, "default_channel", channel)
             try:
                 prev_lang = state.memory_manager.get_flag(mem_id, "guest_lang")
-                detected_lang, detected_confidence = language_manager.detect_language_with_confidence(
-                    user_message,
-                    prev_lang=prev_lang,
+                prev_confidence = state.memory_manager.get_flag(mem_id, "guest_lang_confidence")
+                guest_lang, guest_lang_confidence = language_manager.resolve_response_language(
+                    latest_guest_message=user_message,
+                    recent_guest_messages=_recent_guest_messages(),
+                    guest_language_hint=prev_lang,
+                    guest_language_confidence=prev_confidence,
+                    last_resolved_language=prev_lang,
                 )
-                guest_lang = (detected_lang or prev_lang or "es").strip().lower() or "es"
-                try:
-                    guest_lang_confidence = float(detected_confidence or 0.0)
-                except Exception:
-                    guest_lang_confidence = 0.0
                 guest_lang_confidence = max(0.0, min(1.0, guest_lang_confidence))
                 for lang_key in {str(mem_id or "").strip(), str(chat_id or "").strip()}:
                     if not lang_key:
                         continue
                     state.memory_manager.set_flag(lang_key, "guest_lang", guest_lang)
                     state.memory_manager.set_flag(lang_key, "guest_lang_confidence", guest_lang_confidence)
+                    state.memory_manager.set_flag(
+                        lang_key,
+                        "guest_lang_last_message",
+                        str(user_message or "").strip(),
+                    )
             except Exception as exc:
                 log.debug("No se pudo detectar/guardar guest_lang en pipeline: %s", exc)
 

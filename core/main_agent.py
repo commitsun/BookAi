@@ -562,16 +562,67 @@ class MainAgent:
             return prompt
         return "No encuentro ese hotel en esta instancia. ¿Puedes indicarme otro nombre (aprox)?"
 
+    def _recent_guest_messages(self, chat_id: str, limit: int = 6) -> list[str]:
+        if not self.memory_manager or not chat_id:
+            return []
+        try:
+            raw_history = self.memory_manager.get_memory(chat_id, limit=max(limit * 4, 12)) or []
+        except TypeError:
+            try:
+                raw_history = self.memory_manager.get_memory(chat_id) or []
+            except Exception:
+                raw_history = []
+        except Exception:
+            raw_history = []
+
+        guest_msgs: list[str] = []
+        fallback_user_msgs: list[str] = []
+        for item in raw_history:
+            if not isinstance(item, dict):
+                continue
+            role = str(item.get("role") or "").strip().lower()
+            content = str(item.get("content") or "").strip()
+            if not content:
+                continue
+            if role == "guest":
+                guest_msgs.append(content)
+            elif role == "user":
+                fallback_user_msgs.append(content)
+
+        return (guest_msgs or fallback_user_msgs)[-limit:]
+
     def _get_guest_lang(self, chat_id: str, user_input: Optional[str] = None) -> str:
         if not self.memory_manager or not chat_id:
             return "es"
         prev = self.memory_manager.get_flag(chat_id, "guest_lang")
         if user_input is None:
             return (prev or "es").strip().lower() or "es"
-        detected = language_manager.detect_language(user_input, prev_lang=prev)
-        if detected:
-            self.memory_manager.set_flag(chat_id, "guest_lang", detected)
-            return detected
+        current_input = str(user_input or "").strip()
+        if not current_input:
+            return (prev or "es").strip().lower() or "es"
+
+        last_resolved_message = self.memory_manager.get_flag(chat_id, "guest_lang_last_message")
+        if (
+            isinstance(last_resolved_message, str)
+            and last_resolved_message.strip() == current_input
+            and isinstance(prev, str)
+            and prev.strip()
+        ):
+            return prev.strip().lower()
+
+        prev_confidence = self.memory_manager.get_flag(chat_id, "guest_lang_confidence")
+        resolved_lang, resolved_confidence = language_manager.resolve_response_language(
+            latest_guest_message=current_input,
+            recent_guest_messages=self._recent_guest_messages(chat_id),
+            guest_language_hint=prev,
+            guest_language_confidence=prev_confidence,
+            last_resolved_language=prev,
+        )
+        if resolved_lang:
+            self.memory_manager.set_flag(chat_id, "guest_lang", resolved_lang)
+            self.memory_manager.set_flag(chat_id, "guest_lang_confidence", resolved_confidence)
+            self.memory_manager.set_flag(chat_id, "guest_lang_last_message", current_input)
+            return resolved_lang
         return (prev or "es").strip().lower() or "es"
 
     def _localize(self, chat_id: str, text: str) -> str:

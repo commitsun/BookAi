@@ -28,6 +28,8 @@ def build_dynamic_context_block(
     reservation_locator: Optional[Any] = None,
     checkin: Optional[str] = None,
     checkout: Optional[str] = None,
+    guest_language: Optional[str] = None,
+    guest_language_confidence: Optional[Any] = None,
 ) -> str:
     """Return formatted dynamic context block or empty string when unused."""
     return (
@@ -46,7 +48,9 @@ def build_dynamic_context_block(
         f"Folio_id: {_stringify(folio_id)},\n"
         f"Reservation_locator: {_stringify(reservation_locator)},\n"
         f"Checkin: {_stringify(checkin)},\n"
-        f"Checkout: {_stringify(checkout)}"
+        f"Checkout: {_stringify(checkout)},\n"
+        f"guest_language: {_stringify(guest_language)},\n"
+        f"guest_language_confidence: {_stringify(guest_language_confidence)}"
     )
 
 
@@ -74,6 +78,8 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
     reservation_locator = memory_manager.get_flag(chat_id, "reservation_locator")
     checkin = memory_manager.get_flag(chat_id, "checkin")
     checkout = memory_manager.get_flag(chat_id, "checkout")
+    guest_language = memory_manager.get_flag(chat_id, "guest_lang")
+    guest_language_confidence = memory_manager.get_flag(chat_id, "guest_lang_confidence")
 
     base_block = build_dynamic_context_block(
         instance_url=instance_url,
@@ -91,6 +97,8 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
         reservation_locator=reservation_locator,
         checkin=checkin,
         checkout=checkout,
+        guest_language=guest_language,
+        guest_language_confidence=guest_language_confidence,
     )
 
     temp_block = ""

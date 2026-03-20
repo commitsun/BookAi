@@ -1,4 +1,5 @@
 # core/language_manager.py
+import json
 import os
 import re
 from functools import lru_cache
@@ -290,6 +291,122 @@ class LanguageManager:
         if confidence > 1.0:
             return 1.0
         return confidence
+
+    @staticmethod
+    def _parse_router_lang(raw_text: str, fallback: str) -> str:
+        raw = (raw_text or "").strip()
+        if not raw:
+            return fallback
+
+        candidate = None
+        try:
+            data = json.loads(raw)
+            if isinstance(data, dict):
+                candidate = data.get("lang") or data.get("language") or data.get("code")
+            elif isinstance(data, str):
+                candidate = data
+        except Exception:
+            candidate = None
+
+        if not candidate:
+            match = re.search(r"\b([a-z]{2}(?:-[a-z]{2})?)\b", raw.lower())
+            if match:
+                candidate = match.group(1)
+
+        return _normalize_iso_lang_code(str(candidate or "")) or fallback
+
+    def resolve_response_language(
+        self,
+        latest_guest_message: str,
+        recent_guest_messages: Optional[list[str]] = None,
+        guest_language_hint: Optional[str] = None,
+        guest_language_confidence: Optional[float] = None,
+        last_resolved_language: Optional[str] = None,
+    ) -> Tuple[str, float]:
+        """
+        Resuelve el idioma de respuesta con contexto real de conversación.
+        El LLM decide con esta jerarquía:
+          1. idioma observable en el último mensaje del huésped,
+          2. idioma predominante en mensajes recientes del huésped,
+          3. guest_language_confidence / hint como señal auxiliar,
+          4. último idioma ya resuelto si sigue habiendo ambigüedad.
+        """
+        latest = (latest_guest_message or "").strip()
+        hint = _normalize_iso_lang_code(guest_language_hint or "")
+        last_lang = _normalize_iso_lang_code(last_resolved_language or "") or hint or "es"
+        hint_conf = self._normalize_confidence(guest_language_confidence, default=0.0)
+
+        detected_lang, detected_confidence = self.detect_language_with_confidence(
+            latest,
+            prev_lang=last_lang,
+        )
+        detected = _normalize_iso_lang_code(detected_lang or "") or last_lang
+        detected_conf = self._normalize_confidence(detected_confidence, default=0.0)
+        fallback = detected or hint or last_lang or "es"
+
+        if not latest:
+            support_conf = max(
+                detected_conf if detected == fallback else 0.0,
+                hint_conf if hint == fallback else 0.0,
+            )
+            return fallback, support_conf
+
+        recent = []
+        for msg in recent_guest_messages or []:
+            clean = str(msg or "").strip()
+            if not clean or clean == latest:
+                continue
+            recent.append(clean)
+        recent = recent[-6:]
+
+        router_prompt = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a language-routing component for a multilingual hotel assistant. "
+                    "Determine the single ISO 639-1 language code the assistant must use to reply. "
+                    "Decision order: "
+                    "1) observable language in the latest guest message; "
+                    "2) predominant language in the guest's recent messages; "
+                    "3) auxiliary signals such as guest_language_hint and guest_language_confidence; "
+                    "4) if still ambiguous, keep last_resolved_language. "
+                    "Rules: reply with one language only; do not mix languages; "
+                    "change language only if the guest clearly switches; "
+                    "brief acknowledgements, thanks, emojis, or low-information snippets are ambiguous unless they clearly indicate a switch; "
+                    "never choose a language from hotel location, defaults, examples, or static configuration. "
+                    "Return ONLY strict JSON like {\"lang\":\"es\"}."
+                ),
+            },
+            {
+                "role": "user",
+                "content": json.dumps(
+                    {
+                        "latest_guest_message": latest,
+                        "recent_guest_messages": recent,
+                        "detected_lang": detected,
+                        "detected_confidence": detected_conf,
+                        "guest_language_hint": hint,
+                        "guest_language_confidence": hint_conf,
+                        "last_resolved_language": last_lang,
+                    },
+                    ensure_ascii=False,
+                ),
+            },
+        ]
+
+        try:
+            raw = self.llm.invoke(router_prompt).content.strip()
+            resolved = self._parse_router_lang(raw, fallback=fallback)
+        except Exception:
+            resolved = fallback
+
+        support_conf = 0.0
+        if detected == resolved:
+            support_conf = max(support_conf, detected_conf)
+        if hint and hint == resolved:
+            support_conf = max(support_conf, hint_conf)
+
+        return resolved, support_conf
 
     def _llm_detect_lang_code(self, text: str, fallback: str = "es") -> str:
         prompt = [
