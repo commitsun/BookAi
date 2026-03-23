@@ -38,12 +38,12 @@ class SourceHotel(BaseModel):
     id: Optional[int] = Field(default=None, description="ID interno Roomdoo/Odoo")
     external_code: str = Field(..., description="Código externo del hotel en Roomdoo")
     name: Optional[str] = Field(default=None, description="Nombre descriptivo del hotel")
+    bookai_mode: Optional[str] = Field(default=None, description="Modo BookAI configurado para el hotel")
 
 
 class OriginFolio(BaseModel):
     id: Optional[int] = Field(default=None, description="ID del folio en Roomdoo")
     code: Optional[str] = Field(default=None, description="Código del folio")
-    name: Optional[str] = Field(default=None, description="Nombre público del folio")
     min_checkin: Optional[str] = Field(default=None, description="Fecha de entrada ISO")
     max_checkout: Optional[str] = Field(default=None, description="Fecha de salida ISO")
 
@@ -73,15 +73,10 @@ class TemplatePayload(BaseModel):
     code: str = Field(..., description="Código lógico de la plantilla")
     language: str = Field(default="es", description="Idioma")
     parameters: dict[str, Any] = Field(default_factory=dict, description="Parámetros nominales")
-    rendered_text: Optional[str] = Field(default=None, description="Texto renderizado")
 
 
 class MetaInfo(BaseModel):
     trigger: Optional[str] = None
-    reservation_id: Optional[int] = None
-    folio_id: Optional[int] = None
-    property_id: Optional[int] = None
-    instance_id: Optional[str] = None
     idempotency_key: Optional[str] = None
 
 
@@ -90,7 +85,6 @@ class SendTemplateRequest(BaseModel):
     recipient: Recipient
     template: TemplatePayload
     meta: Optional[MetaInfo] = None
-    button_base_url: Optional[str] = Field(default=None)
 
 
 @dataclass(frozen=True)
@@ -107,7 +101,6 @@ class MessageContext:
     checkin: Optional[str]
     checkout: Optional[str]
     guest_name: Optional[str]
-    rendered_text: Optional[str]
 
 
 @dataclass(frozen=True)
@@ -283,9 +276,9 @@ def _is_plausible_recipient_phone(phone: str, country: Optional[str] = None) -> 
     return True
 
 
-def _canonical_template_code(raw_code: Optional[str], language: Optional[str]) -> str:
-    code = str(raw_code or "").strip().lower()
-    lang = str(language or "es").split("-")[0].strip().lower() or "es"
+def _canonical_template_code(raw_code: str, language: str) -> str:
+    code = str(raw_code).strip().lower()
+    lang = str(language).split("-")[0].strip().lower() or "es"
     for suffix in (f"__{lang}", f"_{lang}", f"-{lang}"):
         if code.endswith(suffix):
             return code[: -len(suffix)]
@@ -294,93 +287,22 @@ def _canonical_template_code(raw_code: Optional[str], language: Optional[str]) -
 
 def _extract_reservation_fields(params: dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
     return (
-        _pick_first_text(
-            params,
-            "folio_id",
-            "folioId",
-            "folio",
-            "localizador",
-            "reservation_id",
-            "reserva_id",
-            "id_reserva",
-            "locator",
-        ),
-        _pick_first_text(
-            params,
-            "checkin",
-            "check_in",
-            "fecha_entrada",
-            "entrada",
-            "arrival",
-            "checkin_date",
-        ),
-        _pick_first_text(
-            params,
-            "checkout",
-            "check_out",
-            "fecha_salida",
-            "salida",
-            "departure",
-            "checkout_date",
-        ),
+        _pick_first_text(params, "folio_id", "reservation_id", "reservation_locator", "locator"),
+        _pick_first_text(params, "checkin", "check_in", "checkin_date"),
+        _pick_first_text(params, "checkout", "check_out", "checkout_date"),
     )
 
 
 def _extract_reservation_locator(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(params, "reservation_locator", "locator", "reservation_code", "code", "name")
+    return _pick_first_text(params, "reservation_locator", "locator")
 
 
 def _extract_reservation_client_name(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(
-        params,
-        "client_name",
-        "clientName",
-        "guest_name",
-        "guestName",
-        "partner_name",
-        "partnerName",
-        "full_name",
-        "fullName",
-        "name_guest",
-        "guest",
-        "titular",
-    )
+    return _pick_first_text(params, "buyer_name", "guest_name", "client_name")
 
 
 def _extract_property_name(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(params, "hotel", "hotel_name", "property_name", "property")
-
-
-def _extract_from_text(text: str) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    if not text:
-        return None, None, None
-
-    folio_match = re.search(r"(folio(?:_id)?)\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
-    if not folio_match:
-        folio_match = re.search(r"reserva\s*[:#]?\s*([A-Za-z0-9]{4,})", text, re.IGNORECASE)
-    checkin_match = re.search(
-        r"(entrada|check[- ]?in)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
-        text,
-        re.IGNORECASE,
-    )
-    checkout_match = re.search(
-        r"(salida|check[- ]?out)\s*[:#]?\s*([0-9]{1,2}[-/][0-9]{1,2}[-/][0-9]{2,4})",
-        text,
-        re.IGNORECASE,
-    )
-
-    folio_external_code = None
-    if folio_match:
-        group_index = 2 if folio_match.lastindex and folio_match.lastindex >= 2 else 1
-        candidate = folio_match.group(group_index)
-        if re.fullmatch(r"(?=.*\d)[A-Za-z0-9]{4,}", candidate or ""):
-            folio_external_code = candidate
-
-    return (
-        folio_external_code,
-        checkin_match.group(2) if checkin_match else None,
-        checkout_match.group(2) if checkout_match else None,
-    )
+    return _pick_first_text(params, "hotel_name", "property_name")
 
 
 def _extract_provider_message_id(raw_response: Any) -> Optional[str]:
@@ -410,18 +332,14 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
     template_params_raw = dict(payload.template.parameters or {})
     folio_details_url_raw = extract_folio_details_url(template_params_raw)
     button_base_url = resolve_button_base_url(
-        request_base_url=payload.button_base_url,
         params=template_params_raw,
     )
     template_params = strip_url_control_params(template_params_raw)
 
-    folio_external_code = None
-    if payload.meta and payload.meta.folio_id is not None:
-        folio_external_code = str(payload.meta.folio_id).strip()
-    elif payload.source.origin_folio and payload.source.origin_folio.id is not None:
-        folio_external_code = str(payload.source.origin_folio.id).strip()
-
+    origin_folio = payload.source.origin_folio
     raw_folio, raw_checkin, raw_checkout = _extract_reservation_fields(template_params_raw)
+    origin_folio_code = str(origin_folio.code or "").strip() if origin_folio else ""
+    folio_external_code = origin_folio_code or raw_folio
     reservation_locator = _extract_reservation_locator(template_params_raw)
     guest_name = (
         _extract_reservation_client_name(template_params_raw)
@@ -429,27 +347,9 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
         or None
     )
 
-    folio_external_code = folio_external_code or raw_folio
-    checkin = raw_checkin
-    checkout = raw_checkout
-
-    if payload.source.origin_folio:
-        folio_external_code = folio_external_code or (payload.source.origin_folio.code or "").strip() or None
-        checkin = checkin or payload.source.origin_folio.min_checkin
-        checkout = checkout or payload.source.origin_folio.max_checkout
-        reservation_locator = (
-            reservation_locator
-            or (payload.source.origin_folio.code or "").strip()
-            or (payload.source.origin_folio.name or "").strip()
-            or None
-        )
-
-    rendered_text = (payload.template.rendered_text or "").strip() or None
-    if rendered_text:
-        rendered_folio, rendered_checkin, rendered_checkout = _extract_from_text(rendered_text)
-        folio_external_code = folio_external_code or rendered_folio
-        checkin = checkin or rendered_checkin
-        checkout = checkout or rendered_checkout
+    checkin = (origin_folio.min_checkin if origin_folio else None) or raw_checkin
+    checkout = (origin_folio.max_checkout if origin_folio else None) or raw_checkout
+    reservation_locator = reservation_locator or origin_folio_code or None
 
     idempotency_key = payload.meta.idempotency_key if payload.meta else None
     if idempotency_key is not None:
@@ -468,7 +368,6 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
         checkin=checkin,
         checkout=checkout,
         guest_name=guest_name,
-        rendered_text=rendered_text,
     )
 
 
@@ -537,18 +436,6 @@ def _resolve_property_by_instance(
     payload: SendTemplateRequest,
     instance_row: dict[str, Any],
 ) -> dict[str, Any]:
-    explicit_property_id = payload.meta.property_id if payload.meta else None
-    if explicit_property_id is not None:
-        return _fetch_single_row(
-            client,
-            "properties",
-            filters={"id": explicit_property_id, "instance_id": instance_row["id"]},
-            not_found=HTTPException(
-                status_code=404,
-                detail="Property no encontrada para la instancia autenticada",
-            ),
-        )
-
     property_external_code = str(payload.source.hotel.external_code or "").strip()
     if not property_external_code:
         raise HTTPException(status_code=422, detail="external_code del hotel requerido")
@@ -822,16 +709,13 @@ def _resolve_whatsapp_credentials(client: Client, property_row: dict[str, Any]) 
 
 def _render_template_text(
     template: TemplateDefinition,
-    payload: SendTemplateRequest,
     message_context: MessageContext,
 ) -> str:
-    rendered_text = message_context.rendered_text
-    if not rendered_text:
-        rendered_text = template.render_content(message_context.template_params_raw)
+    rendered_text = template.render_content(message_context.template_params_raw)
     if not rendered_text:
         rendered_text = template.render_fallback_summary(message_context.template_params_raw)
     if not rendered_text:
-        rendered_text = payload.template.code
+        rendered_text = template.whatsapp_name or template.code
     return rendered_text
 
 
@@ -1235,7 +1119,7 @@ def register_template_routes(app, state) -> None:
             channel_id = _resolve_whatsapp_channel_id(client)
             effective_language = template_resolution.template.language or message_context.language
 
-            rendered_text = _render_template_text(template_resolution.template, payload, message_context)
+            rendered_text = _render_template_text(template_resolution.template, message_context)
             template_payload = _build_template_payload(
                 payload=payload,
                 instance_row=instance_row,
