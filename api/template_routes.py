@@ -266,15 +266,6 @@ def _is_plausible_recipient_phone(phone: str, country: Optional[str] = None) -> 
     return True
 
 
-def _canonical_template_code(raw_code: str, language: str) -> str:
-    code = str(raw_code).strip().lower()
-    lang = str(language).split("-")[0].strip().lower() or "es"
-    for suffix in (f"__{lang}", f"_{lang}", f"-{lang}"):
-        if code.endswith(suffix):
-            return code[: -len(suffix)]
-    return code
-
-
 def _extract_provider_message_id(raw_response: Any) -> Optional[str]:
     if not isinstance(raw_response, dict):
         return None
@@ -417,51 +408,6 @@ def _resolve_property_by_instance(
     )
 
 
-def _select_best_template_match(
-    template_rows: list[dict[str, Any]],
-    *,
-    template_code: str,
-    language: str,
-) -> Optional[TemplateResolution]:
-    requested_code = str(template_code).strip()
-    requested_language = str(language).strip().lower() or "es"
-    requested_raw = requested_code.lower()
-    requested_canonical = _canonical_template_code(requested_code, requested_language)
-
-    best_match: Optional[TemplateResolution] = None
-    best_score = -1
-    for row in template_rows:
-        definition = TemplateDefinition.from_dict(row)
-        row_code = str(row.get("code") or "").strip().lower()
-        row_name = str(row.get("whatsapp_name") or "").strip().lower()
-        definition_code = str(definition.code or "").strip().lower()
-        row_language = str(row.get("language") or definition.language or "es").split("-")[0].strip().lower() or "es"
-
-        if row_code == requested_raw:
-            score = 100
-        elif definition_code == requested_canonical:
-            score = 95
-        elif row_name == requested_raw:
-            score = 90
-        elif row_name == requested_canonical:
-            score = 85
-        else:
-            continue
-
-        if row_language == requested_language:
-            score += 10
-        elif row_language == "es":
-            score += 5
-
-        if score > best_score:
-            best_score = score
-            best_match = TemplateResolution(
-                template_id=int(row["id"]),
-                template=definition,
-            )
-
-    return best_match
-
 def _get_template(
     client: Client,
     *,
@@ -500,25 +446,6 @@ def _get_template(
         template_id=int(template_row["id"]),
         template=TemplateDefinition.from_dict(template_row),
     )
-
-
-def _validate_template_property_link(
-    client: Client,
-    *,
-    template_id: int,
-    property_id: int,
-) -> None:
-    relation_row = _find_single_row(
-        client,
-        "rel_whatsapp_template_property",
-        filters={
-            "whatsapp_template_id": template_id,
-            "property_id": property_id,
-        },
-        columns="whatsapp_template_id,property_id",
-    )
-    if relation_row is None:
-        raise HTTPException(status_code=404, detail="Plantilla no encontrada para la property")
 
 
 def _resolve_or_create_contact(
