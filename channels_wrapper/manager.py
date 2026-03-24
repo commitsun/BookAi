@@ -141,6 +141,8 @@ class ChannelManager:
                 raise AttributeError(f"El canal '{channel}' no implementa send_message().")
 
             if channel == "whatsapp" and self.memory_manager:
+                phone_id = None
+                token = None
                 try:
                     lookup_id = context_id or chat_id
                     phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
@@ -159,20 +161,13 @@ class ChannelManager:
                         "set" if token else "missing",
                     )
                     if phone_id and token:
-                        setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
-                        setattr(channel_obj, "_dynamic_whatsapp_token", token)
+                        pass
                     elif context_id:
                         raise RuntimeError(
-                            f"Credenciales dinámicas WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
+                            f"Credenciales WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
                         )
-                    else:
-                        # Evita que queden credenciales "pegadas" de envíos anteriores.
-                        if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
-                            delattr(channel_obj, "_dynamic_whatsapp_phone_id")
-                        if hasattr(channel_obj, "_dynamic_whatsapp_token"):
-                            delattr(channel_obj, "_dynamic_whatsapp_token")
                 except Exception as exc:
-                    log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
+                    log.warning("No se pudo resolver credenciales WA para plantilla: %s", exc)
 
             if asyncio.iscoroutinefunction(send_fn):
                 await send_fn(chat_id, message)
@@ -212,6 +207,8 @@ class ChannelManager:
             if not send_fn:
                 raise AttributeError(f"El canal '{channel}' no implementa send_template_message().")
 
+            phone_id = None
+            token = None
             if channel == "whatsapp" and self.memory_manager:
                 try:
                     lookup_id = context_id or chat_id
@@ -230,21 +227,12 @@ class ChannelManager:
                         phone_id or "missing",
                         "set" if token else "missing",
                     )
-                    if phone_id and token:
-                        setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)
-                        setattr(channel_obj, "_dynamic_whatsapp_token", token)
-                    elif context_id:
+                    if not (phone_id and token) and context_id:
                         raise RuntimeError(
-                            f"Credenciales dinámicas WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
+                            f"Credenciales WA ausentes para context_id={lookup_id} instance_id={instance_id or 'missing'}"
                         )
-                    else:
-                        # Evita que queden credenciales "pegadas" de envíos anteriores.
-                        if hasattr(channel_obj, "_dynamic_whatsapp_phone_id"):
-                            delattr(channel_obj, "_dynamic_whatsapp_phone_id")
-                        if hasattr(channel_obj, "_dynamic_whatsapp_token"):
-                            delattr(channel_obj, "_dynamic_whatsapp_token")
                 except Exception as exc:
-                    log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
+                    log.warning("No se pudo resolver credenciales WA para plantilla: %s", exc)
 
             payload_hash = f"{template_id}|{parameters}"
             key = (channel, chat_id, "template")
@@ -259,9 +247,29 @@ class ChannelManager:
 
             result = None
             if asyncio.iscoroutinefunction(send_fn):
-                result = await send_fn(chat_id, template_id, parameters=parameters, language=language)
+                if channel == "whatsapp":
+                    result = await send_fn(
+                        chat_id,
+                        template_id,
+                        parameters=parameters,
+                        language=language,
+                        phone_id=phone_id,
+                        token=token,
+                    )
+                else:
+                    result = await send_fn(chat_id, template_id, parameters=parameters, language=language)
             else:
-                result = send_fn(chat_id, template_id, parameters=parameters, language=language)
+                if channel == "whatsapp":
+                    result = send_fn(
+                        chat_id,
+                        template_id,
+                        parameters=parameters,
+                        language=language,
+                        phone_id=phone_id,
+                        token=token,
+                    )
+                else:
+                    result = send_fn(chat_id, template_id, parameters=parameters, language=language)
 
             # Considera éxito si no devuelve nada o es truthy
             ok = True if result is None else bool(result)

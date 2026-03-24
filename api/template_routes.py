@@ -1,8 +1,8 @@
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
-import inspect
 import logging
 import os
 import re
@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field, model_validator
 from supabase import Client, create_client
 
+from channels_wrapper.whatsapp.whatsapp_meta import WhatsAppChannel
 from core.template_button_url import (
     build_folio_details_url,
     extract_folio_details_url,
@@ -29,7 +30,7 @@ log = logging.getLogger("TemplateRoutes")
 try:
     import phonenumbers
     from phonenumbers import NumberParseException
-except Exception:  # pragma: no cover - dependencia opcional
+except Exception: 
     phonenumbers = None
     NumberParseException = Exception
 
@@ -203,17 +204,6 @@ def _insert_single_row(
     return _single_row(rows, not_found=not_found)
 
 
-def _pick_first_text(payload: dict[str, Any], *keys: str) -> Optional[str]:
-    for key in keys:
-        value = payload.get(key)
-        if value in (None, ""):
-            continue
-        text = str(value).strip()
-        if text:
-            return text
-    return None
-
-
 def _extract_bearer_token(auth_header: Optional[str]) -> str:
     if not auth_header or not auth_header.lower().startswith("bearer "):
         raise HTTPException(status_code=401, detail="Autenticación Bearer requerida")
@@ -285,26 +275,6 @@ def _canonical_template_code(raw_code: str, language: str) -> str:
     return code
 
 
-def _extract_reservation_fields(params: dict[str, Any]) -> tuple[Optional[str], Optional[str], Optional[str]]:
-    return (
-        _pick_first_text(params, "folio_id", "reservation_id", "reservation_locator", "locator"),
-        _pick_first_text(params, "checkin", "check_in", "checkin_date"),
-        _pick_first_text(params, "checkout", "check_out", "checkout_date"),
-    )
-
-
-def _extract_reservation_locator(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(params, "reservation_locator", "locator")
-
-
-def _extract_reservation_client_name(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(params, "buyer_name", "guest_name", "client_name")
-
-
-def _extract_property_name(params: dict[str, Any]) -> Optional[str]:
-    return _pick_first_text(params, "hotel_name", "property_name")
-
-
 def _extract_provider_message_id(raw_response: Any) -> Optional[str]:
     if not isinstance(raw_response, dict):
         return None
@@ -322,7 +292,7 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
     if not _is_plausible_recipient_phone(payload.recipient.phone, payload.recipient.country):
         raise HTTPException(
             status_code=422,
-            detail="El número de teléfono indicado no tiene una cuenta de WhatsApp válida.",
+            detail="El número de teléfono indicado no es válido.",
         )
 
     chat_id = _normalize_phone(payload.recipient.phone)
@@ -330,26 +300,19 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
         raise HTTPException(status_code=422, detail="Teléfono de destino inválido")
 
     template_params_raw = dict(payload.template.parameters or {})
-    folio_details_url_raw = extract_folio_details_url(template_params_raw)
-    button_base_url = resolve_button_base_url(
-        params=template_params_raw,
-    )
-    template_params = strip_url_control_params(template_params_raw)
-
     origin_folio = payload.source.origin_folio
-    raw_folio, raw_checkin, raw_checkout = _extract_reservation_fields(template_params_raw)
-    origin_folio_code = str(origin_folio.code or "").strip() if origin_folio else ""
-    folio_external_code = origin_folio_code or raw_folio
-    reservation_locator = _extract_reservation_locator(template_params_raw)
+    origin_folio_code = str((origin_folio.code if origin_folio else None) or "").strip() or None
+    folio_details_url_raw = extract_folio_details_url(template_params_raw)
+    button_base_url = resolve_button_base_url(params=template_params_raw)
+    template_params = strip_url_control_params(template_params_raw)
+    reservation_locator = str(template_params_raw.get("reservation_locator") or "").strip() or origin_folio_code
     guest_name = (
-        _extract_reservation_client_name(template_params_raw)
-        or (payload.recipient.display_name or "").strip()
+        str(payload.recipient.display_name or "").strip()
+        or str(template_params_raw.get("buyer_name") or "").strip()
         or None
     )
-
-    checkin = (origin_folio.min_checkin if origin_folio else None) or raw_checkin
-    checkout = (origin_folio.max_checkout if origin_folio else None) or raw_checkout
-    reservation_locator = reservation_locator or origin_folio_code or None
+    checkin = str((origin_folio.min_checkin if origin_folio else None) or "").strip() or None
+    checkout = str((origin_folio.max_checkout if origin_folio else None) or "").strip() or None
 
     idempotency_key = payload.meta.idempotency_key if payload.meta else None
     if idempotency_key is not None:
@@ -363,7 +326,7 @@ def _prepare_message_context(payload: SendTemplateRequest) -> MessageContext:
         template_params=template_params,
         button_base_url=button_base_url,
         folio_details_url_raw=folio_details_url_raw,
-        folio_external_code=folio_external_code,
+        folio_external_code=origin_folio_code,
         reservation_locator=reservation_locator,
         checkin=checkin,
         checkout=checkout,
@@ -456,10 +419,12 @@ def _resolve_property_by_instance(
 
 def _select_best_template_match(
     template_rows: list[dict[str, Any]],
-    payload: SendTemplateRequest,
+    *,
+    template_code: str,
+    language: str,
 ) -> Optional[TemplateResolution]:
-    requested_code = str(payload.template.code or "").strip()
-    requested_language = (payload.template.language or "es").strip().lower() or "es"
+    requested_code = str(template_code).strip()
+    requested_language = str(language).strip().lower() or "es"
     requested_raw = requested_code.lower()
     requested_canonical = _canonical_template_code(requested_code, requested_language)
 
@@ -497,94 +462,75 @@ def _select_best_template_match(
 
     return best_match
 
-
-def _get_template(client: Client, payload: SendTemplateRequest) -> TemplateResolution:
-    template_rows = (
-        client.table("whatsapp_templates")
-        .select("*")
-        .eq("active", True)
-        .execute()
-        .data
-        or []
-    )
-    if not template_rows:
-        raise HTTPException(status_code=404, detail="No hay plantillas activas")
-
-    template_resolution = _select_best_template_match(template_rows, payload)
-    if template_resolution is None:
-        raise HTTPException(status_code=404, detail="Plantilla no encontrada")
-    return template_resolution
-
-
-def _resolve_template_for_property(
+def _get_template(
     client: Client,
-    payload: SendTemplateRequest,
-    property_row: dict[str, Any],
+    *,
+    template_code: str,
+    language: str,
+    property_id: int,
 ) -> TemplateResolution:
-    relation_rows = (
-        client.table("rel_whatsapp_template_property")
-        .select("whatsapp_template_id")
-        .eq("property_id", property_row["id"])
-        .execute()
-        .data
-        or []
-    )
-    template_ids = [
-        row.get("whatsapp_template_id")
-        for row in relation_rows
-        if row.get("whatsapp_template_id") is not None
-    ]
-    if not template_ids:
-        raise HTTPException(status_code=404, detail="La property no tiene plantillas asociadas")
+    resolved_template_code = str(template_code or "").strip()
+    resolved_language = str(language or "es").strip().lower() or "es"
+    if not resolved_template_code:
+        raise HTTPException(status_code=422, detail="template.code requerido")
 
     template_rows = (
         client.table("whatsapp_templates")
-        .select("*")
-        .in_("id", template_ids)
+        .select("*,rel_whatsapp_template_property!inner(property_id)")
+        .eq("code", resolved_template_code)
+        .eq("language", resolved_language)
         .eq("active", True)
+        .eq("rel_whatsapp_template_property.property_id", property_id)
+        .limit(2)
         .execute()
         .data
         or []
     )
     if not template_rows:
-        raise HTTPException(status_code=404, detail="No hay plantillas activas para la property")
-
-    template_resolution = _select_best_template_match(template_rows, payload)
-    if template_resolution is None:
         raise HTTPException(status_code=404, detail="Plantilla no encontrada para la property")
-    return template_resolution
+    if len(template_rows) > 1:
+        raise HTTPException(
+            status_code=500,
+            detail="Inconsistencia: más de una plantilla activa coincide con code, language y property_id",
+        )
+
+    template_row = dict(template_rows[0])
+    template_row.pop("rel_whatsapp_template_property", None)
+    return TemplateResolution(
+        template_id=int(template_row["id"]),
+        template=TemplateDefinition.from_dict(template_row),
+    )
 
 
-def _ensure_template_for_property(
+def _validate_template_property_link(
     client: Client,
-    payload: SendTemplateRequest,
-    property_row: dict[str, Any],
-    template_resolution: TemplateResolution,
-) -> TemplateResolution:
+    *,
+    template_id: int,
+    property_id: int,
+) -> None:
     relation_row = _find_single_row(
         client,
         "rel_whatsapp_template_property",
         filters={
-            "property_id": property_row["id"],
-            "whatsapp_template_id": template_resolution.template_id,
+            "whatsapp_template_id": template_id,
+            "property_id": property_id,
         },
-        columns="property_id,whatsapp_template_id",
+        columns="whatsapp_template_id,property_id",
     )
-    if relation_row:
-        return template_resolution
-    return _resolve_template_for_property(client, payload, property_row)
+    if relation_row is None:
+        raise HTTPException(status_code=404, detail="Plantilla no encontrada para la property")
 
 
 def _resolve_or_create_contact(
     client: Client,
-    payload: SendTemplateRequest,
-    chat_id: str,
+    *,
+    phone_code: str,
+    display_name: Optional[str],
 ) -> ContactResolution:
-    display_name = (payload.recipient.display_name or "").strip() or None
     row = _find_single_row(
         client,
         "contact",
-        filters={"whatsapp_external_code": chat_id},
+        filters={"whatsapp_external_code": phone_code},
     )
     if row:
         if display_name and not row.get("name"):
@@ -597,9 +543,9 @@ def _resolve_or_create_contact(
                 or [row]
             )
             row = updated_rows[0]
-        return ContactResolution(row=row, phone_code=chat_id)
+        return ContactResolution(row=row, phone_code=phone_code)
 
-    insert_payload: dict[str, Any] = {"whatsapp_external_code": chat_id}
+    insert_payload: dict[str, Any] = {"whatsapp_external_code": phone_code}
     if display_name:
         insert_payload["name"] = display_name
 
@@ -609,7 +555,7 @@ def _resolve_or_create_contact(
         insert_payload,
         not_found=HTTPException(status_code=500, detail="No se pudo crear el contacto"),
     )
-    return ContactResolution(row=row, phone_code=chat_id)
+    return ContactResolution(row=row, phone_code=phone_code)
 
 
 def _get_or_create_conversation(
@@ -635,12 +581,13 @@ def _get_or_create_conversation(
     return ConversationResolution(row=row, created=True)
 
 
-def _set_folio_for_conversation(
+def _attach_folio_to_conversation(
     client: Client,
-    conversation_row: dict[str, Any],
-    message_context: MessageContext,
+    *,
+    conversation_id: int,
+    folio_external_code: Optional[str],
 ) -> FolioResolution:
-    folio_external_code = str(message_context.folio_external_code or "").strip() or None
+    folio_external_code = str(folio_external_code or "").strip() or None
     if not folio_external_code:
         return FolioResolution(folio_id=None, folio_external_code=None)
 
@@ -662,12 +609,12 @@ def _set_folio_for_conversation(
     relation_row = _find_single_row(
         client,
         "rel_conversation_folio",
-        filters={"conversation_id": conversation_row["id"], "folio_id": folio_id},
+        filters={"conversation_id": conversation_id, "folio_id": folio_id},
         columns="conversation_id,folio_id",
     )
     if not relation_row:
         client.table("rel_conversation_folio").insert(
-            {"conversation_id": conversation_row["id"], "folio_id": folio_id}
+            {"conversation_id": conversation_id, "folio_id": folio_id}
         ).execute()
 
     return FolioResolution(folio_id=folio_id, folio_external_code=folio_external_code)
@@ -709,11 +656,11 @@ def _resolve_whatsapp_credentials(client: Client, property_row: dict[str, Any]) 
 
 def _render_template_text(
     template: TemplateDefinition,
-    message_context: MessageContext,
+    template_params_raw: dict[str, Any],
 ) -> str:
-    rendered_text = template.render_content(message_context.template_params_raw)
+    rendered_text = template.render_content(template_params_raw)
     if not rendered_text:
-        rendered_text = template.render_fallback_summary(message_context.template_params_raw)
+        rendered_text = template.render_fallback_summary(template_params_raw)
     if not rendered_text:
         rendered_text = template.whatsapp_name or template.code
     return rendered_text
@@ -773,7 +720,7 @@ def _build_template_payload(
     )
     hotel_name = (
         payload.source.hotel.name
-        or _extract_property_name(message_context.template_params_raw)
+        or str(payload.template.parameters.get("hotel_name") or "").strip()
         or property_row.get("name")
     )
     template_payload = build_template_structured_payload(
@@ -898,7 +845,6 @@ def _persist_message_status(
 
 
 async def _send_template_to_whatsapp(
-    state,
     *,
     chat_id: str,
     template: TemplateDefinition,
@@ -906,69 +852,28 @@ async def _send_template_to_whatsapp(
     credentials: WhatsAppCredentials,
     language: str,
 ) -> SendResult:
-    channel_manager = getattr(state, "channel_manager", None)
-    if channel_manager is None:
-        raise HTTPException(status_code=500, detail="ChannelManager no disponible")
-
-    whatsapp_channel = getattr(channel_manager, "channels", {}).get("whatsapp")
-    if whatsapp_channel is None:
-        raise HTTPException(status_code=500, detail="Canal WhatsApp no disponible")
-
-    phone_attr = "_dynamic_whatsapp_phone_id"
-    token_attr = "_dynamic_whatsapp_token"
-    marker = object()
-    previous_phone = getattr(whatsapp_channel, phone_attr, marker)
-    previous_token = getattr(whatsapp_channel, token_attr, marker)
-
-    setattr(whatsapp_channel, phone_attr, credentials.phone_id)
-    setattr(whatsapp_channel, token_attr, credentials.token)
+    template_name = template.whatsapp_name or template.code
 
     try:
-        send_fn = getattr(whatsapp_channel, "send_template_message", None)
-        if not send_fn:
-            raise HTTPException(status_code=500, detail="El canal WhatsApp no implementa send_template_message")
-
-        if inspect.iscoroutinefunction(send_fn):
-            raw_response = await send_fn(
-                chat_id,
-                template.whatsapp_name or template.code,
-                parameters=outbound_parameters,
-                language=language,
-            )
-        else:
-            raw_response = send_fn(
-                chat_id,
-                template.whatsapp_name or template.code,
-                parameters=outbound_parameters,
-                language=language,
-            )
-            if inspect.isawaitable(raw_response):
-                raw_response = await raw_response
-
-        ok = True if raw_response is None else bool(raw_response)
-        if not ok:
-            raise HTTPException(status_code=502, detail="WhatsApp no confirmó el envío de la plantilla")
-
-        return SendResult(
-            provider_message_id=_extract_provider_message_id(raw_response),
-            raw_response=raw_response,
+        raw_response = await asyncio.to_thread(
+            WhatsAppChannel.send_template_message,
+            chat_id,
+            template_name,
+            outbound_parameters,
+            language=language,
+            phone_id=credentials.phone_id,
+            token=credentials.token,
         )
-    finally:
-        if previous_phone is marker:
-            try:
-                delattr(whatsapp_channel, phone_attr)
-            except AttributeError:
-                pass
-        else:
-            setattr(whatsapp_channel, phone_attr, previous_phone)
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail=f"Error enviando plantilla a WhatsApp: {exc}") from exc
 
-        if previous_token is marker:
-            try:
-                delattr(whatsapp_channel, token_attr)
-            except AttributeError:
-                pass
-        else:
-            setattr(whatsapp_channel, token_attr, previous_token)
+    if not raw_response:
+        raise HTTPException(status_code=502, detail="WhatsApp no confirmó el envío de la plantilla")
+
+    return SendResult(
+        provider_message_id=_extract_provider_message_id(raw_response),
+        raw_response=raw_response,
+    )
 
 
 def _handle_send_error(
@@ -1105,21 +1010,31 @@ def register_template_routes(app, state) -> None:
         provider_sent = False
 
         try:
-            template_resolution = _get_template(client, payload)
             property_row = _resolve_property_by_instance(client, payload, instance_row)
-            template_resolution = _ensure_template_for_property(
+            template_resolution = _get_template(
                 client,
-                payload,
-                property_row,
-                template_resolution,
+                template_code=payload.template.code,
+                language=message_context.language,
+                property_id=int(property_row["id"]),
             )
-            contact = _resolve_or_create_contact(client, payload, message_context.chat_id)
+            contact = _resolve_or_create_contact(
+                client,
+                phone_code=message_context.chat_id,
+                display_name=(payload.recipient.display_name or "").strip() or None,
+            )
             conversation = _get_or_create_conversation(client, property_row, contact.row)
-            folio = _set_folio_for_conversation(client, conversation.row, message_context)
+            folio = _attach_folio_to_conversation(
+                client,
+                conversation_id=int(conversation.row["id"]),
+                folio_external_code=message_context.folio_external_code,
+            )
             channel_id = _resolve_whatsapp_channel_id(client)
-            effective_language = template_resolution.template.language or message_context.language
+            language = template_resolution.template.language or message_context.language
 
-            rendered_text = _render_template_text(template_resolution.template, message_context)
+            rendered_text = _render_template_text(
+                template_resolution.template,
+                message_context.template_params_raw,
+            )
             template_payload = _build_template_payload(
                 payload=payload,
                 instance_row=instance_row,
@@ -1131,7 +1046,7 @@ def register_template_routes(app, state) -> None:
                 channel_id=channel_id,
                 message_context=message_context,
                 rendered_text=rendered_text,
-                language=effective_language,
+                language=language,
             )
             message_row, template_payload = _persist_message_status(
                 client,
@@ -1146,12 +1061,11 @@ def register_template_routes(app, state) -> None:
             outbound_parameters = _build_outbound_parameters(template_resolution.template, message_context)
             credentials = _resolve_whatsapp_credentials(client, property_row)
             send_result = await _send_template_to_whatsapp(
-                state,
                 chat_id=contact.phone_code,
                 template=template_resolution.template,
                 outbound_parameters=outbound_parameters,
                 credentials=credentials,
-                language=effective_language,
+                language=language,
             )
             provider_sent = True
 
@@ -1173,7 +1087,7 @@ def register_template_routes(app, state) -> None:
                 template_resolution=template_resolution,
                 template_payload=template_payload,
                 rendered_text=rendered_text,
-                language=effective_language,
+                language=language,
             )
 
             _finalize_idempotency_key(state, message_context.idempotency_key, success=True)
@@ -1187,7 +1101,7 @@ def register_template_routes(app, state) -> None:
                 "message_id": message_row["id"],
                 "template_id": template_resolution.template_id,
                 "template": template_resolution.template.whatsapp_name or template_resolution.template.code,
-                "language": effective_language,
+                "language": language,
                 "template_payload": template_payload,
             }
         except Exception as exc:

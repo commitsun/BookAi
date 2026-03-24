@@ -397,21 +397,23 @@ class WhatsAppChannel(BaseChannel):
     # Se usa dentro de `WhatsAppChannel` en el flujo de canal WhatsApp Meta con buffer y escalación automática.
     # Recibe `user_id`, `template_id`, `parameters`, `language` como entradas relevantes junto con el contexto inyectado en la firma.
     # Devuelve un `bool` con el resultado de esta operación. Puede realizar llamadas externas o a modelos.
+    @staticmethod
     def send_template_message(
-        self,
         user_id: str,
         template_id: str,
         parameters: dict | list | tuple | None = None,
         *,
         language: str = "es",
+        phone_id: Optional[str] = None,
+        token: Optional[str] = None,
     ) -> dict | bool | None:
         """
         Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
         Soporta parámetros opcionales en orden de aparición.
         """
-        phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
-        token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
-        if not token or not phone_id:
+        resolved_phone_id = str(phone_id or C.WHATSAPP_PHONE_ID or "").strip()
+        resolved_token = str(token or C.WHATSAPP_TOKEN or "").strip()
+        if not resolved_token or not resolved_phone_id:
             log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
             return
 
@@ -502,13 +504,13 @@ class WhatsAppChannel(BaseChannel):
         }
 
         headers = {
-            "Authorization": f"Bearer {token}",
+            "Authorization": f"Bearer {resolved_token}",
             "Content-Type": "application/json",
         }
 
         try:
             r = requests.post(
-                f"https://graph.facebook.com/v19.0/{phone_id}/messages",
+                f"https://graph.facebook.com/v19.0/{resolved_phone_id}/messages",
                 headers=headers,
                 json=payload,
                 timeout=10,
