@@ -16,6 +16,7 @@ from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
 from core.db import (
+    get_active_chat_reservation,
     update_latest_bookai_escalation_metadata,
 )
 from core.escalation_db import (
@@ -158,7 +159,6 @@ class InternoAgent:
                         self.memory_manager.get_flag(raw_guest_chat_id, "instance_id")
                         or self.memory_manager.get_flag(raw_guest_chat_id, "instance_hotel_code")
                     )
-                    buyer_name = str(self.memory_manager.get_flag(raw_guest_chat_id, "client_name") or "").strip() or buyer_name
                 except Exception:
                     pass
 
@@ -189,7 +189,13 @@ class InternoAgent:
                 or ""
             ).strip() or None
             hotel_name = str(prop_payload.get("name") or "tu hotel").strip() or "tu hotel"
-            buyer_name = buyer_name or "un cliente"
+            active_reservation = get_active_chat_reservation(
+                chat_id=raw_guest_chat_id,
+                property_id=property_id,
+                instance_id=instance_id,
+            )
+            if isinstance(active_reservation, dict):
+                buyer_name = str(active_reservation.get("client_name") or "").strip() or buyer_name
 
             button_value = f"chat/{property_id}?chatId={clean_guest_chat_id or raw_guest_chat_id}"
 
