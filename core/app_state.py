@@ -48,7 +48,10 @@ class AppState:
             effective_idle = float(idle_seconds)
         self.buffer_manager = MessageBufferManager(idle_seconds=effective_idle)
         self.log.info("🕒 Message buffer idle_seconds=%.2f", effective_idle)
-        self.interno_agent = InternoAgent(memory_manager=self.memory_manager)
+        self.interno_agent = InternoAgent(
+            memory_manager=self.memory_manager,
+            channel_manager=self.channel_manager,
+        )
         self.supabase_client = supabase
         self.superintendente_agent = SuperintendenteAgent(
             memory_manager=self.memory_manager,

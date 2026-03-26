@@ -15,12 +15,19 @@ from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
 from core.config import ModelConfig, ModelTier
-from core.db import update_latest_bookai_escalation_metadata
+from core.db import (
+    update_latest_bookai_escalation_metadata,
+)
 from core.escalation_db import (
     get_escalation,
     get_latest_pending_escalation,
     save_escalation,
     update_escalation,
+)
+from core.instance_context import (
+    DEFAULT_PROPERTY_TABLE,
+    ensure_instance_credentials,
+    fetch_property_by_id,
 )
 from core.language_manager import language_manager
 from core.socket_manager import emit_event
@@ -115,6 +122,134 @@ class InternoAgent:
 
         self.llm = ModelConfig.get_llm(model_tier)
         log.info("InternoAgent inicializado (modelo: %s)", self.llm.model_name)
+
+    async def _notify_manager_whatsapp_escalation(
+        self,
+        *,
+        escalation_id: str,
+        guest_chat_id: str,
+        property_id: Optional[str | int],
+    ) -> None:
+        if not self.channel_manager:
+            log.info(
+                "[ESCALATION_WA] skip escalation_id=%s property_id=%s reason=no_channel_manager",
+                escalation_id,
+                property_id,
+            )
+            return
+        if property_id is None:
+            log.info(
+                "[ESCALATION_WA] skip escalation_id=%s reason=no_property_id",
+                escalation_id,
+            )
+            return
+
+        try:
+            raw_guest_chat_id = str(guest_chat_id or "").strip()
+            guest_tail = raw_guest_chat_id.split(":")[-1].strip()
+            clean_guest_chat_id = re.sub(r"\D", "", guest_tail).strip() or guest_tail
+
+            instance_id = None
+            buyer_name = "un cliente"
+
+            if self.memory_manager:
+                try:
+                    instance_id = (
+                        self.memory_manager.get_flag(raw_guest_chat_id, "instance_id")
+                        or self.memory_manager.get_flag(raw_guest_chat_id, "instance_hotel_code")
+                    )
+                    buyer_name = str(self.memory_manager.get_flag(raw_guest_chat_id, "client_name") or "").strip() or buyer_name
+                except Exception:
+                    pass
+
+            prop_payload = fetch_property_by_id(
+                DEFAULT_PROPERTY_TABLE,
+                property_id,
+                instance_id=str(instance_id).strip() if instance_id else None,
+            ) or {}
+
+            manager_phone = re.sub(r"\D", "", str(prop_payload.get("manager_phone") or "").strip())
+            masked_phone = (
+                f"{manager_phone[:2]}***{manager_phone[-2:]}"
+                if len(manager_phone) > 4
+                else "***"
+            )
+            if not manager_phone:
+                log.info(
+                    "[ESCALATION_WA] skip escalation_id=%s property_id=%s reason=no_manager_phone",
+                    escalation_id,
+                    property_id,
+                )
+                return
+
+            instance_id = str(
+                prop_payload.get("instance_id")
+                or prop_payload.get("instance_url")
+                or instance_id
+                or ""
+            ).strip() or None
+            hotel_name = str(prop_payload.get("name") or "tu hotel").strip() or "tu hotel"
+            buyer_name = buyer_name or "un cliente"
+
+            button_value = f"chat/{property_id}?chatId={clean_guest_chat_id or raw_guest_chat_id}"
+
+            if self.memory_manager:
+                try:
+                    self.memory_manager.set_flag(manager_phone, "property_id", property_id)
+                    if instance_id:
+                        self.memory_manager.set_flag(manager_phone, "instance_id", instance_id)
+                    ensure_instance_credentials(self.memory_manager, manager_phone)
+                except Exception as exc:
+                    log.warning(
+                        "[ESCALATION_WA] failed to prepare WA creds escalation_id=%s property_id=%s error=%s",
+                        escalation_id,
+                        property_id,
+                        exc,
+                    )
+
+            await self.channel_manager.send_template_message(
+                manager_phone,
+                "warning_escalacion",
+                parameters={
+                    "body": [
+                        {
+                            "type": "text",
+                            "parameter_name": "buyer_name",
+                            "text": buyer_name,
+                        },
+                        {
+                            "type": "text",
+                            "parameter_name": "hotel_name",
+                            "text": hotel_name,
+                        },
+                    ],
+                    "buttons": [
+                        {
+                            "index": 0,
+                            "sub_type": "url",
+                            "text": button_value,
+                        }
+                    ],
+                },
+                language="es",
+                channel="whatsapp",
+            )
+            log.info(
+                "[ESCALATION_WA] sent escalation_id=%s property_id=%s phone=%s template=%s button=%s",
+                escalation_id,
+                property_id,
+                masked_phone,
+                "warning_escalacion",
+                button_value,
+            )
+        except Exception as exc:
+            log.error(
+                "[ESCALATION_WA] send_failed escalation_id=%s property_id=%s error=%s",
+                escalation_id,
+                property_id,
+                exc,
+                exc_info=True,
+            )
 
     async def ainvoke(
         self,
@@ -524,6 +659,16 @@ class InternoAgent:
                         self.memory_manager.set_flag(key, "property_id", resolved_prop_id)
             except Exception:
                 pass
+        try:
+            asyncio.create_task(
+                self._notify_manager_whatsapp_escalation(
+                    escalation_id=escalation_id,
+                    guest_chat_id=str(guest_chat_id or "").strip(),
+                    property_id=resolved_prop_id,
+                )
+            )
+        except Exception:
+            pass
         # Emitir escalation.created en tiempo real (fallback seguro).
         try:
             created_at = _resolve_escalation_created_at(
