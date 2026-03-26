@@ -1831,6 +1831,30 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
+    def _property_unread_count(property_id: Optional[str | int]) -> int:
+        normalized_property_id = _normalize_property_id(property_id)
+        if normalized_property_id is None:
+            return 0
+        try:
+            resp = (
+                supabase.table("chat_history")
+                .select("id", count="exact", head=True)
+                .eq("property_id", normalized_property_id)
+                .eq("role", "guest")
+                .eq("read_status", False)
+                .is_("archived_at", "null")
+                .is_("hidden_at", "null")
+                .execute()
+            )
+            return int(getattr(resp, "count", 0) or 0)
+        except Exception as exc:
+            log.warning(
+                "No se pudo calcular unread_count property_id=%s: %s",
+                normalized_property_id,
+                exc,
+            )
+            return 0
+
     async def _emit_escalation_resolved(
         chat_id: str,
         payload: dict,
@@ -2362,6 +2386,19 @@ def register_chatter_routes(app, state) -> None:
             "page": page,
             "page_size": requested_page_size,
             "items": items,
+        }
+
+    @router.get("/unread-count")
+    async def get_unread_count(
+        property_id: str = Query(...),
+        _: None = Depends(_verify_bearer),
+    ):
+        normalized_property_id = _normalize_property_id(property_id)
+        if normalized_property_id is None:
+            raise HTTPException(status_code=422, detail="property_id requerido")
+        return {
+            "property_id": normalized_property_id,
+            "unread_count": _property_unread_count(normalized_property_id),
         }
 
     @router.get("/chats/{chat_id}/messages")
@@ -3007,6 +3044,7 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": property_id,
                     "action": "created",
+                    "unread_count": _property_unread_count(property_id),
                     "chat": {
                         "chat_id": chat_id,
                         "property_id": property_id,
@@ -4046,6 +4084,7 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": prop_id,
                     "action": "archived",
+                    "unread_count": _property_unread_count(prop_id),
                     "chat": {
                         "chat_id": clean_id,
                         "property_id": prop_id,
@@ -4267,6 +4306,7 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": prop_id,
                     "action": "deleted",
+                    "unread_count": _property_unread_count(prop_id),
                     "chat": {
                         "chat_id": clean_id,
                         "property_id": prop_id,
@@ -4813,6 +4853,7 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": property_id,
                     "action": "created",
+                    "unread_count": _property_unread_count(property_id),
                     "chat": {
                         "chat_id": chat_id,
                         "property_id": property_id,
