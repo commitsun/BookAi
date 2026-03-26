@@ -276,6 +276,7 @@ def _instance_chat_sets(
                 .select("conversation_id, original_chat_id")
                 .eq("channel", channel)
                 .like("original_chat_id", f"{prefix}:%")
+                .order("created_at", desc=True)
             )
             if property_id is not None:
                 query = query.eq("property_id", property_id)
