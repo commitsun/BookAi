@@ -1057,6 +1057,11 @@ async def process_user_message(
             except Exception as exc:
                 log.warning("No se pudo persistir mensaje del huésped en pipeline: %s", exc)
 
+        # Persistir el mensaje del huésped antes de cualquier salida temprana del flujo.
+        # En WhatsApp el webhook lo añade primero en RAM, pero hay ramas posteriores
+        # (p. ej. confirmaciones/escalaciones silenciosas) que pueden devolver sin guardar.
+        _persist_guest_message()
+
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
         bookai_enabled = _resolve_bookai_enabled(
             state,
