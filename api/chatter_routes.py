@@ -1831,29 +1831,246 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
-    def _property_unread_count(property_id: Optional[str | int]) -> int:
+    def _property_guest_unread_count(
+        property_id: Optional[str | int],
+        *,
+        instance_id: Optional[str] = None,
+    ) -> int:
         normalized_property_id = _normalize_property_id(property_id)
         if normalized_property_id is None:
             return 0
+        total = 0
+        offset = 0
+        batch_size = 1000
+        visibility_cache: Dict[Tuple[str, str, str], bool] = {}
+        allowed_sets_cache: Dict[str, Tuple[set[str], set[str]]] = {}
+        while True:
+            try:
+                rows = (
+                    supabase.table("chat_history")
+                    .select("conversation_id, original_chat_id, channel")
+                    .eq("property_id", normalized_property_id)
+                    .eq("role", "guest")
+                    .eq("read_status", False)
+                    .is_("archived_at", "null")
+                    .is_("hidden_at", "null")
+                    .order("created_at", desc=True)
+                    .range(offset, offset + batch_size - 1)
+                    .execute()
+                    .data
+                    or []
+                )
+            except Exception as exc:
+                log.warning(
+                    "No se pudo calcular guest_unread_count property_id=%s instance_id=%s: %s",
+                    normalized_property_id,
+                    instance_id,
+                    exc,
+                )
+                return total
+
+            if not rows:
+                break
+
+            for row in rows:
+                conversation_id = str((row or {}).get("conversation_id") or "").strip()
+                if not conversation_id:
+                    continue
+                clean_conversation_id = _clean_chat_id(conversation_id)
+                if not clean_conversation_id:
+                    continue
+                original_chat_id = str((row or {}).get("original_chat_id") or "").strip()
+                row_channel = str((row or {}).get("channel") or "whatsapp").strip() or "whatsapp"
+
+                if instance_id:
+                    allowed_sets = allowed_sets_cache.get(row_channel)
+                    if allowed_sets is None:
+                        allowed_sets = _instance_chat_sets(
+                            instance_id,
+                            row_channel,
+                            normalized_property_id,
+                        )
+                        allowed_sets_cache[row_channel] = allowed_sets
+                    allowed_chat_ids, allowed_original_chat_ids = allowed_sets
+                    if not allowed_chat_ids and not allowed_original_chat_ids:
+                        continue
+                    in_chat_set = clean_conversation_id in allowed_chat_ids
+                    in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
+                    if original_chat_id:
+                        if not in_original_set:
+                            continue
+                    elif not in_chat_set and not in_original_set:
+                        continue
+
+                visibility_key = (clean_conversation_id, row_channel, original_chat_id)
+                is_visible = visibility_cache.get(visibility_key)
+                if is_visible is None:
+                    try:
+                        is_visible = is_chat_visible_in_list(
+                            clean_conversation_id,
+                            property_id=normalized_property_id,
+                            channel=row_channel,
+                            original_chat_id=original_chat_id or None,
+                        )
+                    except Exception as exc:
+                        log.debug(
+                            "No se pudo validar visibilidad de mensaje unread chat_id=%s property_id=%s channel=%s: %s",
+                            clean_conversation_id,
+                            normalized_property_id,
+                            row_channel,
+                            exc,
+                        )
+                        is_visible = False
+                    visibility_cache[visibility_key] = is_visible
+                if is_visible:
+                    total += 1
+
+            if len(rows) < batch_size:
+                break
+            offset += batch_size
+
+        return total
+
+    def _property_pending_escalation_count(
+        property_id: Optional[str | int],
+        *,
+        instance_id: Optional[str] = None,
+    ) -> int:
+        normalized_property_id = _normalize_property_id(property_id)
+        if normalized_property_id is None:
+            return 0
+        total = 0
         try:
-            resp = (
-                supabase.table("chat_history")
-                .select("id", count="exact", head=True)
-                .eq("property_id", normalized_property_id)
-                .eq("role", "guest")
-                .eq("read_status", False)
-                .is_("archived_at", "null")
-                .is_("hidden_at", "null")
-                .execute()
-            )
-            return int(getattr(resp, "count", 0) or 0)
+            grouped = _pending_by_chat(limit=500, property_id=normalized_property_id)
+            if instance_id:
+                allowed_chat_ids, _ = _instance_chat_sets(
+                    instance_id,
+                    "whatsapp",
+                    normalized_property_id,
+                )
+                grouped = _filter_pending_by_instance(
+                    grouped,
+                    instance_id=instance_id,
+                    allowed_chat_ids=allowed_chat_ids,
+                )
         except Exception as exc:
             log.warning(
-                "No se pudo calcular unread_count property_id=%s: %s",
+                "No se pudo calcular pending_escalation_count property_id=%s instance_id=%s: %s",
                 normalized_property_id,
+                instance_id,
                 exc,
             )
             return 0
+
+        for key, escs in grouped.items():
+            guest_key = str(key or "").partition("|")[0].strip()
+            latest = _latest_pending(escs) or {}
+            guest_chat_id = str((latest or {}).get("guest_chat_id") or guest_key).strip()
+            chat_tail = guest_key.split(":")[-1].strip() if ":" in guest_key else guest_key
+            clean_chat_id = _clean_chat_id(chat_tail)
+            if not clean_chat_id:
+                continue
+            original_chat_id = guest_chat_id if ":" in guest_chat_id else None
+            try:
+                if is_chat_visible_in_list(
+                    clean_chat_id,
+                    property_id=normalized_property_id,
+                    channel="whatsapp",
+                    original_chat_id=original_chat_id,
+                ):
+                    total += len(escs or [])
+            except Exception as exc:
+                log.debug(
+                    "No se pudo validar visibilidad de escalaciones pendientes %s para unread_count property_id=%s: %s",
+                    ",".join(
+                        str((esc or {}).get("escalation_id") or "").strip()
+                        for esc in (escs or [])
+                        if str((esc or {}).get("escalation_id") or "").strip()
+                    ),
+                    normalized_property_id,
+                    exc,
+                )
+        return total
+
+    def _property_unread_count(
+        property_id: Optional[str | int],
+        *,
+        instance_id: Optional[str] = None,
+    ) -> int:
+        normalized_property_id = _normalize_property_id(property_id)
+        if normalized_property_id is None:
+            return 0
+        guest_unread_count = _property_guest_unread_count(
+            normalized_property_id,
+            instance_id=instance_id,
+        )
+        return guest_unread_count + _property_pending_escalation_count(
+            normalized_property_id,
+            instance_id=instance_id,
+        )
+
+    def _mark_chat_history_read(chat_id: str, property_id: Optional[str | int]) -> bool:
+        clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+        normalized_property_id = _normalize_property_id(property_id)
+        if not clean_id or normalized_property_id is None:
+            return False
+        try:
+            (
+                supabase.table("chat_history")
+                .update({"read_status": True})
+                .eq("conversation_id", clean_id)
+                .eq("property_id", normalized_property_id)
+                .eq("read_status", False)
+                .execute()
+            )
+            return True
+        except Exception as exc:
+            log.warning(
+                "No se pudo marcar chat como leido chat_id=%s property_id=%s: %s",
+                clean_id,
+                normalized_property_id,
+                exc,
+            )
+            return False
+
+    async def _mark_chat_read_state(
+        chat_id: str,
+        property_id: Optional[str | int],
+        *,
+        instance_id: Optional[str] = None,
+        emit_events: bool = True,
+    ) -> bool:
+        clean_id = _clean_chat_id(chat_id) or str(chat_id or "").strip()
+        normalized_property_id = _normalize_property_id(property_id)
+        if not _mark_chat_history_read(clean_id, normalized_property_id):
+            return False
+        if not emit_events or normalized_property_id is None:
+            return True
+        await _emit(
+            "chat.read",
+            {
+                "rooms": _rooms(clean_id, normalized_property_id, "whatsapp"),
+                "chat_id": clean_id,
+                "property_id": normalized_property_id,
+                "read_status": True,
+            },
+        )
+        await _emit(
+            "chat.updated",
+            {
+                "rooms": _rooms(clean_id, normalized_property_id, "whatsapp"),
+                "chat_id": clean_id,
+                "property_id": normalized_property_id,
+                "read_status": True,
+                **_pending_snapshot_for_chat(
+                    clean_id,
+                    normalized_property_id,
+                    instance_id=instance_id,
+                    memory_manager=getattr(state, "memory_manager", None),
+                ),
+            },
+        )
+        return True
 
     async def _emit_escalation_resolved(
         chat_id: str,
@@ -2391,14 +2608,18 @@ def register_chatter_routes(app, state) -> None:
     @router.get("/unread-count")
     async def get_unread_count(
         property_id: str = Query(...),
-        _: None = Depends(_verify_bearer),
+        auth_ctx: Dict[str, Optional[str]] = Depends(_verify_bearer),
     ):
         normalized_property_id = _normalize_property_id(property_id)
         if normalized_property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
+        instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         return {
             "property_id": normalized_property_id,
-            "unread_count": _property_unread_count(normalized_property_id),
+            "unread_count": _property_unread_count(
+                normalized_property_id,
+                instance_id=instance_id,
+            ),
         }
 
     @router.get("/chats/{chat_id}/messages")
@@ -2571,6 +2792,32 @@ def register_chatter_routes(app, state) -> None:
                     "escalation_reason": row.get("escalation_reason"),
                 }
             )
+
+        resolved_read_property_id = property_id
+        if resolved_read_property_id is None:
+            for item in items:
+                candidate_property_id = _normalize_property_id(item.get("property_id"))
+                if candidate_property_id is not None:
+                    resolved_read_property_id = candidate_property_id
+                    break
+        if resolved_read_property_id is None:
+            resolved_read_property_id = _normalize_property_id(_resolve_property_id_from_history(clean_id, "whatsapp"))
+
+        should_mark_read = page == 1 and any(
+            item.get("sender") == "guest" and item.get("read_status") is False
+            for item in items
+        )
+        if should_mark_read and resolved_read_property_id is not None:
+            marked_read = await _mark_chat_read_state(
+                clean_id,
+                resolved_read_property_id,
+                instance_id=instance_id,
+                emit_events=True,
+            )
+            if marked_read:
+                for item in items:
+                    if item.get("sender") == "guest" and item.get("read_status") is False:
+                        item["read_status"] = True
 
         return {
             "chat_id": clean_id,
@@ -2896,6 +3143,14 @@ def register_chatter_routes(app, state) -> None:
             for mem_id in emit_related_ids:
                 state.memory_manager.set_flag(mem_id, "property_id", property_id)
 
+        if property_id is not None:
+            await _mark_chat_read_state(
+                chat_id,
+                property_id,
+                instance_id=instance_id,
+                emit_events=False,
+            )
+
         rooms = _rooms(chat_id, property_id, payload.channel.lower())
         visibility_restored = False
         if not chat_visible_before:
@@ -2966,6 +3221,7 @@ def register_chatter_routes(app, state) -> None:
                         "chat_id": chat_id,
                         "property_id": property_id,
                         "channel": payload.channel.lower(),
+                        "read_status": True,
                         "needs_action": None,
                         "needs_action_type": None,
                         "needs_action_reason": None,
@@ -3044,7 +3300,10 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": property_id,
                     "action": "created",
-                    "unread_count": _property_unread_count(property_id),
+                    "unread_count": _property_unread_count(
+                        property_id,
+                        instance_id=instance_id,
+                    ),
                     "chat": {
                         "chat_id": chat_id,
                         "property_id": property_id,
@@ -3126,6 +3385,7 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "property_id": property_id,
                 "channel": payload.channel.lower(),
+                "read_status": True,
                 "last_message": outgoing_message,
                 "last_message_at": now_iso,
                 "whatsapp_window": whatsapp_window,
@@ -3604,6 +3864,14 @@ def register_chatter_routes(app, state) -> None:
         if resolved_property_id is None:
             resolved_property_id = _normalize_property_id((target_pending or {}).get("property_id"))
 
+        if resolved_property_id is not None:
+            await _mark_chat_read_state(
+                clean_id,
+                resolved_property_id,
+                instance_id=instance_id,
+                emit_events=False,
+            )
+
         if getattr(state, "memory_manager", None):
             related_ids = _related_memory_ids(state, clean_id) or []
             if clean_id not in related_ids:
@@ -3674,6 +3942,7 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": clean_id,
                 "property_id": resolved_property_id,
                 "channel": "whatsapp",
+                "read_status": True,
                 "needs_action": None,
                 "needs_action_type": None,
                 "needs_action_reason": None,
@@ -3863,42 +4132,11 @@ def register_chatter_routes(app, state) -> None:
         instance_id = str((auth_ctx or {}).get("instance_id") or "").strip() or None
         if property_id is None:
             raise HTTPException(status_code=422, detail="property_id requerido")
-        like_pattern = f"%:{clean_id}"
-        query = supabase.table("chat_history").update({"read_status": True}).eq(
-            "read_status",
-            False,
-        )
-        if property_id is not None:
-            query = query.eq("conversation_id", clean_id).eq("property_id", property_id)
-        else:
-            query = query.or_(
-                f"conversation_id.eq.{clean_id},conversation_id.like.{like_pattern}"
-            )
-        query.execute()
-
-        await _emit(
-            "chat.read",
-            {
-                "rooms": _rooms(clean_id, property_id, "whatsapp"),
-                "chat_id": clean_id,
-                "property_id": property_id,
-                "read_status": True,
-            },
-        )
-        await _emit(
-            "chat.updated",
-            {
-                "rooms": _rooms(clean_id, property_id, "whatsapp"),
-                "chat_id": clean_id,
-                "property_id": property_id,
-                "read_status": True,
-                **_pending_snapshot_for_chat(
-                    clean_id,
-                    property_id,
-                    instance_id=instance_id,
-                    memory_manager=getattr(state, "memory_manager", None),
-                ),
-            },
+        await _mark_chat_read_state(
+            clean_id,
+            property_id,
+            instance_id=instance_id,
+            emit_events=True,
         )
 
         return {
@@ -4084,7 +4322,10 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": prop_id,
                     "action": "archived",
-                    "unread_count": _property_unread_count(prop_id),
+                    "unread_count": _property_unread_count(
+                        prop_id,
+                        instance_id=instance_id,
+                    ),
                     "chat": {
                         "chat_id": clean_id,
                         "property_id": prop_id,
@@ -4306,7 +4547,10 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": prop_id,
                     "action": "deleted",
-                    "unread_count": _property_unread_count(prop_id),
+                    "unread_count": _property_unread_count(
+                        prop_id,
+                        instance_id=instance_id,
+                    ),
                     "chat": {
                         "chat_id": clean_id,
                         "property_id": prop_id,
@@ -4853,7 +5097,10 @@ def register_chatter_routes(app, state) -> None:
                 {
                     "property_id": property_id,
                     "action": "created",
-                    "unread_count": _property_unread_count(property_id),
+                    "unread_count": _property_unread_count(
+                        property_id,
+                        instance_id=instance_id,
+                    ),
                     "chat": {
                         "chat_id": chat_id,
                         "property_id": property_id,
