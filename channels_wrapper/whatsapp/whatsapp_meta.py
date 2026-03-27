@@ -368,7 +368,7 @@ class WhatsAppChannel(BaseChannel):
         parameters: dict | list | tuple | None = None,
         *,
         language: str = "es",
-    ) -> bool:
+    ) -> dict[str, Any]:
         """
         Envía una plantilla preaprobada usando la API de WhatsApp Cloud.
         Soporta parámetros opcionales en orden de aparición.
@@ -376,8 +376,12 @@ class WhatsAppChannel(BaseChannel):
         phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
         token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
         if not token or not phone_id:
-            log.error("❌ Faltan credenciales de WhatsApp para enviar plantillas.")
-            return
+            error_message = "Faltan credenciales de WhatsApp para enviar plantillas."
+            log.error("❌ %s", error_message)
+            return {
+                "success": False,
+                "error_message": error_message,
+            }
 
         def _iter_params(params: dict | list | tuple | None) -> Iterable[Any]:
             if params is None:
@@ -470,6 +474,16 @@ class WhatsAppChannel(BaseChannel):
                 timeout=10,
             )
             if r.status_code != 200:
+                error_message = r.text
+                try:
+                    error_payload = r.json()
+                    error_message = (
+                        error_payload.get("error", {}).get("message")
+                        or error_payload.get("message")
+                        or error_message
+                    )
+                except Exception:
+                    error_payload = None
                 log.error(
                     "⚠️ Error WhatsApp (template %s → %s): status=%s body=%s payload=%s",
                     template_id,
@@ -478,7 +492,12 @@ class WhatsAppChannel(BaseChannel):
                     r.text,
                     payload,
                 )
-                return False
+                return {
+                    "success": False,
+                    "error_message": error_message,
+                    "status_code": r.status_code,
+                    "error_payload": error_payload,
+                }
 
             log.info(
                 "🚀 WhatsApp (plantilla) → %s: %s (%s) params=%s",
@@ -487,7 +506,10 @@ class WhatsAppChannel(BaseChannel):
                 r.status_code,
                 payload.get("template", {}).get("components"),
             )
-            return True
+            return {
+                "success": True,
+                "status_code": r.status_code,
+            }
         except Exception as e:
             log.error(
                 "⚠️ Error enviando plantilla WhatsApp (%s → %s): %s",
@@ -496,7 +518,10 @@ class WhatsAppChannel(BaseChannel):
                 e,
                 exc_info=True,
             )
-            return False
+            return {
+                "success": False,
+                "error_message": str(e),
+            }
 
     # ---------------------------------------------------------------------
     # Parser de payload (Meta Webhook)

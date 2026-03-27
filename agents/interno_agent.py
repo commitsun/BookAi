@@ -14,7 +14,7 @@ from typing import Any, List, Optional
 from langchain.agents import AgentExecutor, create_openai_tools_agent
 from langchain.prompts import ChatPromptTemplate, MessagesPlaceholder
 
-from core.config import ModelConfig, ModelTier
+from core.config import ModelConfig, ModelTier, Settings
 from core.db import (
     get_active_chat_reservation,
     update_latest_bookai_escalation_metadata,
@@ -23,6 +23,7 @@ from core.escalation_db import (
     get_escalation,
     get_latest_pending_escalation,
     save_escalation,
+    save_escalation_template_delivery_attempt,
     update_escalation,
 )
 from core.instance_context import (
@@ -169,18 +170,7 @@ class InternoAgent:
             ) or {}
 
             manager_phone = re.sub(r"\D", "", str(prop_payload.get("manager_phone") or "").strip())
-            masked_phone = (
-                f"{manager_phone[:2]}***{manager_phone[-2:]}"
-                if len(manager_phone) > 4
-                else "***"
-            )
-            if not manager_phone:
-                log.info(
-                    "[ESCALATION_WA] skip escalation_id=%s property_id=%s reason=no_manager_phone",
-                    escalation_id,
-                    property_id,
-                )
-                return
+            control_phones_raw = str(Settings.WHATSAPP_ESCALATION_CONTROL_PHONES or "").strip()
 
             instance_id = str(
                 prop_payload.get("instance_id")
@@ -194,60 +184,137 @@ class InternoAgent:
                 property_id=property_id,
                 instance_id=instance_id,
             )
+            reservation_client_name = None
             if isinstance(active_reservation, dict):
-                buyer_name = str(active_reservation.get("client_name") or "").strip() or buyer_name
+                reservation_client_name = (
+                    str(active_reservation.get("client_name") or "").strip() or None
+                )
+                buyer_name = reservation_client_name or buyer_name
 
             button_value = f"chat/{property_id}?chatId={clean_guest_chat_id or raw_guest_chat_id}"
 
-            if self.memory_manager:
-                try:
-                    self.memory_manager.set_flag(manager_phone, "property_id", property_id)
-                    if instance_id:
-                        self.memory_manager.set_flag(manager_phone, "instance_id", instance_id)
-                    ensure_instance_credentials(self.memory_manager, manager_phone)
-                except Exception as exc:
-                    log.warning(
-                        "[ESCALATION_WA] failed to prepare WA creds escalation_id=%s property_id=%s error=%s",
-                        escalation_id,
-                        property_id,
-                        exc,
-                    )
+            recipients: List[tuple[str, str]] = []
+            seen_phones: set[str] = set()
+            raw_recipients: List[tuple[str, str]] = [("manager", manager_phone)]
+            if control_phones_raw:
+                raw_recipients.extend(
+                    ("control", value)
+                    for value in re.split(r"[\s,;]+", control_phones_raw)
+                    if str(value or "").strip()
+                )
 
-            await self.channel_manager.send_template_message(
-                manager_phone,
-                "warning_escalacion",
-                parameters={
-                    "body": [
-                        {
-                            "type": "text",
-                            "parameter_name": "buyer_name",
-                            "text": buyer_name,
-                        },
-                        {
-                            "type": "text",
-                            "parameter_name": "hotel_name",
-                            "text": hotel_name,
-                        },
-                    ],
-                    "buttons": [
-                        {
-                            "index": 0,
-                            "sub_type": "url",
-                            "text": button_value,
-                        }
-                    ],
-                },
-                language="es",
-                channel="whatsapp",
-            )
+            for recipient_type, raw_phone in raw_recipients:
+                normalized_phone = re.sub(r"\D", "", str(raw_phone or "").strip())
+                if not normalized_phone or normalized_phone in seen_phones:
+                    continue
+                seen_phones.add(normalized_phone)
+                recipients.append((recipient_type, normalized_phone))
+
+            if not recipients:
+                log.info(
+                    "[ESCALATION_WA] skip escalation_id=%s property_id=%s reason=no_recipients",
+                    escalation_id,
+                    property_id,
+                )
+                return
+
             log.info(
-                "[ESCALATION_WA] sent escalation_id=%s property_id=%s phone=%s template=%s button=%s",
+                "[ESCALATION_WA] notify escalation_id=%s property_id=%s recipients=%s template=%s",
                 escalation_id,
                 property_id,
-                masked_phone,
+                [f"{rtype}:{phone[:2]}***{phone[-2:]}" if len(phone) > 4 else f"{rtype}:***" for rtype, phone in recipients],
                 "warning_escalacion",
-                button_value,
             )
+
+            for recipient_type, recipient_phone in recipients:
+                masked_phone = (
+                    f"{recipient_phone[:2]}***{recipient_phone[-2:]}"
+                    if len(recipient_phone) > 4
+                    else "***"
+                )
+
+                if self.memory_manager:
+                    try:
+                        self.memory_manager.set_flag(recipient_phone, "property_id", property_id)
+                        if instance_id:
+                            self.memory_manager.set_flag(recipient_phone, "instance_id", instance_id)
+                        ensure_instance_credentials(self.memory_manager, recipient_phone)
+                    except Exception as exc:
+                        log.warning(
+                            "[ESCALATION_WA] failed to prepare WA creds escalation_id=%s property_id=%s phone=%s recipient_type=%s error=%s",
+                            escalation_id,
+                            property_id,
+                            masked_phone,
+                            recipient_type,
+                            exc,
+                        )
+
+                try:
+                    await self.channel_manager.send_template_message(
+                        recipient_phone,
+                        "warning_escalacion",
+                        parameters={
+                            "body": [
+                                {
+                                    "type": "text",
+                                    "parameter_name": "buyer_name",
+                                    "text": buyer_name,
+                                },
+                                {
+                                    "type": "text",
+                                    "parameter_name": "hotel_name",
+                                    "text": hotel_name,
+                                },
+                            ],
+                            "buttons": [
+                                {
+                                    "index": 0,
+                                    "sub_type": "url",
+                                    "text": button_value,
+                                }
+                            ],
+                        },
+                        language="es",
+                        channel="whatsapp",
+                    )
+                    save_escalation_template_delivery_attempt(
+                        property_id=property_id,
+                        escalation_id=escalation_id,
+                        template_name="warning_escalacion",
+                        recipient_phone=recipient_phone,
+                        client_name=reservation_client_name,
+                        recipient_type=recipient_type,
+                        success=True,
+                    )
+                    log.info(
+                        "[ESCALATION_WA] sent escalation_id=%s property_id=%s phone=%s recipient_type=%s template=%s button=%s",
+                        escalation_id,
+                        property_id,
+                        masked_phone,
+                        recipient_type,
+                        "warning_escalacion",
+                        button_value,
+                    )
+                except Exception as exc:
+                    save_escalation_template_delivery_attempt(
+                        property_id=property_id,
+                        escalation_id=escalation_id,
+                        template_name="warning_escalacion",
+                        recipient_phone=recipient_phone,
+                        client_name=reservation_client_name,
+                        recipient_type=recipient_type,
+                        success=False,
+                        error_message=str(exc),
+                    )
+                    log.error(
+                        "[ESCALATION_WA] send_failed escalation_id=%s property_id=%s phone=%s recipient_type=%s error=%s",
+                        escalation_id,
+                        property_id,
+                        masked_phone,
+                        recipient_type,
+                        exc,
+                        exc_info=True,
+                    )
         except Exception as exc:
             log.error(
                 "[ESCALATION_WA] send_failed escalation_id=%s property_id=%s error=%s",

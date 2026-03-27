@@ -242,7 +242,7 @@ class ChannelManager:
                 last_hash, ts = last
                 if payload_hash == last_hash and (now - ts) < self._dedup_window:
                     log.info("↩️ Envío de plantilla duplicado evitado (%s → %s)", channel, chat_id)
-                    return
+                    return {"success": True, "deduplicated": True}
             self._recent_sends[key] = (payload_hash, now)
 
             result = None
@@ -251,12 +251,20 @@ class ChannelManager:
             else:
                 result = send_fn(chat_id, template_id, parameters=parameters, language=language)
 
-            # Considera éxito si no devuelve nada o es truthy
-            ok = True if result is None else bool(result)
+            error_message = None
+            if isinstance(result, dict) and "success" in result:
+                ok = bool(result.get("success"))
+                error_message = str(result.get("error_message") or "").strip() or None
+            else:
+                # Considera éxito si no devuelve nada o es truthy
+                ok = True if result is None else bool(result)
             if not ok:
-                raise RuntimeError(f"El canal '{channel}' no confirmó el envío de la plantilla.")
+                raise RuntimeError(
+                    error_message or f"El canal '{channel}' no confirmó el envío de la plantilla."
+                )
 
             log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
+            return result
         except Exception as e:
             log.error(f"❌ Error enviando plantilla por canal '{channel}': {e}", exc_info=True)
             raise

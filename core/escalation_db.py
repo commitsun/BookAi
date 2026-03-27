@@ -4,6 +4,7 @@ import re
 from core.db import supabase  # ✅ reutiliza la conexión ya existente
 
 log = logging.getLogger("EscalationsDB")
+WARNING_ESCALACION_ATTEMPTS_TABLE = "warning_escalacion_attempts"
 
 
 def _normalize_guest_chat_id(value: str) -> str:
@@ -128,6 +129,46 @@ def append_escalation_message(
         # update_escalation ya loguea el error
         pass
     return messages
+
+
+def save_escalation_template_delivery_attempt(
+    *,
+    property_id: str | int | None,
+    escalation_id: str | None,
+    template_name: str,
+    recipient_phone: str,
+    client_name: str | None = None,
+    recipient_type: str,
+    success: bool,
+    error_message: str | None = None,
+) -> None:
+    """Guarda la trazabilidad mínima de un intento de plantilla de escalación."""
+    try:
+        payload = {
+            "attempted_at": datetime.utcnow().isoformat(),
+            "template_name": str(template_name or "").strip(),
+            "recipient_phone": _normalize_guest_chat_id(recipient_phone),
+            "recipient_type": str(recipient_type or "").strip(),
+            "success": bool(success),
+        }
+        if property_id is not None:
+            payload["property_id"] = property_id
+        if escalation_id:
+            payload["escalation_id"] = str(escalation_id).strip()
+        if client_name:
+            payload["client_name"] = str(client_name).strip()
+        if error_message:
+            payload["error_message"] = str(error_message).strip()
+
+        supabase.table(WARNING_ESCALACION_ATTEMPTS_TABLE).insert(payload).execute()
+    except Exception as exc:
+        log.warning(
+            "⚠️ Error guardando trazabilidad de plantilla de escalación %s → %s: %s",
+            template_name,
+            recipient_phone,
+            exc,
+            exc_info=True,
+        )
 
 
 # ======================================================
