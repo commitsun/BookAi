@@ -15,6 +15,10 @@ from channels_wrapper.utils.text_utils import send_fragmented_async
 from core.db import is_chat_visible_in_list
 from core.pipeline import process_user_message, _resolve_bookai_enabled
 from core.language_manager import language_manager
+from core.whatsapp_healthcheck import (
+    build_whatsapp_healthcheck_response,
+    detect_whatsapp_healthcheck,
+)
 
 log = logging.getLogger("WhatsAppWebhook")
 
@@ -212,6 +216,10 @@ def register_whatsapp_routes(app, state):
             normalized_instance_number = re.sub(r"\D", "", str(instance_number or "")).strip() or instance_number
             instance_phone_id = metadata.get("phone_number_id") or ""
             memory_id = f"{normalized_instance_number}:{sender}" if normalized_instance_number and sender else sender
+            meta_inbound_verified = bool(
+                request.headers.get("x-hub-signature-256")
+                or request.headers.get("x-hub-signature")
+            )
             instance_token = None
             if sender and instance_number:
                 try:
@@ -285,6 +293,47 @@ def register_whatsapp_routes(app, state):
 
             if not sender or not text:
                 return JSONResponse({"status": "ignored"})
+
+            try:
+                if state.memory_manager and memory_id:
+                    state.memory_manager.set_flag(
+                        memory_id,
+                        "whatsapp_meta_inbound_verified",
+                        meta_inbound_verified,
+                    )
+                if state.memory_manager and sender:
+                    state.memory_manager.set_flag(
+                        sender,
+                        "whatsapp_meta_inbound_verified",
+                        meta_inbound_verified,
+                    )
+            except Exception as exc:
+                log.debug("No se pudo guardar evidencia de inbound Meta: %s", exc)
+
+            healthcheck = detect_whatsapp_healthcheck(text)
+            if healthcheck and healthcheck.get("path") == "basic":
+                matched_keyword = str(healthcheck.get("matched_keyword") or "").strip() or "unknown"
+                response = build_whatsapp_healthcheck_response(
+                    "basic",
+                    has_real_meta_inbound=meta_inbound_verified,
+                )
+                log.info(
+                    "healthcheck keyword detected sender=%s matched=%s path=basic",
+                    sender,
+                    matched_keyword,
+                )
+                log.info("healthcheck chosen path: basic")
+                log.info("healthcheck meta inbound verified: %s", meta_inbound_verified)
+                log.info("healthcheck pipeline bypass intentional for basic path sender=%s", sender)
+                log.info("healthcheck outbound response requested sender=%s path=basic", sender)
+                await state.channel_manager.send_message(
+                    sender,
+                    response,
+                    channel="whatsapp",
+                    context_id=memory_id,
+                )
+                log.info("healthcheck outbound response dispatched sender=%s path=basic", sender)
+                return JSONResponse({"status": "healthcheck_basic"})
 
             log.info("💬 WhatsApp %s: %s", sender, text)
             chat_visible_before = False
@@ -733,6 +782,7 @@ def register_whatsapp_routes(app, state):
                 )
 
             async def _process_buffered(cid: str, combined_text: str, version: int):
+                buffered_healthcheck = detect_whatsapp_healthcheck(combined_text)
                 log.info(
                     "🧠 Procesando lote buffered v%s → %s\n🧩 Mensajes combinados:\n%s",
                     version,
@@ -750,6 +800,13 @@ def register_whatsapp_routes(app, state):
                 )
 
                 if not resp:
+                    if buffered_healthcheck:
+                        log.warning(
+                            "healthcheck outbound response aborted cid=%s matched=%s path=%s",
+                            cid,
+                            buffered_healthcheck.get("matched_keyword"),
+                            buffered_healthcheck.get("path"),
+                        )
                     log.info("🔇 Escalación silenciosa %s", cid)
                     return
 
@@ -776,7 +833,21 @@ def register_whatsapp_routes(app, state):
                     )
                     return
 
+                if buffered_healthcheck:
+                    log.info(
+                        "healthcheck outbound response requested cid=%s matched=%s path=%s",
+                        cid,
+                        buffered_healthcheck.get("matched_keyword"),
+                        buffered_healthcheck.get("path"),
+                    )
                 await send_fragmented_async(send_to_channel, sender, resp)
+                if buffered_healthcheck:
+                    log.info(
+                        "healthcheck outbound response dispatched cid=%s matched=%s path=%s",
+                        cid,
+                        buffered_healthcheck.get("matched_keyword"),
+                        buffered_healthcheck.get("path"),
+                    )
 
             await state.buffer_manager.add_message(memory_id, text, _process_buffered)
 

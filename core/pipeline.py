@@ -15,10 +15,15 @@ from core.language_manager import language_manager
 from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
 from core.escalation_db import get_latest_pending_escalation
+from core.whatsapp_healthcheck import (
+    build_whatsapp_healthcheck_response,
+    detect_whatsapp_healthcheck,
+)
 
 log = logging.getLogger("Pipeline")
 SUPER_OFFER_FLAG = "super_offer_pending"
 _HUMAN_ESCALATION_COOLDOWN_MIN = 15
+_WA_HEALTHCHECK_INPUT_PROBE = "Quiero saber el horario de check-in del hotel."
 
 
 def _clean_chat_id(value: str) -> str:
@@ -811,6 +816,7 @@ async def process_user_message(
         log.info("📨 Nuevo mensaje de %s: %s", chat_id, user_message[:150])
         guest_lang = "es"
         guest_lang_confidence = 0.0
+        healthcheck = detect_whatsapp_healthcheck(user_message)
 
         def _recent_guest_messages(limit: int = 6) -> list[str]:
             if not state.memory_manager:
@@ -1056,6 +1062,85 @@ async def process_user_message(
                             )
             except Exception as exc:
                 log.warning("No se pudo persistir mensaje del huésped en pipeline: %s", exc)
+
+        if healthcheck and healthcheck.get("path") in {"ia", "complete"}:
+            path = str(healthcheck.get("path") or "").strip() or "unknown"
+            matched_keyword = str(healthcheck.get("matched_keyword") or "").strip() or "unknown"
+            has_real_meta_inbound = False
+            if state.memory_manager:
+                try:
+                    has_real_meta_inbound = bool(
+                        state.memory_manager.get_flag(mem_id, "whatsapp_meta_inbound_verified")
+                        or state.memory_manager.get_flag(chat_id, "whatsapp_meta_inbound_verified")
+                    )
+                except Exception:
+                    has_real_meta_inbound = False
+            response = build_whatsapp_healthcheck_response(
+                path,
+                has_real_meta_inbound=has_real_meta_inbound,
+            )
+            log.info(
+                "healthcheck keyword detected chat_id=%s matched=%s path=%s",
+                mem_id,
+                matched_keyword,
+                path,
+            )
+            log.info("healthcheck chosen path: %s", path)
+            log.info("healthcheck meta inbound verified: %s", has_real_meta_inbound)
+            log.info("healthcheck pipeline bypass intentional for business flow: %s", path)
+            try:
+                input_validation = await state.supervisor_input.validate(
+                    _WA_HEALTHCHECK_INPUT_PROBE,
+                    chat_id=mem_id,
+                )
+                estado_in = str(input_validation.get("estado", "") or "").strip().lower()
+                if estado_in not in {"aprobado", "ok", "aceptable"}:
+                    log.warning(
+                        "healthcheck ai validation rejected chat_id=%s path=%s estado=%s motivo=%s",
+                        mem_id,
+                        path,
+                        input_validation.get("estado"),
+                        input_validation.get("motivo"),
+                    )
+                    return None
+                log.info("healthcheck ai validation success chat_id=%s path=%s", mem_id, path)
+            except Exception as exc:
+                log.error(
+                    "healthcheck ai validation failure chat_id=%s path=%s error=%s",
+                    mem_id,
+                    path,
+                    exc,
+                    exc_info=True,
+                )
+                return None
+
+            if path == "complete":
+                try:
+                    output_validation = await state.supervisor_output.validate(
+                        user_input=_WA_HEALTHCHECK_INPUT_PROBE,
+                        agent_response=response,
+                        chat_id=mem_id,
+                    )
+                    estado_out = str(output_validation.get("estado", "") or "").strip().lower()
+                    if "aprobado" not in estado_out:
+                        log.warning(
+                            "healthcheck output validation rejected chat_id=%s estado=%s motivo=%s",
+                            mem_id,
+                            output_validation.get("estado"),
+                            output_validation.get("motivo"),
+                        )
+                        return None
+                    log.info("healthcheck output validation success chat_id=%s", mem_id)
+                except Exception as exc:
+                    log.error(
+                        "healthcheck output validation failure chat_id=%s error=%s",
+                        mem_id,
+                        exc,
+                        exc_info=True,
+                    )
+                    return None
+
+            return response
 
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
