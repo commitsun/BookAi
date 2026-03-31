@@ -16,6 +16,8 @@ from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
 from core.escalation_db import get_latest_pending_escalation
 from core.whatsapp_healthcheck import (
+    build_whatsapp_healthcheck_ai_failure_response,
+    build_whatsapp_healthcheck_complete_failure_response,
     build_whatsapp_healthcheck_response,
     detect_whatsapp_healthcheck,
 )
@@ -1102,7 +1104,7 @@ async def process_user_message(
                         input_validation.get("estado"),
                         input_validation.get("motivo"),
                     )
-                    return None
+                    return build_whatsapp_healthcheck_ai_failure_response(path)
                 log.info("healthcheck ai validation success chat_id=%s path=%s", mem_id, path)
             except Exception as exc:
                 log.error(
@@ -1112,7 +1114,7 @@ async def process_user_message(
                     exc,
                     exc_info=True,
                 )
-                return None
+                return build_whatsapp_healthcheck_ai_failure_response(path)
 
             if path == "complete":
                 try:
@@ -1129,7 +1131,7 @@ async def process_user_message(
                             output_validation.get("estado"),
                             output_validation.get("motivo"),
                         )
-                        return None
+                        return build_whatsapp_healthcheck_complete_failure_response()
                     log.info("healthcheck output validation success chat_id=%s", mem_id)
                 except Exception as exc:
                     log.error(
@@ -1138,7 +1140,7 @@ async def process_user_message(
                         exc,
                         exc_info=True,
                     )
-                    return None
+                    return build_whatsapp_healthcheck_complete_failure_response()
 
             return response
 

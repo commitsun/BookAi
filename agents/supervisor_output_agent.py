@@ -6,6 +6,7 @@ from fastmcp import FastMCP
 from core.config import ModelConfig, ModelTier
 from core.escalation_db import get_latest_pending_escalation
 from core.observability import ls_context
+from core.whatsapp_healthcheck import is_whatsapp_healthcheck_response
 
 log = logging.getLogger("SupervisorOutputAgent")
 
@@ -113,6 +114,15 @@ class SupervisorOutputAgent:
     async def validate(self, user_input: str, agent_response: str, chat_id: str = None) -> dict:
         """Evalúa la respuesta y aplica reglas de tolerancia + detección de loops."""
         try:
+            if is_whatsapp_healthcheck_response(agent_response):
+                log.info("✅ Healthcheck de WhatsApp aprobado automáticamente por SupervisorOutput.")
+                return {
+                    "estado": "Aprobado",
+                    "motivo": "Respuesta de healthcheck permitida",
+                    "response": agent_response,
+                    "sugerencia": None,
+                }
+
             if self._claims_human_contact_already_done(agent_response):
                 if not self._has_recent_pending_escalation(chat_id):
                     log.warning(

@@ -44,9 +44,35 @@ def build_whatsapp_healthcheck_response(path: str, *, has_real_meta_inbound: boo
         return "✅ BookAI responde correctamente.\nFlujo de IA de prueba operativo."
     if normalized_path == "complete":
         if has_real_meta_inbound:
-            return "✅ BookAI responde correctamente.\nFlujo completo de prueba operativo."
-        return (
-            "⚠️ BookAI responde correctamente, pero el flujo completo de WhatsApp "
-            "no está validado en este entorno."
-        )
+            return "✅ BookAI funciona correctamente.\nFlujo completo operativo."
+        return "⚠️ La comprobación completa de BookAI no funciona correctamente en este entorno."
     return "✅ BookAI responde correctamente."
+
+
+def build_whatsapp_healthcheck_ai_failure_response(path: str) -> str:
+    normalized_path = str(path or "").strip().lower()
+    if normalized_path == "complete":
+        return "⚠️ La comprobación completa de BookAI no funciona correctamente en este entorno."
+    if normalized_path == "ia":
+        return "⚠️ La IA de BookAI no funciona correctamente en este entorno."
+    return "⚠️ BookAI responde, pero la validación interna no está operativa correctamente."
+
+
+def build_whatsapp_healthcheck_complete_failure_response() -> str:
+    return "⚠️ La comprobación completa de BookAI no funciona correctamente en este entorno."
+
+
+def is_whatsapp_healthcheck_response(value: str) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    candidates = {
+        build_whatsapp_healthcheck_response("basic", has_real_meta_inbound=False),
+        build_whatsapp_healthcheck_response("ia", has_real_meta_inbound=False),
+        build_whatsapp_healthcheck_response("complete", has_real_meta_inbound=False),
+        build_whatsapp_healthcheck_response("complete", has_real_meta_inbound=True),
+        build_whatsapp_healthcheck_ai_failure_response("ia"),
+        build_whatsapp_healthcheck_ai_failure_response("complete"),
+        build_whatsapp_healthcheck_complete_failure_response(),
+    }
+    return text in candidates
