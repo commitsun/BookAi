@@ -6,6 +6,7 @@ import logging
 import asyncio
 import time
 from channels_wrapper.base_channel import BaseChannel  # 👈 Verificación de herencia
+from core.message_backup import schedule_message_backup
 
 log = logging.getLogger("ChannelManager")
 
@@ -24,6 +25,43 @@ class ChannelManager:
         self._dedup_window = 8.0
         self.memory_manager = memory_manager
         self._load_channels()
+
+    def _resolve_backup_metadata(
+        self,
+        *,
+        chat_id: str,
+        channel: str,
+        context_id: str | None = None,
+    ) -> dict:
+        metadata = {
+            "conversation_id": str(chat_id or "").replace("+", "").strip() or None,
+            "original_chat_id": str(context_id or chat_id or "").replace("+", "").strip() or None,
+            "channel": str(channel or "").strip() or None,
+            "property_id": None,
+            "instance_id": None,
+        }
+        if not self.memory_manager:
+            return metadata
+
+        for lookup_id in [context_id, chat_id]:
+            if not lookup_id:
+                continue
+            try:
+                if metadata["property_id"] is None:
+                    property_id = self.memory_manager.get_flag(lookup_id, "property_id")
+                    if property_id is not None and str(property_id).strip():
+                        metadata["property_id"] = property_id
+                if metadata["instance_id"] is None:
+                    instance_id = (
+                        self.memory_manager.get_flag(lookup_id, "instance_id")
+                        or self.memory_manager.get_flag(lookup_id, "instance_hotel_code")
+                    )
+                    if instance_id is not None and str(instance_id).strip():
+                        metadata["instance_id"] = instance_id
+            except Exception:
+                continue
+
+        return metadata
 
     # ------------------------------------------------------------------
     # 📦 Carga dinámica de canales
@@ -97,6 +135,7 @@ class ChannelManager:
         message: str,
         channel: str = "whatsapp",
         context_id: str | None = None,
+        backup_role: str | None = None,
     ):
         """
         Envía un mensaje al canal especificado (WhatsApp, Telegram, etc.).
@@ -168,6 +207,27 @@ class ChannelManager:
             else:
                 send_fn(chat_id, message)
 
+            backup_metadata = self._resolve_backup_metadata(
+                chat_id=chat_id,
+                channel=channel,
+                context_id=context_id,
+            )
+            backup_payload = {"kind": "text"}
+            if context_id:
+                backup_payload["context_id"] = context_id
+            schedule_message_backup(
+                conversation_id=backup_metadata["conversation_id"],
+                original_chat_id=backup_metadata["original_chat_id"],
+                channel=backup_metadata["channel"],
+                property_id=backup_metadata["property_id"],
+                instance_id=backup_metadata["instance_id"],
+                role=backup_role,
+                direction="outbound",
+                content=message,
+                backup_payload=backup_payload,
+                backup_source="channel_manager.send_message",
+            )
+
             log.info(f"📤 [{channel}] Mensaje enviado a {chat_id}: {message[:80]}...")
 
         except Exception as e:
@@ -186,6 +246,7 @@ class ChannelManager:
         language: str = "es",
         channel: str = "whatsapp",
         context_id: str | None = None,
+        backup_role: str | None = None,
     ):
         """
         Envía una plantilla preaprobada (ej: WhatsApp).
@@ -262,6 +323,34 @@ class ChannelManager:
                 raise RuntimeError(
                     error_message or f"El canal '{channel}' no confirmó el envío de la plantilla."
                 )
+
+            backup_metadata = self._resolve_backup_metadata(
+                chat_id=chat_id,
+                channel=channel,
+                context_id=context_id,
+            )
+            backup_payload = {
+                "kind": "template",
+                "template_id": template_id,
+                "parameters": parameters,
+                "language": language,
+            }
+            if context_id:
+                backup_payload["context_id"] = context_id
+            if isinstance(result, dict):
+                backup_payload["provider_result"] = result
+            schedule_message_backup(
+                conversation_id=backup_metadata["conversation_id"],
+                original_chat_id=backup_metadata["original_chat_id"],
+                channel=backup_metadata["channel"],
+                property_id=backup_metadata["property_id"],
+                instance_id=backup_metadata["instance_id"],
+                role=backup_role,
+                direction="outbound",
+                content=template_id,
+                backup_payload=backup_payload,
+                backup_source="channel_manager.send_template_message",
+            )
 
             log.info("📤 [%s] Plantilla '%s' enviada a %s", channel, template_id, chat_id)
             return result

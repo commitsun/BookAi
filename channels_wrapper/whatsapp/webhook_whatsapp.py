@@ -13,6 +13,7 @@ from fastapi.responses import JSONResponse, PlainTextResponse
 
 from channels_wrapper.utils.text_utils import send_fragmented_async
 from core.db import is_chat_visible_in_list
+from core.message_backup import schedule_message_backup
 from core.pipeline import process_user_message, _resolve_bookai_enabled
 from core.language_manager import language_manager
 from core.whatsapp_healthcheck import (
@@ -393,6 +394,32 @@ def register_whatsapp_routes(app, state):
             clean_sender = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "")
             context_id = str(memory_id or sender or "").strip()
             clean_chat_id = re.sub(r"\D", "", str(sender or "")).strip() or str(sender or "").strip() or context_id
+            backup_instance_id = None
+            try:
+                backup_instance_id = (
+                    state.memory_manager.get_flag(memory_id, "instance_id")
+                    or state.memory_manager.get_flag(memory_id, "instance_hotel_code")
+                )
+            except Exception:
+                backup_instance_id = None
+            schedule_message_backup(
+                conversation_id=clean_chat_id,
+                original_chat_id=context_id,
+                channel="whatsapp",
+                property_id=property_id,
+                instance_id=backup_instance_id,
+                role="guest",
+                direction="inbound",
+                content=text,
+                external_message_id=msg_id,
+                backup_payload={
+                    "message_type": msg_type,
+                    "client_name": client_name,
+                    "instance_number": normalized_instance_number or None,
+                    "phone_number_id": instance_phone_id or None,
+                },
+                backup_source="whatsapp_webhook.inbound",
+            )
             guest_lang = "es"
             guest_lang_confidence = 0.0
             try:
