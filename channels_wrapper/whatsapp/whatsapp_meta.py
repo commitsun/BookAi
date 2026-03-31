@@ -152,6 +152,7 @@ class WhatsAppChannel(BaseChannel):
     def send_message(self, user_id: str, text: str):
         phone_id = getattr(self, "_dynamic_whatsapp_phone_id", None) or C.WHATSAPP_PHONE_ID
         token = getattr(self, "_dynamic_whatsapp_token", None) or C.WHATSAPP_TOKEN
+        raise_on_error = bool(getattr(self, "_raise_on_send_error", False))
         url = f"https://graph.facebook.com/v19.0/{phone_id}/messages"
         headers = {
             "Authorization": f"Bearer {token}",
@@ -167,10 +168,14 @@ class WhatsAppChannel(BaseChannel):
             r = requests.post(url, headers=headers, json=payload, timeout=10)
             if r.status_code != 200:
                 log.error(f"⚠️ Error WhatsApp ({r.status_code}): {r.text}")
+                if raise_on_error:
+                    raise RuntimeError(f"WhatsApp send failed ({r.status_code}): {r.text}")
             else:
                 log.info(f"🚀 WhatsApp → {user_id}: {text[:80]}... ({r.status_code})")
         except Exception as e:
             log.error(f"⚠️ Error enviando mensaje WhatsApp: {e}", exc_info=True)
+            if raise_on_error:
+                raise
 
     # ---------------------------------------------------------------------
     # Envío de plantillas (WhatsApp)

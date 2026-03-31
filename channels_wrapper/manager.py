@@ -136,6 +136,7 @@ class ChannelManager:
         channel: str = "whatsapp",
         context_id: str | None = None,
         backup_role: str | None = None,
+        raise_on_error: bool = False,
     ):
         """
         Envía un mensaje al canal especificado (WhatsApp, Telegram, etc.).
@@ -202,10 +203,23 @@ class ChannelManager:
                 except Exception as exc:
                     log.warning("No se pudo resolver credenciales dinámicas WA: %s", exc)
 
-            if asyncio.iscoroutinefunction(send_fn):
-                await send_fn(chat_id, message)
-            else:
-                send_fn(chat_id, message)
+            previous_raise_on_send_error = None
+            if channel == "whatsapp":
+                previous_raise_on_send_error = getattr(channel_obj, "_raise_on_send_error", None)
+                setattr(channel_obj, "_raise_on_send_error", raise_on_error)
+
+            try:
+                if asyncio.iscoroutinefunction(send_fn):
+                    await send_fn(chat_id, message)
+                else:
+                    send_fn(chat_id, message)
+            finally:
+                if channel == "whatsapp":
+                    if previous_raise_on_send_error is None:
+                        if hasattr(channel_obj, "_raise_on_send_error"):
+                            delattr(channel_obj, "_raise_on_send_error")
+                    else:
+                        setattr(channel_obj, "_raise_on_send_error", previous_raise_on_send_error)
 
             backup_metadata = self._resolve_backup_metadata(
                 chat_id=chat_id,
@@ -232,6 +246,8 @@ class ChannelManager:
 
         except Exception as e:
             log.error(f"❌ Error enviando mensaje por canal '{channel}': {e}", exc_info=True)
+            if raise_on_error:
+                raise
 
 
     # ------------------------------------------------------------------

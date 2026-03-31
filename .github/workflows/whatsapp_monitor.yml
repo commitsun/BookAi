@@ -1,0 +1,98 @@
+name: "📲 WhatsApp Monitor"
+
+on:
+  workflow_run:
+    workflows:
+      - "🚀 Deploy to EC2"
+    types:
+      - completed
+  workflow_dispatch:
+    inputs:
+      checks:
+        description: "CSV de checks a ejecutar"
+        required: false
+        default: "basic,ia"
+      target_numbers:
+        description: "CSV de números destino"
+        required: false
+        default: ""
+      instance_id:
+        description: "instance_id origen"
+        required: false
+        default: ""
+  schedule:
+    - cron: "0 */3 * * *"
+
+permissions:
+  contents: read
+
+jobs:
+  whatsapp-monitor:
+    if: ${{ github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: "🔐 Configure SSH access"
+        run: |
+          mkdir -p ~/.ssh
+          echo "${{ secrets.EC2_SSH_KEY }}" > ~/.ssh/id_ed25519
+          chmod 600 ~/.ssh/id_ed25519
+          cat > ~/.ssh/config <<'CFG'
+          Host ec2
+            HostName ${{ secrets.EC2_HOST }}
+            User ${{ secrets.EC2_USER }}
+            IdentityFile ~/.ssh/id_ed25519
+            StrictHostKeyChecking no
+          CFG
+
+      - name: "🌍 Resolve monitor configuration"
+        env:
+          INPUT_CHECKS: ${{ github.event.inputs.checks }}
+          INPUT_TARGETS: ${{ github.event.inputs.target_numbers }}
+          INPUT_INSTANCE_ID: ${{ github.event.inputs.instance_id }}
+          VAR_CHECKS: ${{ vars.WHATSAPP_MONITOR_CHECKS }}
+          VAR_TARGETS: ${{ vars.WHATSAPP_MONITOR_TARGET_NUMBERS }}
+          VAR_INSTANCE_ID: ${{ vars.WHATSAPP_MONITOR_INSTANCE_ID }}
+        run: |
+          CHECKS="${INPUT_CHECKS:-}"
+          TARGETS="${INPUT_TARGETS:-}"
+          INSTANCE_ID="${INPUT_INSTANCE_ID:-}"
+
+          if [ -z "$CHECKS" ]; then
+            CHECKS="${VAR_CHECKS:-basic,ia}"
+          fi
+
+          if [ -z "$TARGETS" ]; then
+            TARGETS="${VAR_TARGETS:-34683527049}"
+          fi
+
+          if [ -z "$INSTANCE_ID" ]; then
+            INSTANCE_ID="${VAR_INSTANCE_ID:-}"
+          fi
+
+          echo "WHATSAPP_MONITOR_CHECKS=$CHECKS" >> "$GITHUB_ENV"
+          echo "WHATSAPP_MONITOR_TARGET_NUMBERS=$TARGETS" >> "$GITHUB_ENV"
+          echo "WHATSAPP_MONITOR_INSTANCE_ID=$INSTANCE_ID" >> "$GITHUB_ENV"
+
+          echo "Checks resueltos: $CHECKS"
+          echo "Targets resueltos: $TARGETS"
+          echo "Instance ID resuelto: ${INSTANCE_ID:-<default>}"
+
+      - name: "📲 Run WhatsApp monitor on EC2"
+        env:
+          MONITOR_CHECKS: ${{ env.WHATSAPP_MONITOR_CHECKS }}
+          MONITOR_TARGETS: ${{ env.WHATSAPP_MONITOR_TARGET_NUMBERS }}
+          MONITOR_INSTANCE_ID: ${{ env.WHATSAPP_MONITOR_INSTANCE_ID }}
+        run: |
+          ssh ec2 "MONITOR_CHECKS='${MONITOR_CHECKS}' MONITOR_TARGETS='${MONITOR_TARGETS}' MONITOR_INSTANCE_ID='${MONITOR_INSTANCE_ID}' bash -s" <<'EOF'
+            set -e
+            DOCKER_ARGS=(
+              -e WHATSAPP_MONITOR_CHECKS="$MONITOR_CHECKS"
+              -e WHATSAPP_MONITOR_TARGET_NUMBERS="$MONITOR_TARGETS"
+            )
+            if [ -n "$MONITOR_INSTANCE_ID" ]; then
+              DOCKER_ARGS+=(-e WHATSAPP_MONITOR_INSTANCE_ID="$MONITOR_INSTANCE_ID")
+            fi
+            docker exec "${DOCKER_ARGS[@]}" bookai sh -lc 'cd /app && python3 -m core.whatsapp_monitor'
+          EOF

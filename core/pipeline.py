@@ -16,18 +16,13 @@ from core.main_agent import NO_GUEST_REPLY, create_main_agent
 from core.instance_context import hydrate_dynamic_context
 from core.escalation_db import get_latest_pending_escalation
 from core.whatsapp_healthcheck import (
-    build_whatsapp_healthcheck_ai_failure_response,
-    build_whatsapp_healthcheck_complete_failure_response,
-    build_whatsapp_healthcheck_response,
     detect_whatsapp_healthcheck,
+    execute_whatsapp_healthcheck,
 )
 
 log = logging.getLogger("Pipeline")
 SUPER_OFFER_FLAG = "super_offer_pending"
 _HUMAN_ESCALATION_COOLDOWN_MIN = 15
-_WA_HEALTHCHECK_INPUT_PROBE = "Quiero saber el horario de check-in del hotel."
-
-
 def _clean_chat_id(value: str) -> str:
     return re.sub(r"\D", "", str(value or "")).strip()
 
@@ -1077,10 +1072,6 @@ async def process_user_message(
                     )
                 except Exception:
                     has_real_meta_inbound = False
-            response = build_whatsapp_healthcheck_response(
-                path,
-                has_real_meta_inbound=has_real_meta_inbound,
-            )
             log.info(
                 "healthcheck keyword detected chat_id=%s matched=%s path=%s",
                 mem_id,
@@ -1090,59 +1081,13 @@ async def process_user_message(
             log.info("healthcheck chosen path: %s", path)
             log.info("healthcheck meta inbound verified: %s", has_real_meta_inbound)
             log.info("healthcheck pipeline bypass intentional for business flow: %s", path)
-            try:
-                input_validation = await state.supervisor_input.validate(
-                    _WA_HEALTHCHECK_INPUT_PROBE,
-                    chat_id=mem_id,
-                )
-                estado_in = str(input_validation.get("estado", "") or "").strip().lower()
-                if estado_in not in {"aprobado", "ok", "aceptable"}:
-                    log.warning(
-                        "healthcheck ai validation rejected chat_id=%s path=%s estado=%s motivo=%s",
-                        mem_id,
-                        path,
-                        input_validation.get("estado"),
-                        input_validation.get("motivo"),
-                    )
-                    return build_whatsapp_healthcheck_ai_failure_response(path)
-                log.info("healthcheck ai validation success chat_id=%s path=%s", mem_id, path)
-            except Exception as exc:
-                log.error(
-                    "healthcheck ai validation failure chat_id=%s path=%s error=%s",
-                    mem_id,
-                    path,
-                    exc,
-                    exc_info=True,
-                )
-                return build_whatsapp_healthcheck_ai_failure_response(path)
-
-            if path == "complete":
-                try:
-                    output_validation = await state.supervisor_output.validate(
-                        user_input=_WA_HEALTHCHECK_INPUT_PROBE,
-                        agent_response=response,
-                        chat_id=mem_id,
-                    )
-                    estado_out = str(output_validation.get("estado", "") or "").strip().lower()
-                    if "aprobado" not in estado_out:
-                        log.warning(
-                            "healthcheck output validation rejected chat_id=%s estado=%s motivo=%s",
-                            mem_id,
-                            output_validation.get("estado"),
-                            output_validation.get("motivo"),
-                        )
-                        return build_whatsapp_healthcheck_complete_failure_response()
-                    log.info("healthcheck output validation success chat_id=%s", mem_id)
-                except Exception as exc:
-                    log.error(
-                        "healthcheck output validation failure chat_id=%s error=%s",
-                        mem_id,
-                        exc,
-                        exc_info=True,
-                    )
-                    return build_whatsapp_healthcheck_complete_failure_response()
-
-            return response
+            return await execute_whatsapp_healthcheck(
+                state,
+                path,
+                has_real_meta_inbound=has_real_meta_inbound,
+                chat_id=mem_id,
+                trace_id=str(mem_id or chat_id or "").strip() or None,
+            )
 
 
         clean_id = re.sub(r"\D", "", str(chat_id or "")).strip() or str(chat_id or "")
