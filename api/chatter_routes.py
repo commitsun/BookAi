@@ -1831,106 +1831,6 @@ def register_chatter_routes(app, state) -> None:
         except Exception as exc:
             log.debug("No se pudo emitir evento socket: %s", exc)
 
-    def _property_guest_unread_count(
-        property_id: Optional[str | int],
-        *,
-        instance_id: Optional[str] = None,
-    ) -> int:
-        normalized_property_id = _normalize_property_id(property_id)
-        if normalized_property_id is None:
-            return 0
-        total = 0
-        offset = 0
-        batch_size = 1000
-        visibility_cache: Dict[Tuple[str, str, str], bool] = {}
-        allowed_sets_cache: Dict[str, Tuple[set[str], set[str]]] = {}
-        while True:
-            try:
-                rows = (
-                    supabase.table("chat_history")
-                    .select("conversation_id, original_chat_id, channel")
-                    .eq("property_id", normalized_property_id)
-                    .eq("role", "guest")
-                    .eq("read_status", False)
-                    .is_("archived_at", "null")
-                    .is_("hidden_at", "null")
-                    .order("created_at", desc=True)
-                    .range(offset, offset + batch_size - 1)
-                    .execute()
-                    .data
-                    or []
-                )
-            except Exception as exc:
-                log.warning(
-                    "No se pudo calcular guest_unread_count property_id=%s instance_id=%s: %s",
-                    normalized_property_id,
-                    instance_id,
-                    exc,
-                )
-                return total
-
-            if not rows:
-                break
-
-            for row in rows:
-                conversation_id = str((row or {}).get("conversation_id") or "").strip()
-                if not conversation_id:
-                    continue
-                clean_conversation_id = _clean_chat_id(conversation_id)
-                if not clean_conversation_id:
-                    continue
-                original_chat_id = str((row or {}).get("original_chat_id") or "").strip()
-                row_channel = str((row or {}).get("channel") or "whatsapp").strip() or "whatsapp"
-
-                if instance_id:
-                    allowed_sets = allowed_sets_cache.get(row_channel)
-                    if allowed_sets is None:
-                        allowed_sets = _instance_chat_sets(
-                            instance_id,
-                            row_channel,
-                            normalized_property_id,
-                        )
-                        allowed_sets_cache[row_channel] = allowed_sets
-                    allowed_chat_ids, allowed_original_chat_ids = allowed_sets
-                    if not allowed_chat_ids and not allowed_original_chat_ids:
-                        continue
-                    in_chat_set = clean_conversation_id in allowed_chat_ids
-                    in_original_set = bool(original_chat_id and original_chat_id in allowed_original_chat_ids)
-                    if original_chat_id:
-                        if not in_original_set:
-                            continue
-                    elif not in_chat_set and not in_original_set:
-                        continue
-
-                visibility_key = (clean_conversation_id, row_channel, original_chat_id)
-                is_visible = visibility_cache.get(visibility_key)
-                if is_visible is None:
-                    try:
-                        is_visible = is_chat_visible_in_list(
-                            clean_conversation_id,
-                            property_id=normalized_property_id,
-                            channel=row_channel,
-                            original_chat_id=original_chat_id or None,
-                        )
-                    except Exception as exc:
-                        log.debug(
-                            "No se pudo validar visibilidad de mensaje unread chat_id=%s property_id=%s channel=%s: %s",
-                            clean_conversation_id,
-                            normalized_property_id,
-                            row_channel,
-                            exc,
-                        )
-                        is_visible = False
-                    visibility_cache[visibility_key] = is_visible
-                if is_visible:
-                    total += 1
-
-            if len(rows) < batch_size:
-                break
-            offset += batch_size
-
-        return total
-
     def _property_pending_escalation_count(
         property_id: Optional[str | int],
         *,
@@ -2000,11 +1900,7 @@ def register_chatter_routes(app, state) -> None:
         normalized_property_id = _normalize_property_id(property_id)
         if normalized_property_id is None:
             return 0
-        guest_unread_count = _property_guest_unread_count(
-            normalized_property_id,
-            instance_id=instance_id,
-        )
-        return guest_unread_count + _property_pending_escalation_count(
+        return _property_pending_escalation_count(
             normalized_property_id,
             instance_id=instance_id,
         )
