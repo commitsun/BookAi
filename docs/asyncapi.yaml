@@ -1,0 +1,422 @@
+asyncapi: "2.6.0"
+id: "urn:com:bookai:realtime-api"
+
+info:
+  title: BookAI Real-time Events
+  version: "0.1.0"
+  contact:
+    name: BookAI
+    url: https://github.com/bookai/bookai
+    email: dev@bookai.example.com
+  description: |
+    Socket.IO event interface for the BookAI conversational channel backend.
+
+    BookAI emits events to connected clients (the Roomdoo app) when messages
+    arrive, are sent, or change delivery status. Clients can join specific
+    rooms to receive targeted updates.
+
+    ### Authentication
+
+    Pass a valid Bearer token **and the target property ID** in the Socket.IO
+    handshake `auth` object:
+
+    ```js
+    const socket = io("https://bookai.example.com", {
+      auth: {
+        token: "<bearer_token>",
+        property_id: 12
+      }
+    });
+    ```
+
+    The token is the same one used for the REST API (`instances.bearer_token`).
+    The `property_id` must belong to the authenticated instance.
+    Connection is rejected if either field is missing, invalid, or mismatched.
+
+    ### Rooms
+
+    On connect the socket is automatically joined to `property:{property_id}`
+    (the property passed in the handshake).
+
+    To receive updates for an open conversation, clients must explicitly
+    join the `chat:{phone_code}` room.
+
+  license:
+    name: MIT
+
+tags:
+  - name: conversations
+    description: Events related to hotel inbox conversations
+  - name: messages
+    description: Events related to individual messages
+  - name: rooms
+    description: Client commands to join/leave chat rooms
+
+servers:
+  production:
+    url: "wss://{host}"
+    protocol: wss
+    description: Production server
+    variables:
+      host:
+        description: BookAI server hostname
+        default: bookai.example.com
+    security:
+      - bearerAuth: []
+
+defaultContentType: application/json
+
+channels:
+
+  # ------------------------------------------------------------------
+  # property:{propertyId}
+  # Joined automatically on connect for every property of the instance.
+  # Receives all events for that hotel's inbox.
+  # ------------------------------------------------------------------
+  "property/{propertyId}":
+    description: |
+      Hotel inbox room. Joined automatically on connect for every property
+      belonging to the authenticated instance.
+    parameters:
+      propertyId:
+        description: ID of the Property (`properties.id`)
+        schema:
+          type: integer
+          examples: [12]
+    subscribe:
+      operationId: receivePropertyEvents
+      summary: Receive hotel inbox events
+      message:
+        oneOf:
+          - $ref: "#/components/messages/ConversationCreated"
+          - $ref: "#/components/messages/ConversationUpdated"
+          - $ref: "#/components/messages/MessageCreated"
+
+  # ------------------------------------------------------------------
+  # chat:{phoneCode}
+  # Joined on demand. Receives updates for a single open conversation.
+  # ------------------------------------------------------------------
+  "chat/{phoneCode}":
+    description: |
+      Individual conversation room. The client joins this room when
+      a hotel operator opens a specific conversation in the chatter.
+    parameters:
+      phoneCode:
+        description: E.164 phone number without leading '+' (`contacts.phone_code`)
+        schema:
+          type: string
+          examples: ["34699323583"]
+    subscribe:
+      operationId: receiveChatEvents
+      summary: Receive events for a single conversation
+      message:
+        oneOf:
+          - $ref: "#/components/messages/MessageCreated"
+          - $ref: "#/components/messages/MessageDeliveryUpdated"
+    publish:
+      operationId: sendChatRoomCommands
+      summary: Join or leave a chat room
+      message:
+        oneOf:
+          - $ref: "#/components/messages/JoinChat"
+          - $ref: "#/components/messages/LeaveChat"
+
+components:
+
+  securitySchemes:
+    bearerAuth:
+      type: http
+      scheme: bearer
+      description: Bearer token from `instances.bearer_token`
+
+  messages:
+
+    # ----------------------------------------------------------------
+    # Server → Client events
+    # ----------------------------------------------------------------
+
+    ConversationCreated:
+      messageId: conversationCreated
+      name: conversation.created
+      title: Conversation created
+      summary: |
+        Emitted to `property:{id}` the first time a conversation is opened
+        for a property (i.e. when the first template is sent to a new guest).
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/ConversationPayload"
+      examples:
+        - name: New guest conversation
+          payload:
+            id: 42
+            created_at: "2026-04-10T09:00:00+00:00"
+            updated_at: "2026-04-10T09:00:00+00:00"
+            unread_count: 0
+            needs_attention: false
+            contact:
+              id: 18
+              phone_code: "34699323583"
+              display_name: "Maria Garcia"
+            last_message: null
+
+    ConversationUpdated:
+      messageId: conversationUpdated
+      name: conversation.updated
+      title: Conversation updated
+      summary: |
+        Emitted to `property:{id}` when a new message arrives in a conversation
+        (inbound from guest or outbound from agent/system).
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/ConversationPayload"
+
+    MessageCreated:
+      name: message.created
+      title: Message created
+      summary: |
+        Emitted to both `property:{id}` and `chat:{phone_code}` whenever a
+        message is persisted, regardless of direction or sender.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/MessagePayload"
+      examples:
+        - name: Inbound guest message
+          payload:
+            id: 1205
+            conversation_id: 42
+            direction: inbound
+            sender: guest
+            content: "Hola, ¿a qué hora es el check-in?"
+            content_language: "es"
+            wa_message_id: "wamid.HBgLMzQ2OTkzMjM1ODM"
+            wa_message_type: text
+            delivery_status: delivered
+            routing_status: routed
+            template_code: null
+            agent_user_id: null
+            agent_display_name: null
+            created_at: "2026-04-10T10:23:00+00:00"
+            contact:
+              id: 18
+              phone_code: "34699323583"
+              display_name: "María García"
+        - name: Outbound agent message
+          payload:
+            id: 1206
+            conversation_id: 42
+            direction: outbound
+            sender: agent
+            content: "El check-in es a las 15:00. Bienvenida!"
+            content_language: "es"
+            wa_message_id: "wamid.HBgLMzQ2OTkzMjM1OTQ"
+            wa_message_type: text
+            delivery_status: sent
+            agent_user_id: 7
+            agent_display_name: "Carlos Recepcion"
+            created_at: "2026-04-10T10:25:00+00:00"
+
+    MessageDeliveryUpdated:
+      messageId: messageDeliveryUpdated
+      name: message.delivery_updated
+      title: Message delivery status updated
+      summary: |
+        Emitted to `chat:{phone_code}` when Meta confirms a delivery or read
+        status change for an outbound message.
+      contentType: application/json
+      payload:
+        $ref: "#/components/schemas/DeliveryUpdatedPayload"
+      examples:
+        - name: Message read by guest
+          payload:
+            id: 1206
+            conversation_id: 42
+            wa_message_id: "wamid.HBgLMzQ2OTkzMjM1OTQ"
+            delivery_status: read
+            delivery_error: null
+
+    # ----------------------------------------------------------------
+    # Client → Server commands
+    # ----------------------------------------------------------------
+
+    JoinChat:
+      messageId: joinChat
+      name: join_chat
+      title: Join conversation room
+      summary: |
+        Sent by the client when a hotel operator opens a conversation.
+        BookAI subscribes the socket to `chat:{phone_code}`.
+      contentType: application/json
+      payload:
+        type: object
+        required: [phone_code]
+        properties:
+          phone_code:
+            type: string
+            description: E.164 digits without '+' (`contacts.phone_code`)
+            examples: ["34699323583"]
+      examples:
+        - payload:
+            phone_code: "34699323583"
+
+    LeaveChat:
+      messageId: leaveChat
+      name: leave_chat
+      title: Leave conversation room
+      summary: |
+        Sent by the client when a hotel operator closes a conversation.
+        BookAI unsubscribes the socket from `chat:{phone_code}`.
+      contentType: application/json
+      payload:
+        type: object
+        required: [phone_code]
+        properties:
+          phone_code:
+            type: string
+            examples: ["34699323583"]
+
+  schemas:
+
+    ConversationPayload:
+      type: object
+      properties:
+        id:
+          type: integer
+          examples: [42]
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        unread_count:
+          type: integer
+          description: |
+            Inbound messages received after this property's last
+            PATCH /conversations/{id}/read call. 0 means fully read.
+          examples: [3]
+        needs_attention:
+          type: boolean
+          description: |
+            True when a transfer note (kind=note, template_code=transfer.incoming)
+            exists in an active session for this property and has not been read yet.
+            Cleared by PATCH /conversations/{id}/read.
+            When True, show a "needs attention" indicator instead of (or in addition
+            to) the numeric unread badge.
+          examples: [false]
+        contact:
+          $ref: "#/components/schemas/ContactSummary"
+        last_message:
+          $ref: "#/components/schemas/LastMessageSummary"
+          description: |
+            Preview of the most recent message (excluding folio-event notes).
+            Null if no messages exist yet.
+
+    LastMessageSummary:
+      type: object
+      nullable: true
+      properties:
+        id:
+          type: integer
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        sender:
+          type: string
+          enum: [guest, agent, system]
+        content:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+
+    MessagePayload:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversation_id:
+          type: integer
+        channel_endpoint_id:
+          type: integer
+        kind:
+          type: string
+          enum: [message, note]
+          description: |
+            'message' = regular WhatsApp message.
+            'note' = internal note, never sent to WhatsApp.
+        direction:
+          type: string
+          enum: [inbound, outbound]
+        sender:
+          type: string
+          enum: [guest, agent, system]
+        content:
+          type: string
+          nullable: true
+        content_language:
+          type: string
+          nullable: true
+          description: BCP-47 tag of the original content language
+          examples: ["es", "zh", "en"]
+        wa_message_id:
+          type: string
+          nullable: true
+        wa_message_type:
+          type: string
+          examples: [text, image, audio, interactive]
+        delivery_status:
+          type: string
+          enum: [pending, sent, delivered, read, failed, skipped]
+          description: |
+            'skipped' means delivery is not applicable (notes are never sent to WhatsApp).
+        routing_status:
+          type: string
+          nullable: true
+          enum: [routed, unassigned, ambiguous]
+        template_code:
+          type: string
+          nullable: true
+        agent_user_id:
+          type: integer
+          nullable: true
+        agent_display_name:
+          type: string
+          nullable: true
+        created_at:
+          type: string
+          format: date-time
+        contact:
+          $ref: "#/components/schemas/ContactSummary"
+
+    DeliveryUpdatedPayload:
+      type: object
+      properties:
+        id:
+          type: integer
+        conversation_id:
+          type: integer
+        wa_message_id:
+          type: string
+          nullable: true
+        delivery_status:
+          type: string
+          enum: [pending, sent, delivered, read, failed, skipped]
+        delivery_error:
+          type: string
+          nullable: true
+
+    ContactSummary:
+      type: object
+      properties:
+        id:
+          type: integer
+        phone_code:
+          type: string
+          description: E.164 digits without '+'
+          examples: ["34699323583"]
+        display_name:
+          type: string
+          nullable: true
+          examples: ["María García"]
+

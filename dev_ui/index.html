@@ -1,0 +1,822 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>BookAI Dev UI</title>
+<script src="https://cdn.socket.io/4.7.5/socket.io.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    font-family: system-ui, sans-serif;
+    font-size: 14px;
+    background: #f0f2f5;
+    height: 100vh;
+    display: flex;
+    flex-direction: column;
+  }
+
+  /* ── Header ── */
+  #header {
+    background: #1a1a2e;
+    color: #fff;
+    padding: 10px 16px;
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    flex-shrink: 0;
+  }
+  #header label { font-size: 12px; color: #aaa; }
+  #header input {
+    padding: 5px 8px;
+    border: none;
+    border-radius: 4px;
+    font-size: 13px;
+    background: #2d2d44;
+    color: #fff;
+    width: 240px;
+  }
+  #inp-property { width: 60px !important; }
+  #btn-connect {
+    padding: 6px 14px;
+    background: #4f46e5;
+    color: #fff;
+    border: none;
+    border-radius: 4px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  #btn-connect:hover { background: #4338ca; }
+  #status-dot {
+    width: 8px; height: 8px;
+    border-radius: 50%;
+    background: #6b7280;
+    flex-shrink: 0;
+  }
+  #status-dot.connected { background: #22c55e; }
+  #status-text { font-size: 12px; color: #aaa; }
+
+  /* ── Main ── */
+  #main {
+    display: flex;
+    flex: 1;
+    overflow: hidden;
+  }
+
+  /* ── Left panel ── */
+  #panel-left {
+    width: 300px;
+    flex-shrink: 0;
+    background: #fff;
+    border-right: 1px solid #e5e7eb;
+    display: flex;
+    flex-direction: column;
+  }
+  #search-area {
+    padding: 10px;
+    border-bottom: 1px solid #e5e7eb;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  #inp-search {
+    width: 100%;
+    padding: 7px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+  }
+  #sel-status {
+    width: 100%;
+    padding: 6px 8px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    background: #fff;
+  }
+  #conv-list {
+    flex: 1;
+    overflow-y: auto;
+  }
+  .conv-item {
+    padding: 12px 14px;
+    border-bottom: 1px solid #f3f4f6;
+    cursor: pointer;
+    transition: background 0.1s;
+  }
+  .conv-item:hover { background: #f9fafb; }
+  .conv-item.active { background: #eff6ff; border-left: 3px solid #4f46e5; }
+  .conv-name {
+    font-weight: 600;
+    color: #111;
+    margin-bottom: 2px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-preview {
+    color: #6b7280;
+    font-size: 12px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .conv-meta {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+  }
+  .conv-time {
+    font-size: 11px;
+    color: #9ca3af;
+    flex-shrink: 0;
+    margin-left: 8px;
+  }
+
+  /* ── Right panel ── */
+  #panel-right {
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    background: #f0f2f5;
+    overflow: hidden;
+  }
+  #chat-header {
+    background: #fff;
+    border-bottom: 1px solid #e5e7eb;
+    padding: 12px 16px;
+    font-weight: 600;
+    color: #111;
+    flex-shrink: 0;
+    min-height: 48px;
+  }
+  #chat-header small {
+    font-weight: 400;
+    color: #6b7280;
+    margin-left: 8px;
+  }
+  #messages {
+    flex: 1;
+    overflow-y: auto;
+    padding: 16px;
+    display: flex;
+    flex-direction: column;
+    gap: 6px;
+  }
+  .msg-row {
+    display: flex;
+  }
+  .msg-row.inbound { justify-content: flex-start; }
+  .msg-row.outbound { justify-content: flex-end; }
+  .bubble {
+    max-width: 65%;
+    padding: 8px 12px;
+    border-radius: 12px;
+    font-size: 13px;
+    line-height: 1.4;
+    word-break: break-word;
+  }
+  .msg-row.inbound .bubble {
+    background: #fff;
+    border-bottom-left-radius: 3px;
+    color: #111;
+  }
+  .msg-row.outbound .bubble {
+    background: #4f46e5;
+    border-bottom-right-radius: 3px;
+    color: #fff;
+  }
+  .msg-row.outbound.system .bubble { background: #7c3aed; }
+
+  /* Internal notes */
+  .msg-row.note { justify-content: center; }
+  .msg-row.note .bubble {
+    background: #fef9c3;
+    color: #713f12;
+    border: 1px solid #fde047;
+    border-radius: 8px;
+    font-size: 12px;
+    font-style: italic;
+    max-width: 85%;
+    text-align: center;
+  }
+
+  /* Transfer button in chat header */
+  #chat-header { display: flex; align-items: center; justify-content: space-between; }
+  .btn-transfer {
+    padding: 5px 12px;
+    background: #f3f4f6;
+    color: #374151;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    flex-shrink: 0;
+  }
+  .btn-transfer:hover { background: #e5e7eb; }
+
+  /* Transfer modal */
+  .modal-backdrop {
+    position: fixed;
+    inset: 0;
+    background: rgba(0,0,0,0.45);
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    z-index: 100;
+  }
+  .modal-box {
+    background: #fff;
+    border-radius: 10px;
+    padding: 24px;
+    width: 380px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.2);
+  }
+  .modal-box h3 { font-size: 16px; font-weight: 700; color: #111; }
+  .modal-field label {
+    display: block;
+    font-size: 12px;
+    color: #6b7280;
+    margin-bottom: 4px;
+  }
+  .modal-field select, .modal-field textarea {
+    width: 100%;
+    padding: 8px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    background: #fff;
+  }
+  .modal-field textarea { resize: none; height: 80px; }
+  .modal-actions { display: flex; gap: 8px; justify-content: flex-end; }
+  .btn-secondary {
+    padding: 7px 14px;
+    background: #f3f4f6;
+    color: #374151;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn-secondary:hover { background: #e5e7eb; }
+  .btn-primary {
+    padding: 7px 14px;
+    background: #4f46e5;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 13px;
+  }
+  .btn-primary:hover { background: #4338ca; }
+  .btn-primary:disabled { background: #a5b4fc; cursor: default; }
+
+  .bubble-meta {
+    font-size: 10px;
+    margin-top: 3px;
+    opacity: 0.6;
+  }
+  .msg-row.inbound .bubble-meta { text-align: left; }
+  .msg-row.outbound .bubble-meta { text-align: right; }
+
+  /* ── Composer ── */
+  #composer {
+    background: #fff;
+    border-top: 1px solid #e5e7eb;
+    padding: 10px 12px;
+    display: flex;
+    gap: 8px;
+    align-items: flex-end;
+    flex-shrink: 0;
+  }
+  #inp-msg {
+    flex: 1;
+    padding: 8px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 8px;
+    font-size: 13px;
+    resize: none;
+    height: 40px;
+    max-height: 120px;
+    font-family: inherit;
+  }
+  #btn-send {
+    padding: 8px 16px;
+    background: #4f46e5;
+    color: #fff;
+    border: none;
+    border-radius: 8px;
+    cursor: pointer;
+    font-size: 13px;
+    height: 40px;
+    flex-shrink: 0;
+  }
+  #btn-send:hover { background: #4338ca; }
+  #btn-send:disabled { background: #a5b4fc; cursor: default; }
+
+  #placeholder {
+    flex: 1;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: #9ca3af;
+    font-size: 13px;
+  }
+</style>
+</head>
+<body>
+
+<!-- Header -->
+<div id="header">
+  <label>Token</label>
+  <input id="inp-token" type="text" value="dev-token-demo-2026" placeholder="Bearer token">
+  <label>Property</label>
+  <input id="inp-property" type="number" value="1" min="0">
+  <button id="btn-connect">Conectar</button>
+  <div id="status-dot"></div>
+  <span id="status-text">Desconectado</span>
+  <span style="margin-left:12px;color:#aaa;font-size:12px">Idioma</span>
+  <select id="sel-lang" style="padding:5px 8px;border:none;border-radius:4px;font-size:13px;background:#2d2d44;color:#fff">
+    <option value="">Original</option>
+    <option value="es">Español</option>
+    <option value="en">English</option>
+    <option value="fr">Français</option>
+    <option value="zh">中文</option>
+    <option value="de">Deutsch</option>
+  </select>
+</div>
+
+<!-- Main -->
+<div id="main">
+
+  <!-- Left: conversation list -->
+  <div id="panel-left">
+    <div id="search-area">
+      <input id="inp-search" type="text" placeholder="Buscar por nombre o folio…">
+      <select id="sel-status">
+        <option value="">Todos los estados</option>
+        <option value="draft">Draft</option>
+        <option value="confirm">Confirm</option>
+        <option value="onboard">Onboard</option>
+        <option value="done">Done</option>
+        <option value="cancel">Cancel</option>
+      </select>
+    </div>
+    <div id="conv-list"></div>
+  </div>
+
+  <!-- Right: chat -->
+  <div id="panel-right">
+    <div id="placeholder">Selecciona una conversación</div>
+  </div>
+
+</div>
+
+<!-- Transfer modal -->
+<div id="transfer-modal" style="display:none">
+  <div class="modal-backdrop">
+    <div class="modal-box">
+      <h3>↪ Transferir conversación</h3>
+      <div class="modal-field">
+        <label>Hotel destino</label>
+        <select id="sel-transfer-prop"></select>
+      </div>
+      <div class="modal-field">
+        <label>Nota para el destino (requerida)</label>
+        <textarea id="inp-transfer-note" placeholder="Describe el motivo del traspaso…"></textarea>
+      </div>
+      <div class="modal-actions">
+        <button class="btn-secondary" onclick="closeTransferModal()">Cancelar</button>
+        <button class="btn-primary" id="btn-transfer-confirm" onclick="doTransfer()">Transferir</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<script>
+// ─────────────────────────────────────────────
+// State
+// ─────────────────────────────────────────────
+let token = ""
+let propertyId = 1
+let sio = null
+let conversations = []        // [{id, contact, last_message}]
+let activeConv = null         // {id, phone_code, name}
+let searchDebounce = null
+let selectedLang = ""         // BCP-47 or "" for original
+
+// ─────────────────────────────────────────────
+// DOM refs
+// ─────────────────────────────────────────────
+const btnConnect   = document.getElementById("btn-connect")
+const statusDot    = document.getElementById("status-dot")
+const statusText   = document.getElementById("status-text")
+const convList     = document.getElementById("conv-list")
+const panelRight   = document.getElementById("panel-right")
+const inpSearch    = document.getElementById("inp-search")
+const selStatus    = document.getElementById("sel-status")
+const selLang      = document.getElementById("sel-lang")
+
+// ─────────────────────────────────────────────
+// Connect / disconnect
+// ─────────────────────────────────────────────
+btnConnect.addEventListener("click", () => {
+  token = document.getElementById("inp-token").value.trim()
+  propertyId = parseInt(document.getElementById("inp-property").value, 10)
+  if (!token) return
+
+  if (sio) { sio.disconnect(); sio = null }
+
+  // Reset UI state for the new property
+  activeConv = null
+  conversations = []
+  convList.innerHTML = ""
+  panelRight.innerHTML = '<div id="placeholder">Selecciona una conversación</div>'
+  inpSearch.value = ""
+  selStatus.value = ""
+
+  sio = io(location.origin, {
+    auth: { token, property_id: propertyId },
+    transports: ["websocket"]
+  })
+
+  sio.on("connect", () => {
+    statusDot.className = "connected"
+    statusText.textContent = "Conectado"
+    btnConnect.textContent = "Reconectar"
+    loadInbox()
+  })
+
+  sio.on("connect_error", (err) => {
+    statusDot.className = ""
+    statusText.textContent = "Error: " + err.message
+  })
+
+  sio.on("disconnect", () => {
+    statusDot.className = ""
+    statusText.textContent = "Desconectado"
+  })
+
+  sio.on("conversation.created", (data) => {
+    upsertConversation(data)
+  })
+
+  sio.on("conversation.updated", (data) => {
+    upsertConversation(data)
+  })
+
+  sio.on("message.created", (data) => {
+    if (activeConv && data.conversation_id === activeConv.id) {
+      if (selectedLang) {
+        reloadMessages()
+      } else {
+        appendMessage(data, "")
+      }
+      markConversationRead(activeConv.id)
+    }
+  })
+})
+
+// ─────────────────────────────────────────────
+// API helpers
+// ─────────────────────────────────────────────
+async function apiFetch(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: {
+      "Authorization": "Bearer " + token,
+      "Content-Type": "application/json",
+      ...(opts.headers || {})
+    }
+  })
+  if (!res.ok) throw new Error(res.status + " " + res.statusText)
+  if (res.status === 204) return null
+  return res.json()
+}
+
+// ─────────────────────────────────────────────
+// Inbox
+// ─────────────────────────────────────────────
+async function loadInbox() {
+  const data = await apiFetch(`/api/v1/conversations/?property_id=${propertyId}`)
+  conversations = data.conversations || []
+  renderConvList()
+}
+
+async function runSearch() {
+  const q = inpSearch.value.trim()
+  const status = selStatus.value
+
+  if (!q && !status) {
+    return loadInbox()
+  }
+
+  let url = `/api/v1/conversations/search?property_id=${propertyId}`
+  if (q) url += `&q=${encodeURIComponent(q)}`
+  if (status) url += `&status=${status}`
+
+  const data = await apiFetch(url)
+  conversations = data.conversations || []
+  renderConvList()
+}
+
+function renderConvList() {
+  convList.innerHTML = ""
+  if (conversations.length === 0) {
+    convList.innerHTML = '<div style="padding:16px;color:#9ca3af;text-align:center">Sin resultados</div>'
+    return
+  }
+  conversations.forEach(conv => {
+    const el = buildConvItem(conv)
+    convList.appendChild(el)
+  })
+}
+
+function buildConvItem(conv) {
+  const el = document.createElement("div")
+  el.className = "conv-item" + (activeConv && activeConv.id === conv.id ? " active" : "")
+  el.dataset.id = conv.id
+
+  const name = conv.contact?.display_name || conv.contact?.phone_code || "—"
+  const preview = conv.last_message?.content || ""
+  const time = conv.last_message?.created_at ? relativeTime(conv.last_message.created_at) : ""
+  const unread = conv.unread_count || 0
+  const badge = unread > 0
+    ? `<span style="background:#ef4444;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;flex-shrink:0">${unread}</span>`
+    : ""
+
+  el.innerHTML = `
+    <div class="conv-meta">
+      <div class="conv-name">${esc(name)}</div>
+      <div style="display:flex;align-items:center;gap:5px">${badge}<span class="conv-time">${esc(time)}</span></div>
+    </div>
+    <div class="conv-preview">${esc(preview)}</div>
+  `
+  el.addEventListener("click", () => openConversation(conv))
+  return el
+}
+
+function upsertConversation(data) {
+  const idx = conversations.findIndex(c => c.id === data.id)
+  const prev = idx >= 0 ? conversations[idx] : null
+  // If this is the active conversation, don't bump unread count
+  const isActive = activeConv && activeConv.id === data.id
+  const updated = {
+    id: data.id,
+    created_at: data.created_at,
+    updated_at: data.updated_at,
+    contact: data.contact || (prev ? prev.contact : null),
+    last_message: data.last_message || (prev ? prev.last_message : null),
+    unread_count: isActive ? 0 : (data.unread_count ?? (prev ? prev.unread_count : 0))
+  }
+  if (idx >= 0) {
+    conversations.splice(idx, 1)
+  }
+  conversations.unshift(updated)
+  renderConvList()
+}
+
+// ─────────────────────────────────────────────
+// Conversation view
+// ─────────────────────────────────────────────
+async function openConversation(conv) {
+  // Leave previous chat room
+  if (activeConv && sio) {
+    sio.emit("leave_chat", { phone_code: activeConv.phone_code })
+  }
+
+  activeConv = {
+    id: conv.id,
+    phone_code: conv.contact?.phone_code,
+    name: conv.contact?.display_name || conv.contact?.phone_code || "—"
+  }
+
+  // Mark active in list
+  document.querySelectorAll(".conv-item").forEach(el => {
+    el.classList.toggle("active", parseInt(el.dataset.id) === conv.id)
+  })
+
+  // Build chat panel
+  panelRight.innerHTML = `
+    <div id="chat-header">
+      <div>
+        ${esc(activeConv.name)}
+        <small>+${esc(activeConv.phone_code || "")}</small>
+      </div>
+      <button class="btn-transfer" onclick="openTransferModal()">↪ Transferir</button>
+    </div>
+    <div id="messages"></div>
+    <div id="composer">
+      <textarea id="inp-msg" placeholder="Escribe un mensaje…" rows="1"></textarea>
+      <button id="btn-send">Enviar</button>
+    </div>
+  `
+
+  document.getElementById("btn-send").addEventListener("click", sendMessage)
+  document.getElementById("inp-msg").addEventListener("keydown", (e) => {
+    if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); sendMessage() }
+  })
+
+  // Join socket room
+  if (sio) sio.emit("join_chat", { phone_code: activeConv.phone_code })
+
+  // Mark as read
+  markConversationRead(conv.id)
+
+  // Load messages
+  const langParam = selectedLang ? `&language=${selectedLang}` : ""
+  const data = await apiFetch(`/api/v1/conversations/${conv.id}/messages?limit=100&property_id=${propertyId}${langParam}`)
+  const msgs = document.getElementById("messages")
+  if (msgs) {
+    ;(data.messages || []).forEach(m => appendMessage(m, selectedLang))
+    msgs.scrollTop = msgs.scrollHeight
+  }
+}
+
+function appendMessage(msg, requestedLang) {
+  const msgs = document.getElementById("messages")
+  if (!msgs) return
+
+  const row = document.createElement("div")
+  const isNote = msg.kind === "note"
+  const isOutbound = msg.direction === "outbound"
+  const isSystem = msg.sender === "system"
+  row.className = `msg-row ${isNote ? "note" : (isOutbound ? "outbound" : "inbound")} ${!isNote && isSystem ? "system" : ""}`
+
+  const senderLabel = isNote ? "📋 Nota interna"
+    : msg.sender === "agent"
+      ? (msg.agent_display_name ? `Agente · ${msg.agent_display_name}` : "Agente")
+      : msg.sender === "system" ? "Sistema"
+      : "Huésped"
+
+  const time = msg.created_at ? new Date(msg.created_at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }) : ""
+
+  // Translation state
+  const needsTranslation = requestedLang && !msg.is_translated && msg.content_language !== requestedLang
+  const contentHtml = needsTranslation
+    ? `<span style="opacity:0.5;font-style:italic">Idioma no disponible</span>`
+    : esc(msg.content || "")
+  const translatedBadge = msg.is_translated
+    ? `<span style="opacity:0.6;font-size:10px"> · 🌐 ${esc(msg.content_language)}</span>`
+    : ""
+
+  row.innerHTML = `
+    <div class="bubble">
+      ${contentHtml}
+      <div class="bubble-meta">${esc(senderLabel)} · ${esc(time)}${translatedBadge}</div>
+    </div>
+  `
+  msgs.appendChild(row)
+  msgs.scrollTop = msgs.scrollHeight
+}
+
+async function reloadMessages() {
+  const msgs = document.getElementById("messages")
+  if (!msgs || !activeConv) return
+  const langParam = selectedLang ? `&language=${selectedLang}` : ""
+  const data = await apiFetch(`/api/v1/conversations/${activeConv.id}/messages?limit=100&property_id=${propertyId}${langParam}`)
+  msgs.innerHTML = ""
+  ;(data.messages || []).forEach(m => appendMessage(m, selectedLang))
+  msgs.scrollTop = msgs.scrollHeight
+}
+
+async function sendMessage() {
+  const inp = document.getElementById("inp-msg")
+  if (!inp || !activeConv) return
+  const content = inp.value.trim()
+  if (!content) return
+
+  const btn = document.getElementById("btn-send")
+  btn.disabled = true
+
+  try {
+    await apiFetch("/api/v1/chatter/send-message", {
+      method: "POST",
+      body: JSON.stringify({
+        conversation_id: activeConv.id,
+        content,
+        agent_user_id: 1,
+        agent_display_name: "Dev User"
+      })
+    })
+    inp.value = ""
+  } catch (e) {
+    alert("Error al enviar: " + e.message)
+  } finally {
+    btn.disabled = false
+    inp.focus()
+  }
+}
+
+// ─────────────────────────────────────────────
+// Mark read
+// ─────────────────────────────────────────────
+function markConversationRead(convId) {
+  apiFetch(`/api/v1/conversations/${convId}/read?property_id=${propertyId}`, { method: "PATCH" })
+    .then(() => {
+      const idx = conversations.findIndex(c => c.id === convId)
+      if (idx >= 0 && conversations[idx].unread_count !== 0) {
+        conversations[idx].unread_count = 0
+        renderConvList()
+      }
+    })
+    .catch(() => {}) // fire-and-forget
+}
+
+// ─────────────────────────────────────────────
+// Language selector
+// ─────────────────────────────────────────────
+selLang.addEventListener("change", () => {
+  selectedLang = selLang.value
+  if (activeConv) openConversation({ id: activeConv.id, contact: { phone_code: activeConv.phone_code, display_name: activeConv.name } })
+})
+
+// ─────────────────────────────────────────────
+// Transfer
+// ─────────────────────────────────────────────
+async function openTransferModal() {
+  if (!activeConv) return
+  const modal = document.getElementById("transfer-modal")
+  const sel = document.getElementById("sel-transfer-prop")
+  sel.innerHTML = "<option disabled selected>Cargando…</option>"
+  document.getElementById("inp-transfer-note").value = ""
+  modal.style.display = ""
+  try {
+    const data = await apiFetch(`/api/v1/conversations/${activeConv.id}/transfer-targets`)
+    sel.innerHTML = ""
+    ;(data.properties || []).forEach(p => {
+      const opt = document.createElement("option")
+      opt.value = p.id
+      opt.textContent = p.name
+      sel.appendChild(opt)
+    })
+    if (!sel.options.length) {
+      sel.innerHTML = "<option disabled>No hay destinos disponibles</option>"
+    }
+  } catch(e) {
+    sel.innerHTML = "<option disabled>Error al cargar propiedades</option>"
+  }
+}
+
+function closeTransferModal() {
+  document.getElementById("transfer-modal").style.display = "none"
+}
+
+async function doTransfer() {
+  const propId = parseInt(document.getElementById("sel-transfer-prop").value)
+  const note = document.getElementById("inp-transfer-note").value.trim()
+  if (!propId || isNaN(propId)) { alert("Selecciona un hotel destino."); return }
+  if (!note) { alert("Escribe una nota para el destino."); return }
+  const btn = document.getElementById("btn-transfer-confirm")
+  btn.disabled = true
+  try {
+    await apiFetch(`/api/v1/conversations/${activeConv.id}/transfer`, {
+      method: "POST",
+      body: JSON.stringify({ destination_property_id: propId, note })
+    })
+    closeTransferModal()
+    await reloadMessages()
+  } catch(e) {
+    alert("Error al transferir: " + e.message)
+  } finally {
+    btn.disabled = false
+  }
+}
+
+// ─────────────────────────────────────────────
+// Search with debounce
+// ─────────────────────────────────────────────
+inpSearch.addEventListener("input", () => {
+  clearTimeout(searchDebounce)
+  searchDebounce = setTimeout(runSearch, 300)
+})
+selStatus.addEventListener("change", runSearch)
+
+// ─────────────────────────────────────────────
+// Utilities
+// ─────────────────────────────────────────────
+function esc(s) {
+  return String(s ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+}
+
+function relativeTime(iso) {
+  const diff = Date.now() - new Date(iso).getTime()
+  const m = Math.floor(diff / 60000)
+  if (m < 1) return "ahora"
+  if (m < 60) return `${m}m`
+  const h = Math.floor(m / 60)
+  if (h < 24) return `${h}h`
+  return `${Math.floor(h / 24)}d`
+}
+</script>
+</body>
+</html>

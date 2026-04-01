@@ -1,0 +1,155 @@
+import enum
+from datetime import datetime
+
+from sqlalchemy import BigInteger, DateTime, Enum, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
+from sqlalchemy.orm import Mapped, mapped_column, relationship
+
+from app.core.database import Base
+
+
+class MessageDirection(str, enum.Enum):
+    inbound = "inbound"
+    outbound = "outbound"
+
+
+class MessageSender(str, enum.Enum):
+    guest = "guest"      # inbound from the channel contact
+    agent = "agent"      # outbound from a hotel operator via the app
+    system = "system"    # outbound sent automatically by Bookai (e.g. a template)
+
+
+class MessageKind(str, enum.Enum):
+    message = "message"  # regular channel message
+    note = "note"        # internal note — never sent to the channel
+
+
+class DeliveryStatus(str, enum.Enum):
+    pending = "pending"
+    sent = "sent"
+    delivered = "delivered"
+    read = "read"
+    failed = "failed"
+    skipped = "skipped"  # delivery tracking not applicable (e.g. notes)
+
+
+class RoutingStatus(str, enum.Enum):
+    routed = "routed"          # assigned to exactly one active AttentionSession
+    unassigned = "unassigned"  # no active session found; sitting in central inbox
+    ambiguous = "ambiguous"    # multiple active sessions; treated as unassigned
+
+
+class Message(Base):
+    """
+    A single message in a Conversation.
+
+    Every message, regardless of direction or sender, is stored here.
+    This is the unified message log — no split between "template messages" and
+    "chat messages" as in the legacy system.
+
+    Key fields for traceability:
+    - kind: 'message' (regular channel message) or 'note' (internal, never sent to the channel).
+    - attention_session_id: which session was active when this message was processed.
+      Null for outbound messages sent before any session exists (edge case), or for
+      inbound messages that could not be routed.
+    - routing_status: only meaningful for inbound messages. Records the routing
+      decision at the time of processing (routed / unassigned / ambiguous).
+    - idempotency_key: for outbound template messages sent from Roomdoo. Guarantees
+      exactly-once processing even if Roomdoo retries the request.
+    - wa_message_id: Meta's message ID. Unique constraint prevents duplicate inbound
+      processing even if Meta delivers the same webhook twice.
+    """
+
+    __tablename__ = "messages"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    conversation_id: Mapped[int] = mapped_column(
+        ForeignKey("conversations.id"), nullable=False
+    )
+
+    # The channel through which this message was sent or received.
+    # Nullable for notes (internal annotations have no WA channel).
+    channel_endpoint_id: Mapped[int | None] = mapped_column(
+        ForeignKey("channel_endpoints.id"), nullable=True
+    )
+
+    # Which session was active when this message was processed.
+    # Null for unassigned inbound messages or for outbound before a session exists.
+    attention_session_id: Mapped[int | None] = mapped_column(
+        ForeignKey("attention_sessions.id"), nullable=True
+    )
+
+    kind: Mapped[MessageKind] = mapped_column(
+        Enum(MessageKind, name="message_kind"),
+        default=MessageKind.message,
+        nullable=False,
+    )
+
+    direction: Mapped[MessageDirection] = mapped_column(
+        Enum(MessageDirection, name="message_direction"), nullable=False
+    )
+    sender: Mapped[MessageSender] = mapped_column(
+        Enum(MessageSender, name="message_sender"), nullable=False
+    )
+
+    # Plain text content — always populated regardless of message type
+    content: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # BCP-47 language tag of the original content (e.g. "es", "zh", "en").
+    # Null means the language was not detected or declared at write time.
+    content_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # Operator identity — only when sender = 'agent'
+    agent_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    agent_display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Channel provider metadata
+    wa_message_id: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+    wa_message_type: Mapped[str] = mapped_column(
+        String(50), nullable=False, default="text"
+    )
+    read_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    # Template metadata — only for outbound template messages
+    template_code: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    template_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+    # Full structured payload including parameters and delivery tracking
+    template_payload: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Routing decision for inbound messages
+    routing_status: Mapped[RoutingStatus | None] = mapped_column(
+        Enum(RoutingStatus, name="routing_status"), nullable=True
+    )
+
+    # Deduplication for outbound templates sent from Roomdoo
+    idempotency_key: Mapped[str | None] = mapped_column(
+        String(255), unique=True, nullable=True
+    )
+
+    # Delivery tracking
+    delivery_status: Mapped[DeliveryStatus] = mapped_column(
+        Enum(DeliveryStatus, name="delivery_status"),
+        default=DeliveryStatus.pending,
+        nullable=False,
+    )
+    delivery_error: Mapped[str | None] = mapped_column(Text, nullable=True)
+    delivered_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True
+    )
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=func.now(), nullable=False
+    )
+
+    conversation: Mapped["Conversation"] = relationship(back_populates="messages")
+    channel_endpoint: Mapped["ChannelEndpoint | None"] = relationship()
+    attention_session: Mapped["AttentionSession | None"] = relationship(
+        back_populates="messages"
+    )
+    translations: Mapped[list["MessageTranslation"]] = relationship(
+        back_populates="message"
+    )
