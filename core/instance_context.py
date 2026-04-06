@@ -110,26 +110,71 @@ def _memory_aliases_for_chat(memory_manager: Any, chat_id: str) -> list[str]:
     return aliases
 
 
+def _iter_temporary_routing_entries() -> list[tuple[Any, str]]:
+    entries: list[tuple[Any, str]] = []
+    seen_properties: set[str] = set()
+
+    def _add(property_ref: Any, phone_id: Any) -> None:
+        normalized_property = _normalize_property_reference(property_ref)
+        normalized_phone = _normalize_whatsapp_phone_id(phone_id)
+        if normalized_property is None or not normalized_phone:
+            return
+        property_key = str(normalized_property).strip()
+        if not property_key or property_key in seen_properties:
+            return
+        seen_properties.add(property_key)
+        entries.append((normalized_property, normalized_phone))
+
+    raw_map = str(getattr(Settings, "WA_TEMPORARY_ROUTING_MAP", "") or "").strip()
+    if raw_map:
+        parsed: Any = None
+        if raw_map.startswith("{") or raw_map.startswith("["):
+            try:
+                parsed = json.loads(raw_map)
+            except Exception:
+                parsed = None
+        if isinstance(parsed, dict):
+            for property_ref, phone_id in parsed.items():
+                _add(property_ref, phone_id)
+        elif isinstance(parsed, list):
+            for item in parsed:
+                if not isinstance(item, dict):
+                    continue
+                _add(
+                    item.get("property_id") or item.get("property"),
+                    item.get("whatsapp_phone_id") or item.get("phone_id"),
+                )
+        else:
+            for chunk in raw_map.split(","):
+                pair = str(chunk or "").strip()
+                if not pair or "=" not in pair:
+                    continue
+                property_ref, phone_id = pair.split("=", 1)
+                _add(property_ref, phone_id)
+
+    # Compatibilidad con el formato inicial de un único par.
+    _add(Settings.WA_TEMPORARY_ROUTING_PROPERTY_ID, Settings.WA_TEMPORARY_ROUTING_PHONE_ID)
+    return entries
+
+
 def resolve_forced_property_for_whatsapp_phone_id(whatsapp_phone_id: Optional[str]) -> Any:
-    configured_phone_id = _normalize_whatsapp_phone_id(Settings.WA_TEMPORARY_ROUTING_PHONE_ID)
     candidate_phone_id = _normalize_whatsapp_phone_id(whatsapp_phone_id)
-    configured_property_id = _normalize_property_reference(Settings.WA_TEMPORARY_ROUTING_PROPERTY_ID)
-    if not configured_phone_id or configured_property_id is None or not candidate_phone_id:
+    if not candidate_phone_id:
         return None
-    if candidate_phone_id != configured_phone_id:
-        return None
-    return configured_property_id
+    for property_ref, phone_id in _iter_temporary_routing_entries():
+        if candidate_phone_id == phone_id:
+            return property_ref
+    return None
 
 
 def resolve_forced_whatsapp_phone_id_for_property(property_id: Any) -> Optional[str]:
-    configured_phone_id = _normalize_whatsapp_phone_id(Settings.WA_TEMPORARY_ROUTING_PHONE_ID)
-    configured_property_id = _normalize_property_reference(Settings.WA_TEMPORARY_ROUTING_PROPERTY_ID)
     candidate_property_id = _normalize_property_reference(property_id)
-    if not configured_phone_id or configured_property_id is None or candidate_property_id is None:
+    if candidate_property_id is None:
         return None
-    if str(candidate_property_id).strip() != str(configured_property_id).strip():
-        return None
-    return configured_phone_id
+    for property_ref, phone_id in _iter_temporary_routing_entries():
+        if str(candidate_property_id).strip() == str(property_ref).strip():
+            return phone_id
+    return None
 
 
 def resolve_known_whatsapp_phone_id(memory_manager: Any, chat_id: str) -> Optional[str]:

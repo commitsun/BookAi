@@ -42,7 +42,10 @@ class Settings:
     WHATSAPP_MONITOR_TARGET_NUMBERS = os.getenv("WHATSAPP_MONITOR_TARGET_NUMBERS", "34683527049")
     WHATSAPP_MONITOR_CHECKS = os.getenv("WHATSAPP_MONITOR_CHECKS", "ia")
     WHATSAPP_MONITOR_INSTANCE_ID = os.getenv("WHATSAPP_MONITOR_INSTANCE_ID", "")
-    # Parche temporal de routing WA. Se mantiene inactivo mientras falte alguno.
+    # Parche temporal de routing WA.
+    # Soporta mapa CSV/JSON: "57=889...,38=966..." o {"57":"889...","38":"966..."}.
+    WA_TEMPORARY_ROUTING_MAP = os.getenv("WA_TEMPORARY_ROUTING_MAP", "")
+    # Compatibilidad con el parche inicial de un solo par.
     WA_TEMPORARY_ROUTING_PHONE_ID = os.getenv(
         "WA_TEMPORARY_ROUTING_PHONE_ID",
         os.getenv("NUEVO_PHONE_ID", ""),

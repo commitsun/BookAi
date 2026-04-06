@@ -61,6 +61,7 @@ jobs:
           echo "WHATSAPP_TOKEN=${{ secrets.WHATSAPP_TOKEN }}" >> .env
           echo "WHATSAPP_VERIFY_TOKEN=${{ secrets.WHATSAPP_VERIFY_TOKEN }}" >> .env
           # Temporary WhatsApp routing patch
+          echo "WA_TEMPORARY_ROUTING_MAP=${{ secrets.WA_TEMPORARY_ROUTING_MAP }}" >> .env
           echo "WA_TEMPORARY_ROUTING_PHONE_ID=${{ secrets.WA_TEMPORARY_ROUTING_PHONE_ID }}" >> .env
           echo "WA_TEMPORARY_ROUTING_PROPERTY_ID=${{ secrets.WA_TEMPORARY_ROUTING_PROPERTY_ID }}" >> .env
 
