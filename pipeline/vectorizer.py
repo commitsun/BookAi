@@ -13,6 +13,7 @@ from PyPDF2 import PdfReader
 from docx import Document
 from supabase import create_client
 from pipeline.deadline_filter import filter_expired_sections, is_variable_doc
+from pipeline.supabase_utils import build_kb_table_name
 
 # =====================================
 # 🔧 Cargar configuración
@@ -273,7 +274,7 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
     - Revectoriza cada archivo (borra lo previo de ese archivo antes de insertar)
     - Elimina de Supabase los archivos que ya no están en S3
     """
-    table_name = f"kb_{os.path.basename(hotel_folder).lower()}"
+    table_name = build_kb_table_name(os.path.basename(hotel_folder))
     print(f"\n🚀 Iniciando vectorización para: {table_name}")
 
     prefix = f"{hotel_folder}/"
@@ -288,13 +289,17 @@ def vectorize_hotel_docs(hotel_folder: str, *, full_refresh: bool = False) -> No
     print(f"📂 Archivos detectados en S3 ({len(s3_files)}): {[f['file_name'] for f in s3_files]}")
 
     current_sources = {f["key"] for f in s3_files}
+    current_file_names = {f["file_name"] for f in s3_files}
     vectorized_sources = list_vectorized_sources(table_name)
 
     # 1) Limpiar embeddings de archivos que ya no existen en S3
-    missing_sources = vectorized_sources - current_sources
-    for source in sorted(missing_sources):
+    for source in sorted(vectorized_sources):
+        exists_in_s3 = source in current_sources or source in current_file_names
+        if exists_in_s3:
+            continue
         print(f"➖ {source} ya no existe en S3, se elimina de Supabase.")
-        delete_file_from_supabase(table_name, source)
+        legacy_source = source if "/" not in source else None
+        delete_file_from_supabase(table_name, source, legacy_source=legacy_source)
 
     # 2) Procesar nuevos o modificados
     for file_info in s3_files:

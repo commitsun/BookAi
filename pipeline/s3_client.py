@@ -1,7 +1,7 @@
 import os
 import boto3
 from typing import List
-from .supabase_utils import ensure_kb_table_exists
+from .supabase_utils import build_kb_table_name, ensure_kb_table_exists
 
 # ===============================
 # 🔧 Configuración básica
@@ -71,12 +71,25 @@ def init_hotels_in_supabase():
         print("⚠️ No hay carpetas que procesar.")
         return
 
+    ready_tables = []
+    failed_tables = []
+
     for hotel_folder in hotels:
         hotel_id = os.path.basename(hotel_folder)
         print(f"\n🔍 Procesando hotel: {hotel_id}")
-        ensure_kb_table_exists(hotel_id)
+        table_name = build_kb_table_name(hotel_id)
+        if ensure_kb_table_exists(hotel_id):
+            ready_tables.append((hotel_id, table_name))
+        else:
+            failed_tables.append((hotel_id, table_name))
 
     print("\n✅ Tablas KB verificadas correctamente.")
+    if failed_tables:
+        print(
+            "⚠️ Hoteles sin estructura KB lista: "
+            + ", ".join(f"{hotel_id} ({table_name})" for hotel_id, table_name in failed_tables)
+        )
+    return ready_tables, failed_tables
 
 
 # ===============================

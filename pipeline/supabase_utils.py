@@ -17,6 +17,11 @@ if not SUPABASE_URL or not SUPABASE_KEY:
 supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
 
 
+def build_kb_table_name(hotel_id: str) -> str:
+    """Construye el nombre de tabla KB a partir del identificador del hotel."""
+    return f"kb_{hotel_id.lower().replace(' ', '_')}"
+
+
 # ===============================================================
 # 🧩 Verificar extensión pgvector
 # ===============================================================
@@ -40,7 +45,7 @@ def ensure_kb_table_exists(hotel_id: str):
     Crea la tabla específica del hotel (p.ej. kb_alda_ponferrada)
     y la función de búsqueda vectorial asociada.
     """
-    table_name = f"kb_{hotel_id.lower().replace(' ', '_')}"
+    table_name = build_kb_table_name(hotel_id)
     function_name = f"match_documents_{hotel_id.lower().replace(' ', '_')}"
     print(f"🧱 Verificando tabla: {table_name}")
 
@@ -144,8 +149,13 @@ def ensure_kb_table_exists(hotel_id: str):
         print(f"✅ Tabla y función configuradas para {table_name}.")
         print(f"🔎 Función de búsqueda: public.{function_name}(filter, match_count, query_embedding)")
         print("🔎 Función global: public.match_documents_by_table(target_table, filter, match_count, query_embedding)")
+        return True
     except Exception as e:
         print(f"⚠️ Error creando estructura {table_name}: {e}")
+        if "permission denied for schema public" in str(e).lower():
+            print("   👉 La credencial actual puede leer/escribir datos, pero no crear tablas/funciones en schema public.")
+            print("   👉 Crea la tabla/funciones desde SQL Editor o ajusta la RPC exec_sql para ejecutarse con privilegios suficientes.")
+        return False
 
 
 # ===============================================================
