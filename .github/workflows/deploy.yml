@@ -60,6 +60,9 @@ jobs:
           echo "WHATSAPP_PHONE_ID=${{ secrets.WHATSAPP_PHONE_ID }}" >> .env
           echo "WHATSAPP_TOKEN=${{ secrets.WHATSAPP_TOKEN }}" >> .env
           echo "WHATSAPP_VERIFY_TOKEN=${{ secrets.WHATSAPP_VERIFY_TOKEN }}" >> .env
+          # Temporary WhatsApp routing patch
+          echo "WA_TEMPORARY_ROUTING_PHONE_ID=${{ secrets.WA_TEMPORARY_ROUTING_PHONE_ID }}" >> .env
+          echo "WA_TEMPORARY_ROUTING_PROPERTY_ID=${{ secrets.WA_TEMPORARY_ROUTING_PROPERTY_ID }}" >> .env
 
           # Telegram
           echo "TELEGRAM_BOT_TOKEN=${{ secrets.TELEGRAM_BOT_TOKEN }}" >> .env
