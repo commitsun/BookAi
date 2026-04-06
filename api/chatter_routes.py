@@ -2140,7 +2140,14 @@ def register_chatter_routes(app, state) -> None:
         instance_whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
-                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_payload = resolve_instance_payload_for_routing(
+                    getattr(state, "memory_manager", None),
+                    "",
+                    instance_id=instance_id,
+                    property_id=property_id,
+                ) or {}
+                if not instance_payload:
+                    instance_payload = fetch_instance_by_code(instance_id) or {}
                 instance_number = _resolve_instance_number(instance_payload)
                 instance_whatsapp_phone_number = _to_international_phone(instance_number or "")
             except Exception:
@@ -2159,9 +2166,9 @@ def register_chatter_routes(app, state) -> None:
                 .select("conversation_id, original_chat_id, property_id, content, created_at, client_name, channel")
                 .eq("channel", channel)
             )
-            # En multi-instancia, algunos mensajes nuevos pueden no traer property_id aún.
-            # Mantenemos aislamiento por instancia y dejamos pasar esos chats.
-            if property_id is not None and not instance_id:
+            # chat_last_message debe ser property-aware para evitar mezclar
+            # resúmenes de properties distintas que comparten conversation_id.
+            if property_id is not None:
                 query = query.eq("property_id", property_id)
             if search_filters:
                 query = query.or_(",".join(search_filters))
@@ -2188,7 +2195,7 @@ def register_chatter_routes(app, state) -> None:
                         .eq("channel", channel)
                         .or_("archived_at.not.is.null,hidden_at.not.is.null")
                     )
-                    if property_id is not None and not instance_id:
+                    if property_id is not None:
                         hidden_query = hidden_query.eq("property_id", property_id)
                     hidden_rows = hidden_query.order("created_at", desc=True).limit(5000).execute().data or []
                     for hidden_row in hidden_rows:
@@ -2208,7 +2215,7 @@ def register_chatter_routes(app, state) -> None:
                 clean_cid = _clean_chat_id(cid)
                 original_chat_id = str(row.get("original_chat_id") or "").strip()
                 prop_id = _normalize_property_id(row.get("property_id"))
-                if property_id is not None and not instance_id and prop_id is None:
+                if property_id is not None and prop_id is None:
                     continue
                 if instance_id and allowed_chat_ids is not None and allowed_original_chat_ids is not None:
                     in_chat_set = bool(clean_cid and clean_cid in allowed_chat_ids)
@@ -2288,7 +2295,7 @@ def register_chatter_routes(app, state) -> None:
                         .in_("role", ["guest"])
                     )
                     resp_names_rows: List[Dict[str, Any]] = []
-                    if property_id is not None and not instance_id:
+                    if property_id is not None:
                         resp_with_property = (
                             base_query
                             .eq("property_id", property_id)
@@ -2360,7 +2367,7 @@ def register_chatter_routes(app, state) -> None:
                         .like("content", "[TEMPLATE_SENT]%")
                     )
                     resp_template_rows: List[Dict[str, Any]] = []
-                    if property_id is not None and not instance_id:
+                    if property_id is not None:
                         resp_with_property = (
                             template_query
                             .eq("property_id", property_id)
@@ -2592,7 +2599,14 @@ def register_chatter_routes(app, state) -> None:
         whatsapp_phone_number: Optional[str] = None
         if instance_id:
             try:
-                instance_payload = fetch_instance_by_code(instance_id) or {}
+                instance_payload = resolve_instance_payload_for_routing(
+                    getattr(state, "memory_manager", None),
+                    clean_id,
+                    instance_id=instance_id,
+                    property_id=property_id,
+                ) or {}
+                if not instance_payload:
+                    instance_payload = fetch_instance_by_code(instance_id) or {}
                 instance_number = _resolve_instance_number(instance_payload)
                 whatsapp_phone_number = _to_international_phone(instance_number or "")
             except Exception:
