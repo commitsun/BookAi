@@ -842,16 +842,23 @@ def _filter_pending_by_instance(
             guest_chat_id = str((esc or {}).get("guest_chat_id") or "").strip()
             if not guest_chat_id:
                 continue
+            guest_tail = _clean_chat_id(guest_chat_id.split(":", 1)[-1] if ":" in guest_chat_id else guest_chat_id)
             if ":" not in guest_chat_id:
                 # Compatibilidad: escalaciones legacy pueden venir sin prefijo de instancia.
                 # Si el chat está dentro del conjunto permitido de la instancia, se conserva.
-                guest_clean = _clean_chat_id(guest_chat_id)
-                if allowed_chat_ids and guest_clean and guest_clean in allowed_chat_ids:
+                if allowed_chat_ids and guest_tail and guest_tail in allowed_chat_ids:
                     kept.append(esc)
                 continue
             head = guest_chat_id.split(":", 1)[0].strip()
             head_clean = _clean_chat_id(head)
-            if head in prefixes or (head_clean and head_clean in prefixes):
+            # Multi-sender temporal: una escalación puede venir con un prefijo WA válido
+            # para la misma instance/property aunque fetch_instance_by_code() solo devuelva
+            # una de las filas de instances. Si el chat limpio ya está permitido, no se filtra.
+            if (
+                head in prefixes
+                or (head_clean and head_clean in prefixes)
+                or (allowed_chat_ids and guest_tail and guest_tail in allowed_chat_ids)
+            ):
                 kept.append(esc)
         if kept:
             filtered[key] = kept
