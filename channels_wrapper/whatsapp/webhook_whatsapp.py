@@ -224,7 +224,12 @@ def register_whatsapp_routes(app, state):
             instance_token = None
             if sender and instance_number:
                 try:
-                    from core.instance_context import hydrate_dynamic_context, fetch_instance_by_phone_id, _resolve_property_table
+                    from core.instance_context import (
+                        _resolve_property_table,
+                        apply_temporary_whatsapp_routing,
+                        fetch_instance_by_phone_id,
+                        hydrate_dynamic_context,
+                    )
 
                     # Guarda identificadores  crudos para fallback posterior.
                     if state.memory_manager:
@@ -261,6 +266,13 @@ def register_whatsapp_routes(app, state):
                                         mm.set_flag(memory_id, key, val)
                     instance_phone_id = state.memory_manager.get_flag(memory_id, "whatsapp_phone_id")
                     instance_token = state.memory_manager.get_flag(memory_id, "whatsapp_token")
+                    if instance_phone_id:
+                        apply_temporary_whatsapp_routing(
+                            state.memory_manager,
+                            memory_id,
+                            instance_phone_id,
+                            aliases=[sender],
+                        )
                     if instance_phone_id:
                         state.memory_manager.set_flag(sender, "whatsapp_phone_id", instance_phone_id)
                     if instance_token:

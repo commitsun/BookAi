@@ -78,6 +78,19 @@ class MemoryManager:
             return self._normalize_phone(tail)
         return self._normalize_phone(str(conversation_id))
 
+    def _resolve_original_chat_id(self, conversation_id: str) -> Optional[str]:
+        raw = str(conversation_id or "").replace("+", "").strip()
+        if ":" in raw:
+            return raw
+        for candidate in self._chat_room_aliases(raw):
+            try:
+                last_mem = self.get_flag(candidate, "last_memory_id")
+            except Exception:
+                last_mem = None
+            if isinstance(last_mem, str) and ":" in last_mem:
+                return str(last_mem).replace("+", "").strip()
+        return None
+
     def _resolve_property_id(self, conversation_id: str):
         prop_id = self.get_flag(conversation_id, "property_id") or self.get_flag(
             conversation_id,
@@ -271,12 +284,14 @@ class MemoryManager:
             db_conversation_id = self._resolve_db_conversation_id(conversation_id)
             property_id = self._resolve_property_id(conversation_id)
             history_table = self._resolve_history_table(conversation_id)
+            original_chat_id = self._resolve_original_chat_id(conversation_id)
             db_msgs = (
                 get_conversation_history(
                     db_conversation_id,
                     limit=limit,
                     since=since,
                     property_id=property_id,
+                    original_chat_id=original_chat_id,
                     table=history_table,
                 )
                 or []
@@ -289,6 +304,7 @@ class MemoryManager:
                         limit=limit,
                         since=since,
                         property_id=None,
+                        original_chat_id=original_chat_id,
                         table=history_table,
                     )
                     or []

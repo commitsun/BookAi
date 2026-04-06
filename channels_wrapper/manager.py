@@ -171,8 +171,14 @@ class ChannelManager:
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
+                    from core.instance_context import ensure_instance_credentials
+
                     lookup_id = context_id or chat_id
-                    phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    ensure_instance_credentials(self.memory_manager, lookup_id)
+                    phone_id = (
+                        self.memory_manager.get_flag(lookup_id, "wa_sender_phone_id")
+                        or self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    )
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
                     instance_id = (
                         self.memory_manager.get_flag(lookup_id, "instance_id")
@@ -279,8 +285,14 @@ class ChannelManager:
 
             if channel == "whatsapp" and self.memory_manager:
                 try:
+                    from core.instance_context import ensure_instance_credentials
+
                     lookup_id = context_id or chat_id
-                    phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    ensure_instance_credentials(self.memory_manager, lookup_id)
+                    phone_id = (
+                        self.memory_manager.get_flag(lookup_id, "wa_sender_phone_id")
+                        or self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    )
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
                     instance_id = (
                         self.memory_manager.get_flag(lookup_id, "instance_id")
@@ -406,8 +418,14 @@ class ChannelManager:
 
             if self.memory_manager:
                 try:
+                    from core.instance_context import ensure_instance_credentials
+
                     lookup_id = context_id or chat_id
-                    phone_id = self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    ensure_instance_credentials(self.memory_manager, lookup_id)
+                    phone_id = (
+                        self.memory_manager.get_flag(lookup_id, "wa_sender_phone_id")
+                        or self.memory_manager.get_flag(lookup_id, "whatsapp_phone_id")
+                    )
                     token = self.memory_manager.get_flag(lookup_id, "whatsapp_token")
                     if phone_id and token:
                         setattr(channel_obj, "_dynamic_whatsapp_phone_id", phone_id)

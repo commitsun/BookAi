@@ -864,7 +864,31 @@ async def confirmar_y_enviar(escalation_id: str, confirmed: bool, adjustments: s
 
             ChannelManager = importlib.import_module("channels_wrapper.manager").ChannelManager
             cm = ChannelManager(memory_manager=_MEMORY_MANAGER)
-            await cm.send_message(esc.guest_chat_id, final_text_out, channel="whatsapp")
+            guest_target = _chat_room_id(esc.guest_chat_id) or esc.guest_chat_id
+            context_id = None
+            if _MEMORY_MANAGER:
+                try:
+                    raw_guest = str(esc.guest_chat_id or "").strip()
+                    if ":" in raw_guest:
+                        context_id = raw_guest
+                    if not context_id:
+                        for candidate in (raw_guest, guest_target):
+                            if not candidate:
+                                continue
+                            last_mem = _MEMORY_MANAGER.get_flag(candidate, "last_memory_id")
+                            if isinstance(last_mem, str) and ":" in last_mem:
+                                context_id = last_mem.strip()
+                                break
+                    if context_id:
+                        _MEMORY_MANAGER.set_flag(guest_target, "last_memory_id", context_id)
+                except Exception:
+                    context_id = None
+            await cm.send_message(
+                guest_target,
+                final_text_out,
+                channel="whatsapp",
+                context_id=context_id,
+            )
 
             # Guarda el mensaje real que vio el huésped en la memoria compartida.
             try:

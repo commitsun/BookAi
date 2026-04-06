@@ -23,7 +23,7 @@ from core.instance_context import (
     fetch_property_by_name,
     fetch_properties_by_code,
     fetch_properties_by_query,
-    fetch_instance_by_code,
+    resolve_instance_payload_for_routing,
 )
 
 log = logging.getLogger("PropertyContextTool")
@@ -354,11 +354,24 @@ class PropertyContextTool:
             # Intentar fijar credenciales de instancia si existen
             try:
                 instance_key = resolved_instance_id or resolved_property_name
-                inst_payload = fetch_instance_by_code(str(instance_key)) if instance_key else None
+                inst_payload = (
+                    resolve_instance_payload_for_routing(
+                        self.memory_manager,
+                        self.chat_id,
+                        instance_id=str(instance_key),
+                        property_id=resolved_property_id,
+                    )
+                    if instance_key
+                    else None
+                )
                 for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
                     val = inst_payload.get(key) if inst_payload else None
                     if val:
                         self.memory_manager.set_flag(self.chat_id, key, val)
+                phone_id = str((inst_payload or {}).get("whatsapp_phone_id") or "").strip()
+                if phone_id:
+                    self.memory_manager.set_flag(self.chat_id, "wa_sender_phone_id", phone_id)
+                    self.memory_manager.set_flag(self.chat_id, "wa_sender_locked", True)
             except Exception:
                 log.debug("No se pudieron fijar credenciales de instancia", exc_info=True)
 

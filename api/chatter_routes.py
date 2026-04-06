@@ -27,7 +27,11 @@ from core.escalation_db import (
     resolve_pending_escalations_for_chat,
 )
 from core.template_registry import TemplateRegistry, TemplateDefinition
-from core.instance_context import ensure_instance_credentials, fetch_instance_by_code
+from core.instance_context import (
+    ensure_instance_credentials,
+    fetch_instance_by_code,
+    resolve_instance_payload_for_routing,
+)
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.language_manager import language_manager
 from core.template_structured import (
@@ -1570,13 +1574,23 @@ def _resolve_instance_number(instance_payload: Dict[str, Any]) -> Optional[str]:
     return None
 
 
-def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[str] = None) -> Optional[str]:
+def _build_context_id_from_instance(
+    state,
+    chat_id: str,
+    instance_id: Optional[str] = None,
+    property_id: Optional[str | int] = None,
+) -> Optional[str]:
     memory_manager = getattr(state, "memory_manager", None)
     clean = _clean_chat_id(chat_id) or str(chat_id).strip()
     if not memory_manager or not clean or not instance_id:
         return None
     try:
-        instance_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+        instance_payload = resolve_instance_payload_for_routing(
+            memory_manager,
+            clean,
+            instance_id=str(instance_id).strip(),
+            property_id=property_id,
+        ) or {}
     except Exception:
         instance_payload = {}
     instance_number = _resolve_instance_number(instance_payload)
@@ -1593,10 +1607,16 @@ def _build_context_id_from_instance(state, chat_id: str, instance_id: Optional[s
         memory_manager.set_flag(target, "instance_number", instance_number)
         memory_manager.set_flag(target, "instance_id", str(instance_id).strip())
         memory_manager.set_flag(target, "instance_hotel_code", str(instance_id).strip())
+        if property_id is not None:
+            memory_manager.set_flag(target, "property_id", property_id)
         for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
             val = instance_payload.get(key)
             if val:
                 memory_manager.set_flag(target, key, val)
+        phone_id = str(instance_payload.get("whatsapp_phone_id") or "").strip()
+        if phone_id:
+            memory_manager.set_flag(target, "wa_sender_phone_id", phone_id)
+            memory_manager.set_flag(target, "wa_sender_locked", True)
 
     return context_id
 
@@ -1605,6 +1625,7 @@ def _resolve_whatsapp_context_id(
     state,
     chat_id: str,
     instance_id: Optional[str] = None,
+    property_id: Optional[str | int] = None,
 ) -> Optional[str]:
     """Resuelve el context_id (ej. instancia:telefono) para enrutar WhatsApp."""
     if not state or not chat_id:
@@ -1616,6 +1637,13 @@ def _resolve_whatsapp_context_id(
     def _matches_instance(mem_id: str) -> bool:
         if not mem_id:
             return False
+        if property_id is not None:
+            try:
+                mem_property = memory_manager.get_flag(mem_id, "property_id") if memory_manager else None
+            except Exception:
+                mem_property = None
+            if mem_property is None or str(mem_property).strip() != str(property_id).strip():
+                return False
         if not instance_id:
             return True
         if not memory_manager:
@@ -1631,7 +1659,12 @@ def _resolve_whatsapp_context_id(
             return True
         if ":" in str(mem_id):
             prefix = str(mem_id).split(":", 1)[0].strip()
-            built = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+            built = _build_context_id_from_instance(
+                state,
+                chat_id,
+                instance_id=instance_id,
+                property_id=property_id,
+            )
             if built and prefix == str(built).split(":", 1)[0].strip():
                 return True
         return False
@@ -1651,7 +1684,12 @@ def _resolve_whatsapp_context_id(
                 memory_manager.set_flag(clean, "last_memory_id", mem_id.strip())
             return mem_id.strip()
 
-    return _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+    return _build_context_id_from_instance(
+        state,
+        chat_id,
+        instance_id=instance_id,
+        property_id=property_id,
+    )
 
 
 def _normalize_language_confidence(value: Any, default: float = 0.0) -> float:
@@ -2766,11 +2804,20 @@ def register_chatter_routes(app, state) -> None:
                 except Exception:
                     pass
                 try:
-                    instance_payload = fetch_instance_by_code(token_instance_id) or {}
+                    instance_payload = resolve_instance_payload_for_routing(
+                        state.memory_manager,
+                        chat_id,
+                        instance_id=token_instance_id,
+                        property_id=property_id,
+                    ) or {}
                     for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
                         val = instance_payload.get(key)
                         if val:
                             state.memory_manager.set_flag(chat_id, key, val)
+                    phone_id = str(instance_payload.get("whatsapp_phone_id") or "").strip()
+                    if phone_id:
+                        state.memory_manager.set_flag(chat_id, "wa_sender_phone_id", phone_id)
+                        state.memory_manager.set_flag(chat_id, "wa_sender_locked", True)
                 except Exception as exc:
                     log.warning("No se pudieron precargar credenciales WA para instance_id=%s: %s", token_instance_id, exc)
         if not instance_id:
@@ -2780,9 +2827,19 @@ def register_chatter_routes(app, state) -> None:
             )
 
         if token_instance_id:
-            context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+            context_id = _build_context_id_from_instance(
+                state,
+                chat_id,
+                instance_id=instance_id,
+                property_id=property_id,
+            )
         else:
-            context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+            context_id = _resolve_whatsapp_context_id(
+                state,
+                chat_id,
+                instance_id=instance_id,
+                property_id=property_id,
+            )
         if not context_id:
             raise HTTPException(
                 status_code=422,
@@ -2825,7 +2882,12 @@ def register_chatter_routes(app, state) -> None:
             # compuesto correcto para no degradar el envío al chat_id plano.
             target_context_id = context_id
             if instance_id:
-                rebuilt_context_id = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+                rebuilt_context_id = _build_context_id_from_instance(
+                    state,
+                    chat_id,
+                    instance_id=instance_id,
+                    property_id=property_id,
+                )
                 if rebuilt_context_id:
                     target_context_id = rebuilt_context_id
 
@@ -2858,7 +2920,12 @@ def register_chatter_routes(app, state) -> None:
 
         if token_instance_id and state.memory_manager:
             try:
-                enforced_payload = fetch_instance_by_code(token_instance_id) or {}
+                enforced_payload = resolve_instance_payload_for_routing(
+                    state.memory_manager,
+                    session_id,
+                    instance_id=token_instance_id,
+                    property_id=property_id,
+                ) or {}
                 for mem_id in [chat_id, context_id, session_id]:
                     if not mem_id:
                         continue
@@ -2868,6 +2935,10 @@ def register_chatter_routes(app, state) -> None:
                         val = enforced_payload.get(key)
                         if val:
                             state.memory_manager.set_flag(mem_id, key, val)
+                    phone_id = str(enforced_payload.get("whatsapp_phone_id") or "").strip()
+                    if phone_id:
+                        state.memory_manager.set_flag(mem_id, "wa_sender_phone_id", phone_id)
+                        state.memory_manager.set_flag(mem_id, "wa_sender_locked", True)
             except Exception as exc:
                 log.warning("No se pudieron imponer credenciales WA finales para instance_id=%s: %s", token_instance_id, exc)
 
@@ -2968,7 +3039,12 @@ def register_chatter_routes(app, state) -> None:
                     pass
             if not resolved_original_chat_id and instance_id:
                 try:
-                    built_ctx = _build_context_id_from_instance(state, chat_id, instance_id=instance_id)
+                    built_ctx = _build_context_id_from_instance(
+                        state,
+                        chat_id,
+                        instance_id=instance_id,
+                        property_id=property_id,
+                    )
                     if isinstance(built_ctx, str) and ":" in built_ctx:
                         resolved_original_chat_id = built_ctx.strip()
                 except Exception:
@@ -4590,7 +4666,12 @@ def register_chatter_routes(app, state) -> None:
             else:
                 parameters = list(raw_params)
 
-        context_id = _resolve_whatsapp_context_id(state, chat_id, instance_id=instance_id)
+        context_id = _resolve_whatsapp_context_id(
+            state,
+            chat_id,
+            instance_id=instance_id,
+            property_id=property_id,
+        )
         session_id = context_id or chat_id
         chat_visible_before = False
         structured_payload = None

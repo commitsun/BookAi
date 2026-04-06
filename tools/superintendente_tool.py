@@ -17,11 +17,12 @@ from core.db import get_conversation_history, get_active_chat_reservation
 from core.db import supabase
 from core.mcp_client import get_tools
 from core.instance_context import (
+    DEFAULT_PROPERTY_TABLE,
     fetch_instance_by_code,
     fetch_property_by_code,
     fetch_property_by_id,
     fetch_property_by_name,
-    DEFAULT_PROPERTY_TABLE,
+    resolve_instance_payload_for_routing,
 )
 from core.config import Settings, ModelConfig, ModelTier
 from core.utils.time_context import DEFAULT_TZ
@@ -555,7 +556,12 @@ def _set_instance_context(
 
     if resolved_instance_id:
         log.info("🏨 [WA_CTX] fetch instance by instance_id=%s", resolved_instance_id)
-        inst_payload = fetch_instance_by_code(str(resolved_instance_id))
+        inst_payload = resolve_instance_payload_for_routing(
+            memory_manager,
+            chat_id,
+            instance_id=str(resolved_instance_id),
+            property_id=resolved_property_id,
+        )
         if not inst_payload:
             log.info("🏨 [WA_CTX] no instance for instance_id=%s", resolved_instance_id)
         else:
@@ -564,6 +570,10 @@ def _set_instance_context(
                 if val:
                     memory_manager.set_flag(chat_id, key, val)
                     log.info("🏨 [WA_CTX] set %s=%s", key, "set" if key != "whatsapp_phone_id" else val)
+            phone_id = str(inst_payload.get("whatsapp_phone_id") or "").strip()
+            if phone_id:
+                memory_manager.set_flag(chat_id, "wa_sender_phone_id", phone_id)
+                memory_manager.set_flag(chat_id, "wa_sender_locked", True)
 
     if resolved_property_id is not None:
         memory_manager.set_flag(chat_id, "wa_context_property_id", resolved_property_id)

@@ -12,6 +12,7 @@ from typing import Any, Dict, Optional
 
 import requests
 from core.async_bridge import run_coro_sync
+from core.config import Settings
 
 try:
     from core.db import supabase
@@ -38,12 +39,216 @@ def _normalize_phone_number(value: Optional[str]) -> str:
     return re.sub(r"\D", "", value or "").strip()
 
 
+def _normalize_whatsapp_phone_id(value: Optional[str]) -> str:
+    return re.sub(r"\D", "", str(value or "")).strip()
+
+
 def _normalize_kb_name(value: Optional[str]) -> Optional[str]:
     if not value:
         return None
     cleaned = str(value).strip()
     cleaned = cleaned.replace("ponferrrada", "ponferrada")
     return cleaned or None
+
+
+def _normalize_property_reference(value: Any) -> Any:
+    raw = str(value or "").strip()
+    if not raw:
+        return None
+    if raw.isdigit():
+        try:
+            return int(raw)
+        except Exception:
+            return raw
+    return raw
+
+
+def _resolve_instance_display_number(instance_payload: Dict[str, Any]) -> Optional[str]:
+    if not isinstance(instance_payload, dict):
+        return None
+    for key in ("display_phone_number", "whatsapp_number", "phone_number", "phone"):
+        normalized = _normalize_phone_number(str(instance_payload.get(key) or ""))
+        if normalized:
+            return normalized
+    return None
+
+
+def _memory_aliases_for_chat(memory_manager: Any, chat_id: str) -> list[str]:
+    aliases: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        raw = str(value or "").strip()
+        if not raw or raw in seen:
+            return
+        seen.add(raw)
+        aliases.append(raw)
+
+    raw_chat_id = str(chat_id or "").strip()
+    _add(raw_chat_id)
+    clean_chat_id = _normalize_phone_number(raw_chat_id)
+    _add(clean_chat_id)
+    if ":" in raw_chat_id:
+        tail = raw_chat_id.split(":")[-1].strip()
+        _add(tail)
+        _add(_normalize_phone_number(tail))
+
+    for current in list(aliases):
+        if not memory_manager:
+            break
+        try:
+            last_mem = memory_manager.get_flag(current, "last_memory_id")
+        except Exception:
+            last_mem = None
+        if isinstance(last_mem, str) and last_mem.strip():
+            _add(last_mem.strip())
+            if ":" in last_mem:
+                tail = last_mem.split(":")[-1].strip()
+                _add(tail)
+                _add(_normalize_phone_number(tail))
+
+    return aliases
+
+
+def resolve_forced_property_for_whatsapp_phone_id(whatsapp_phone_id: Optional[str]) -> Any:
+    configured_phone_id = _normalize_whatsapp_phone_id(Settings.WA_TEMPORARY_ROUTING_PHONE_ID)
+    candidate_phone_id = _normalize_whatsapp_phone_id(whatsapp_phone_id)
+    configured_property_id = _normalize_property_reference(Settings.WA_TEMPORARY_ROUTING_PROPERTY_ID)
+    if not configured_phone_id or configured_property_id is None or not candidate_phone_id:
+        return None
+    if candidate_phone_id != configured_phone_id:
+        return None
+    return configured_property_id
+
+
+def resolve_forced_whatsapp_phone_id_for_property(property_id: Any) -> Optional[str]:
+    configured_phone_id = _normalize_whatsapp_phone_id(Settings.WA_TEMPORARY_ROUTING_PHONE_ID)
+    configured_property_id = _normalize_property_reference(Settings.WA_TEMPORARY_ROUTING_PROPERTY_ID)
+    candidate_property_id = _normalize_property_reference(property_id)
+    if not configured_phone_id or configured_property_id is None or candidate_property_id is None:
+        return None
+    if str(candidate_property_id).strip() != str(configured_property_id).strip():
+        return None
+    return configured_phone_id
+
+
+def resolve_known_whatsapp_phone_id(memory_manager: Any, chat_id: str) -> Optional[str]:
+    if not memory_manager or not chat_id:
+        return None
+    candidates: list[str] = []
+    seen: set[str] = set()
+
+    def _add(value: Any) -> None:
+        raw = str(value or "").strip()
+        if not raw or raw in seen:
+            return
+        seen.add(raw)
+        candidates.append(raw)
+
+    raw_chat_id = str(chat_id or "").strip()
+    for seed in (raw_chat_id, _normalize_phone_number(raw_chat_id)):
+        if not seed:
+            continue
+        try:
+            last_mem = memory_manager.get_flag(seed, "last_memory_id")
+        except Exception:
+            last_mem = None
+        if isinstance(last_mem, str) and last_mem.strip():
+            _add(last_mem.strip())
+
+    for candidate in _memory_aliases_for_chat(memory_manager, chat_id):
+        _add(candidate)
+
+    for candidate in candidates:
+        for key in ("wa_sender_phone_id", "whatsapp_phone_id"):
+            try:
+                value = _normalize_whatsapp_phone_id(memory_manager.get_flag(candidate, key))
+            except Exception:
+                value = ""
+            if value:
+                return value
+    return None
+
+
+def resolve_instance_payload_for_routing(
+    memory_manager: Any,
+    chat_id: str,
+    *,
+    instance_id: Optional[str] = None,
+    whatsapp_phone_id: Optional[str] = None,
+    property_id: Any = None,
+) -> Dict[str, Any]:
+    preferred_phone_id = (
+        _normalize_whatsapp_phone_id(whatsapp_phone_id)
+        or resolve_forced_whatsapp_phone_id_for_property(property_id)
+        or resolve_known_whatsapp_phone_id(memory_manager, chat_id)
+    )
+    if preferred_phone_id:
+        payload = fetch_instance_by_phone_id(preferred_phone_id)
+        if payload:
+            resolved_payload = dict(payload)
+            resolved_payload["whatsapp_phone_id"] = preferred_phone_id
+            return resolved_payload
+
+    normalized_instance_id = str(instance_id or "").strip()
+    if normalized_instance_id:
+        return fetch_instance_by_code(normalized_instance_id)
+    return {}
+
+
+def apply_temporary_whatsapp_routing(
+    memory_manager: Any,
+    chat_id: str,
+    whatsapp_phone_id: Optional[str],
+    *,
+    aliases: Optional[list[str]] = None,
+) -> Any:
+    if not memory_manager or not chat_id:
+        return None
+
+    normalized_phone_id = _normalize_whatsapp_phone_id(whatsapp_phone_id)
+    if not normalized_phone_id:
+        return None
+
+    targets = _memory_aliases_for_chat(memory_manager, chat_id)
+    for alias in aliases or []:
+        for candidate in _memory_aliases_for_chat(memory_manager, str(alias or "").strip()):
+            if candidate not in targets:
+                targets.append(candidate)
+
+    instance_payload = resolve_instance_payload_for_routing(
+        memory_manager,
+        chat_id,
+        whatsapp_phone_id=normalized_phone_id,
+    )
+    forced_property_id = resolve_forced_property_for_whatsapp_phone_id(normalized_phone_id)
+    instance_number = _resolve_instance_display_number(instance_payload)
+    instance_url = instance_payload.get("instance_url")
+    instance_code = instance_payload.get("instance_id") or instance_payload.get("instance_url")
+    property_table = _resolve_property_table(instance_payload)
+
+    for target in targets:
+        memory_manager.set_flag(target, "whatsapp_phone_id", normalized_phone_id)
+        memory_manager.set_flag(target, "wa_sender_phone_id", normalized_phone_id)
+        memory_manager.set_flag(target, "wa_sender_locked", True)
+        if instance_number:
+            memory_manager.set_flag(target, "instance_number", instance_number)
+        if instance_url:
+            memory_manager.set_flag(target, "instance_url", instance_url)
+        if instance_code:
+            memory_manager.set_flag(target, "instance_id", instance_code)
+            memory_manager.set_flag(target, "instance_hotel_code", instance_code)
+        if property_table:
+            memory_manager.set_flag(target, "property_table", property_table)
+        for key in ("whatsapp_token", "whatsapp_verify_token"):
+            val = instance_payload.get(key)
+            if val:
+                memory_manager.set_flag(target, key, val)
+        if forced_property_id is not None:
+            memory_manager.set_flag(target, "property_id", forced_property_id)
+            memory_manager.set_flag(target, "wa_forced_property_id", forced_property_id)
+
+    return forced_property_id
 
 
 def _extract_payload(data: Any) -> Dict[str, Any]:
@@ -476,24 +681,42 @@ def ensure_instance_credentials(
         instance_id = memory_manager.get_flag(chat_id, "instance_id") or memory_manager.get_flag(chat_id, "instance_hotel_code")
         last_property_id = memory_manager.get_flag(chat_id, "wa_context_property_id")
         last_instance_id = memory_manager.get_flag(chat_id, "wa_context_instance_id")
+        known_phone_id = resolve_known_whatsapp_phone_id(memory_manager, chat_id)
+        forced_phone_id = resolve_forced_whatsapp_phone_id_for_property(property_id)
+        preferred_phone_id = forced_phone_id or known_phone_id
 
         existing_phone = memory_manager.get_flag(chat_id, "whatsapp_phone_id")
         existing_token = memory_manager.get_flag(chat_id, "whatsapp_token")
-        if (
-            existing_phone
-            and existing_token
-            and property_id is not None
-            and last_property_id == property_id
-        ):
-            return
-        if (
-            existing_phone
-            and existing_token
-            and instance_id
-            and last_instance_id
-            and str(last_instance_id).strip().lower() == str(instance_id).strip().lower()
-        ):
-            return
+        normalized_existing_phone = _normalize_whatsapp_phone_id(existing_phone)
+        if existing_phone and existing_token:
+            if (
+                preferred_phone_id
+                and normalized_existing_phone == preferred_phone_id
+                and property_id is not None
+                and last_property_id == property_id
+            ):
+                return
+            if (
+                preferred_phone_id
+                and normalized_existing_phone == preferred_phone_id
+                and instance_id
+                and last_instance_id
+                and str(last_instance_id).strip().lower() == str(instance_id).strip().lower()
+            ):
+                return
+            if (
+                not preferred_phone_id
+                and property_id is not None
+                and last_property_id == property_id
+            ):
+                return
+            if (
+                not preferred_phone_id
+                and instance_id
+                and last_instance_id
+                and str(last_instance_id).strip().lower() == str(instance_id).strip().lower()
+            ):
+                return
 
         if property_id:
             prop_payload = fetch_property_by_id(property_table, property_id, instance_id=instance_id)
@@ -511,28 +734,53 @@ def ensure_instance_credentials(
             if not instance_id:
                 instance_id = prop_payload.get("name") or instance_id
 
-        if not instance_id:
+        if not instance_id and not preferred_phone_id:
             log.info("🏨 [WA_CTX] no instance_id/property_id for chat_id=%s", chat_id)
             return
 
-        inst_payload = fetch_instance_by_code(str(instance_id))
+        inst_payload = resolve_instance_payload_for_routing(
+            memory_manager,
+            chat_id,
+            instance_id=str(instance_id or "").strip() or None,
+            whatsapp_phone_id=preferred_phone_id,
+            property_id=property_id,
+        )
         if not inst_payload:
             log.info("🏨 [WA_CTX] no instance for instance_id=%s (chat_id=%s)", instance_id, chat_id)
             return
 
-        for key in ("whatsapp_phone_id", "whatsapp_token", "whatsapp_verify_token"):
+        resolved_instance_id = inst_payload.get("instance_id") or inst_payload.get("instance_url") or instance_id
+        resolved_phone_id = _normalize_whatsapp_phone_id(inst_payload.get("whatsapp_phone_id")) or preferred_phone_id
+        if resolved_phone_id:
+            memory_manager.set_flag(chat_id, "whatsapp_phone_id", resolved_phone_id)
+            memory_manager.set_flag(chat_id, "wa_sender_phone_id", resolved_phone_id)
+            memory_manager.set_flag(chat_id, "wa_sender_locked", True)
+        for key in ("whatsapp_token", "whatsapp_verify_token"):
             val = inst_payload.get(key)
             if val:
                 memory_manager.set_flag(chat_id, key, val)
+        resolved_instance_number = _resolve_instance_display_number(inst_payload)
+        if resolved_instance_number:
+            memory_manager.set_flag(chat_id, "instance_number", resolved_instance_number)
+        resolved_instance_url = inst_payload.get("instance_url")
+        if resolved_instance_url:
+            memory_manager.set_flag(chat_id, "instance_url", resolved_instance_url)
+        if resolved_instance_id:
+            memory_manager.set_flag(chat_id, "instance_id", resolved_instance_id)
+            memory_manager.set_flag(chat_id, "instance_hotel_code", resolved_instance_id)
+        forced_property_id = resolve_forced_property_for_whatsapp_phone_id(resolved_phone_id)
+        if forced_property_id is not None:
+            property_id = forced_property_id
+            memory_manager.set_flag(chat_id, "property_id", forced_property_id)
 
         memory_manager.set_flag(chat_id, "wa_context_property_id", property_id)
-        if instance_id:
-            memory_manager.set_flag(chat_id, "wa_context_instance_id", str(instance_id))
+        if resolved_instance_id:
+            memory_manager.set_flag(chat_id, "wa_context_instance_id", str(resolved_instance_id))
 
         log.info(
             "🏨 [WA_CTX] creds set via ensure_instance_credentials chat_id=%s instance_id=%s phone_id=%s",
             chat_id,
-            instance_id,
+            resolved_instance_id,
             memory_manager.get_flag(chat_id, "whatsapp_phone_id"),
         )
     except Exception as exc:
@@ -578,6 +826,8 @@ def hydrate_dynamic_context(
     normalized_number = _normalize_phone_number(instance_number or "")
     cached_number = memory_manager.get_flag(chat_id, "instance_number")
     cached_phone_id = memory_manager.get_flag(chat_id, "whatsapp_phone_id")
+    if instance_phone_id:
+        apply_temporary_whatsapp_routing(memory_manager, chat_id, instance_phone_id)
 
     instance_payload: Dict[str, Any] = {}
     if instance_phone_id and (cached_phone_id != instance_phone_id or not memory_manager.get_flag(chat_id, "instance_url")):

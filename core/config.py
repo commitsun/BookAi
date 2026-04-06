@@ -42,6 +42,15 @@ class Settings:
     WHATSAPP_MONITOR_TARGET_NUMBERS = os.getenv("WHATSAPP_MONITOR_TARGET_NUMBERS", "34683527049")
     WHATSAPP_MONITOR_CHECKS = os.getenv("WHATSAPP_MONITOR_CHECKS", "ia")
     WHATSAPP_MONITOR_INSTANCE_ID = os.getenv("WHATSAPP_MONITOR_INSTANCE_ID", "")
+    # Parche temporal de routing WA. Se mantiene inactivo mientras falte alguno.
+    WA_TEMPORARY_ROUTING_PHONE_ID = os.getenv(
+        "WA_TEMPORARY_ROUTING_PHONE_ID",
+        os.getenv("NUEVO_PHONE_ID", ""),
+    )
+    WA_TEMPORARY_ROUTING_PROPERTY_ID = os.getenv(
+        "WA_TEMPORARY_ROUTING_PROPERTY_ID",
+        os.getenv("NUEVA_PROPERTY_ID", ""),
+    )
     WA_CONTACTS_PRECHECK_ENABLED = True
     WA_CONTACTS_PRECHECK_STRICT = True
     WA_CONTACTS_PRECHECK_TIMEOUT_SECONDS = 6.0
