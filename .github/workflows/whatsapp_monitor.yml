@@ -1,4 +1,4 @@
-name: "📲 WhatsApp Monitor"
+name: "📲 WhatsApp  Monitor"
 
 on:
   workflow_run:
