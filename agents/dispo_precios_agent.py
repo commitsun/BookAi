@@ -206,10 +206,24 @@ class DispoPreciosAgent:
                 if not rooms or not isinstance(rooms, list):
                     return "No hay disponibilidad en las fechas indicadas."
 
+                tone = ""
+                if self.memory_manager and self._current_chat_id:
+                    try:
+                        tone = str(self.memory_manager.get_flag(self._current_chat_id, "tone") or "").strip()
+                    except Exception:
+                        tone = ""
+                tone_rule = (
+                    f"Instrucción de tono obligatoria para esta property: {tone}\n"
+                    "Adapta el tratamiento y la forma de responder exactamente a esa instrucción.\n\n"
+                    if tone
+                    else ""
+                )
+
                 prompt = (
                     f"{get_time_context()}\n\n"
                     f"Información de habitaciones y precios (los importes vienen YA calculados; no los multipliques ni los recalcules):\n\n"
                     f"{json.dumps(rooms, ensure_ascii=False, indent=2)}\n\n"
+                    f"{tone_rule}"
                     f"El huésped pregunta: \"{query}\""
                 )
 
@@ -540,6 +554,7 @@ class DispoPreciosAgent:
                 self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}\n\n{dynamic_context}"
             else:
                 self.prompt_text = f"{get_time_context()}\n\n{base_prompt.strip()}"
+            self.agent_executor = self._build_agent_executor()
 
             result = await self.agent_executor.ainvoke({
                 "input": pregunta.strip(),

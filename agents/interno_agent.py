@@ -355,7 +355,7 @@ class InternoAgent:
             tools = create_interno_tools(memory_manager=self.memory_manager)
 
             # --- Prompt ---
-            system_prompt = self._build_system_prompt(escalation_context)
+            system_prompt = self._build_system_prompt(chat_id, escalation_context)
             prompt_template = ChatPromptTemplate.from_messages(
                 [
                     ("system", system_prompt),
@@ -888,9 +888,15 @@ class InternoAgent:
             context_window=20,
         )
 
-    def _build_system_prompt(self, escalation_context: str) -> str:
+    def _build_system_prompt(self, chat_id: str, escalation_context: str) -> str:
         base = load_prompt("interno_prompt.txt") or self._get_default_prompt()
         ctx = get_time_context()
+        tone = ""
+        if self.memory_manager and chat_id:
+            try:
+                tone = str(self.memory_manager.get_flag(chat_id, "tone") or "").strip()
+            except Exception:
+                tone = ""
 
         extra = ""
         c = escalation_context.upper()
@@ -904,7 +910,8 @@ class InternoAgent:
         elif "HUMAN_DIRECT" in c:
             extra = "\n\nCONTEXTO: El huésped pidió hablar con el encargado."
 
-        return f"{ctx}\n{base}{extra}"
+        tone_block = f"\n\nTone: {tone}" if tone else ""
+        return f"{ctx}\n{base}{tone_block}{extra}"
 
     def _get_default_prompt(self) -> str:
         return (

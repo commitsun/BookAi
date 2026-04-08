@@ -193,12 +193,20 @@ class MainAgent:
             reply = self._generate_reply(chat_id=chat_id, intent="escalation_declined")
             text = reply or (
                 "Perfecto, seguimos buscando alternativas sin consultarlo por ahora. "
-                "Si quieres que lo consulte luego, solo dímelo."
+                + (
+                    "Si quiere que lo consulte después, solo dígamelo."
+                    if self._uses_formal_tone(chat_id)
+                    else "Si quieres que lo consulte luego, solo dímelo."
+                )
             )
             return self._localize(chat_id, text)
 
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
-        text = reply or "Solo para confirmar: ¿quieres que lo consulte? Responde con 'sí' o 'no'."
+        text = reply or (
+            "Solo para confirmar: ¿quiere que lo consulte? Responda con 'sí' o 'no'."
+            if self._uses_formal_tone(chat_id)
+            else "Solo para confirmar: ¿quieres que lo consulte? Responde con 'sí' o 'no'."
+        )
         return self._localize(chat_id, text)
 
     def _interpret_confirmation(self, text: str) -> Optional[bool]:
@@ -245,7 +253,11 @@ class MainAgent:
         reply = self._generate_reply(chat_id=chat_id, intent="escalation_confirm")
         text = reply or (
             "Ahora mismo no tengo ese dato confirmado. "
-            "¿Quieres que lo consulte? Responde con 'sí' o 'no'."
+            + (
+                "¿Quiere que lo consulte? Responda con 'sí' o 'no'."
+                if self._uses_formal_tone(chat_id)
+                else "¿Quieres que lo consulte? Responde con 'sí' o 'no'."
+            )
         )
         return self._localize(chat_id, text)
 
@@ -318,10 +330,44 @@ class MainAgent:
         text = re.sub(r"[^a-z0-9]+", " ", text).strip()
         return re.sub(r"\s+", " ", text)
 
+    def _uses_formal_tone(self, chat_id: str) -> bool:
+        if not self.memory_manager or not chat_id:
+            return False
+        tone = str(self.memory_manager.get_flag(chat_id, "tone") or "").strip().lower()
+        if not tone:
+            return False
+        return any(
+            marker in tone
+            for marker in ("usted", "3ª persona", "3a persona", "tercera persona")
+        )
+
     def _generate_reply(self, chat_id: str, intent: str, **data) -> str:
         """
         Genera respuestas con LLM usando prompts configurables.
         """
+        formal = self._uses_formal_tone(chat_id)
+        static_replies = {
+            "escalation_confirm": (
+                "Ahora mismo no tengo ese dato confirmado. ¿Quiere que lo consulte? Responda con 'sí' o 'no'."
+                if formal
+                else "Ahora mismo no tengo ese dato confirmado. ¿Quieres que lo consulte? Responde con 'sí' o 'no'."
+            ),
+            "escalation_declined": (
+                "Perfecto, seguimos buscando alternativas sin consultarlo por ahora. "
+                "Si quiere que lo consulte después, solo dígamelo."
+                if formal
+                else "Perfecto, seguimos buscando alternativas sin consultarlo por ahora. "
+                "Si quieres que lo consulte luego, solo dímelo."
+            ),
+            "inciso_wait": (
+                "Un momento, estoy revisándolo para poder informarle mejor."
+                if formal
+                else "Un momento, lo estoy revisando para poder ayudarte mejor."
+            ),
+        }
+        if intent in static_replies:
+            return static_replies[intent]
+
         try:
             prompt = load_prompt("reply_generator.txt") or ""
         except Exception:
@@ -331,6 +377,7 @@ class MainAgent:
         payload = {
             "intent": intent,
             "lang": self._get_guest_lang(chat_id),
+            "tone": self.memory_manager.get_flag(chat_id, "tone") if self.memory_manager else None,
             **data,
         }
         try:
@@ -474,7 +521,10 @@ class MainAgent:
         if reservation_client_name and not self.memory_manager.get_flag(chat_id, "client_name"):
             self.memory_manager.set_flag(chat_id, "client_name", reservation_client_name)
 
-        if prop_id and not self.memory_manager.get_flag(chat_id, "property_name"):
+        if prop_id and (
+            not self.memory_manager.get_flag(chat_id, "property_name")
+            or not self.memory_manager.get_flag(chat_id, "tone")
+        ):
             table = self.memory_manager.get_flag(chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
             if table:
                 try:
@@ -482,9 +532,14 @@ class MainAgent:
                 except Exception:
                     payload = {}
                 display = (payload.get("name") or payload.get("property_name") or "").strip()
+                tone = str(payload.get("tone") or "").strip()
                 if display:
                     self.memory_manager.set_flag(chat_id, "property_name", display)
                     self.memory_manager.set_flag(chat_id, "property_display_name", display)
+                if tone:
+                    self.memory_manager.set_flag(chat_id, "tone", tone)
+                else:
+                    self.memory_manager.clear_flag(chat_id, "tone")
         return True
 
     async def _resolve_property_from_message(self, chat_id: str, user_input: str) -> bool:
@@ -551,6 +606,7 @@ class MainAgent:
             payload = {}
         display = (payload.get("name") or payload.get("property_name") or "").strip()
         instance_id = (payload.get("instance_id") or "").strip()
+        tone = str(payload.get("tone") or "").strip()
         if display:
             self.memory_manager.set_flag(chat_id, "property_display_name", display)
             self.memory_manager.set_flag(chat_id, "property_name", display)
@@ -558,6 +614,10 @@ class MainAgent:
             self.memory_manager.set_flag(chat_id, "instance_id", instance_id)
             self.memory_manager.set_flag(chat_id, "instance_hotel_code", instance_id)
             self.memory_manager.set_flag(chat_id, "wa_context_instance_id", instance_id)
+        if tone:
+            self.memory_manager.set_flag(chat_id, "tone", tone)
+        else:
+            self.memory_manager.clear_flag(chat_id, "tone")
 
     def _is_new_reservation_intent(self, text: str, chat_id: Optional[str] = None) -> bool:
         t = self._normalize_text(self._get_intent_text_es(chat_id, text))
@@ -903,7 +963,9 @@ class MainAgent:
 
                     if not inciso_flag and self.send_callback:
                         wait_msg = self._generate_reply(chat_id=chat_id, intent="inciso_wait") or (
-                            "Dame un momento, estoy revisando internamente cómo ayudarte mejor."
+                            "Un momento, estoy revisando internamente cómo ayudarle mejor."
+                            if self._uses_formal_tone(chat_id)
+                            else "Dame un momento, estoy revisando internamente cómo ayudarte mejor."
                         )
                         await self.send_callback(wait_msg)
                         self.memory_manager.set_flag(chat_id, "inciso_enviado", True)
@@ -935,8 +997,15 @@ class MainAgent:
                 )
                 fallback_msg = self._localize(
                     chat_id,
-                    "Ha ocurrido un problema interno y ya lo estoy revisando. "
-                    "Te aviso en breve."
+                    (
+                        "Ha ocurrido un problema interno y ya lo estoy revisando. "
+                        "Le aviso en breve."
+                    )
+                    if self._uses_formal_tone(chat_id)
+                    else (
+                        "Ha ocurrido un problema interno y ya lo estoy revisando. "
+                        "Te aviso en breve."
+                    )
                 )
 
                 # Guarda el intercambio aunque haya error para no perder contexto

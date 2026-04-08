@@ -462,6 +462,7 @@ class InfoAgent:
                 reduced = await self._reduce_to_question_scope(
                     question=user_input,
                     source_text=kb_output,
+                    chat_id=chat_id,
                 )
                 # Si KB ya tiene información útil y el reducer generó respuesta,
                 # no activamos Google.
@@ -486,6 +487,7 @@ class InfoAgent:
                 reduced = await self._reduce_to_question_scope(
                     question=user_input,
                     source_text=google_output,
+                    chat_id=chat_id,
                 )
                 if reduced and await self._verify_answer_supported(
                     question=user_input,
@@ -550,11 +552,22 @@ class InfoAgent:
         except Exception:
             return base
 
-    async def _reduce_to_question_scope(self, question: str, source_text: str) -> Optional[str]:
+    async def _reduce_to_question_scope(self, question: str, source_text: str, chat_id: str) -> Optional[str]:
         q = (question or "").strip()
         src = (source_text or "").strip()
         if not q or not src:
             return None
+        tone = ""
+        if self.memory_manager and chat_id:
+            try:
+                tone = str(self.memory_manager.get_flag(chat_id, "tone") or "").strip()
+            except Exception:
+                tone = ""
+        tone_rule = (
+            f"12) Ajusta el tono y el tratamiento exactamente a esta instrucción de la property: {tone}.\n"
+            if tone
+            else ""
+        )
 
         system_prompt = (
             "Eres un reductor de alcance para atención hotelera.\n"
@@ -574,6 +587,7 @@ class InfoAgent:
             "mantén el dato principal y añade una frase breve de ayuda práctica.\n"
             "11) Esa frase de ayuda debe salir de la fuente; si la fuente no aporta alternativa concreta, "
             "ofrece revisarlo o consultarlo sin prometer cambios.\n"
+            f"{tone_rule}"
         )
         user_prompt = (
             f"Pregunta del huésped:\n{q}\n\n"

@@ -890,6 +890,8 @@ def hydrate_dynamic_context(
             memory_manager.clear_flag(chat_id, "kb")
             memory_manager.clear_flag(chat_id, "knowledge_base")
             memory_manager.clear_flag(chat_id, "property_name")
+            memory_manager.clear_flag(chat_id, "property_display_name")
+            memory_manager.clear_flag(chat_id, "tone")
         log.info("🔎 Buscando instancia para numero=%s chat_id=%s", normalized_number, chat_id)
         instance_payload = fetch_instance_by_number(normalized_number)
         if instance_payload:
@@ -1008,7 +1010,11 @@ def hydrate_dynamic_context(
                 memory_manager.set_flag(chat_id, "instance_url", instance_url)
                 log.info("🔗 instance_url=%s (chat_id=%s)", instance_url, chat_id)
 
-    if property_id and property_table and not memory_manager.get_flag(chat_id, "kb"):
+    if property_id and property_table and (
+        not memory_manager.get_flag(chat_id, "kb")
+        or not memory_manager.get_flag(chat_id, "property_name")
+        or not memory_manager.get_flag(chat_id, "tone")
+    ):
         current_instance_id = memory_manager.get_flag(chat_id, "instance_id") or memory_manager.get_flag(chat_id, "instance_hotel_code")
         prop_details = fetch_property_by_id(property_table, property_id, instance_id=current_instance_id)
         kb_name = _normalize_kb_name(
@@ -1023,3 +1029,8 @@ def hydrate_dynamic_context(
             memory_manager.set_flag(chat_id, "property_name", prop_name)
         if prop_display:
             memory_manager.set_flag(chat_id, "property_display_name", prop_display)
+        tone = str(prop_details.get("tone") or "").strip()
+        if tone:
+            memory_manager.set_flag(chat_id, "tone", tone)
+        else:
+            memory_manager.clear_flag(chat_id, "tone")

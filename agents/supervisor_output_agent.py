@@ -24,7 +24,7 @@ with open("prompts/supervisor_output_prompt.txt", "r", encoding="utf-8") as f:
 # 🧠 FUNCIÓN PRINCIPAL DE AUDITORÍA
 # =============================================================
 
-async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> str:
+async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str, tone: str | None = None) -> str:
     """Evalúa si la respuesta del agente es adecuada, segura y coherente."""
     with ls_context(
         name="SupervisorOutputAgent.auditar_respuesta",
@@ -36,9 +36,15 @@ async def _auditar_respuesta_func(input_usuario: str, respuesta_agente: str) -> 
                 f"Mensaje del huésped:\n{input_usuario}\n\n"
                 f"Respuesta del agente:\n{respuesta_agente}"
             )
+            system_prompt = SUPERVISOR_OUTPUT_PROMPT
+            if str(tone or "").strip():
+                system_prompt = (
+                    f"{system_prompt}\n\n"
+                    f"Tono de la property para esta revisión: {str(tone).strip()}"
+                )
 
             response = await llm.ainvoke([
-                {"role": "system", "content": SUPERVISOR_OUTPUT_PROMPT},
+                {"role": "system", "content": system_prompt},
                 {"role": "user", "content": content},
             ])
 
@@ -179,7 +185,14 @@ class SupervisorOutputAgent:
             # =====================================================
             # 🧠 ANÁLISIS CON EL LLM (modo auditor)
             # =====================================================
-            raw = await _auditar_respuesta_func(user_input, agent_response)
+            tone = None
+            if self.memory_manager and chat_id:
+                try:
+                    tone = self.memory_manager.get_flag(chat_id, "tone")
+                except Exception:
+                    tone = None
+
+            raw = await _auditar_respuesta_func(user_input, agent_response, tone=tone)
             salida = (raw or "").strip()
 
             if self.memory_manager and chat_id:

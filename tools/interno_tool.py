@@ -24,6 +24,7 @@ import html
 from core.escalation_db import save_escalation, update_escalation, get_latest_pending_escalation
 from core.config import Settings as C, ModelConfig, ModelTier  # ✅ Config centralizada
 from core.escalation_manager import get_escalation
+from core.instance_context import DEFAULT_PROPERTY_TABLE, fetch_property_by_id
 from core.socket_manager import emit_event
 from core.language_manager import language_manager
 
@@ -735,6 +736,29 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
 
     # ✅ Usa configuración centralizada para el modelo del agente interno
     llm = ModelConfig.get_llm(ModelTier.INTERNAL)
+    tone = ""
+    if _MEMORY_MANAGER:
+        try:
+            tone = str(_MEMORY_MANAGER.get_flag(esc.guest_chat_id, "tone") or "").strip()
+        except Exception:
+            tone = ""
+    if not tone and esc.property_id is not None:
+        try:
+            table = DEFAULT_PROPERTY_TABLE
+            if _MEMORY_MANAGER:
+                try:
+                    table = _MEMORY_MANAGER.get_flag(esc.guest_chat_id, "property_table") or DEFAULT_PROPERTY_TABLE
+                except Exception:
+                    table = DEFAULT_PROPERTY_TABLE
+            payload = fetch_property_by_id(str(table), esc.property_id)
+            tone = str(payload.get("tone") or "").strip()
+        except Exception:
+            tone = ""
+    tone_rule = (
+        f"Sigue exactamente esta instrucción de tono y tratamiento para la property: {tone}.\n"
+        if tone
+        else ""
+    )
 
     system_prompt = (
         "Eres un asistente especializado en atención hotelera.\n"
@@ -745,8 +769,8 @@ def generar_borrador(escalation_id: str, manager_response: str, adjustment: Opti
         "Evita repeticiones, rodeos y detalles innecesarios.\n"
         "No incluyas encabezados, comillas ni explicaciones, solo el texto final que se enviará al cliente.\n"
         "No menciones encargado, hotel, propietario, recepción, equipo, personal ni canales internos cuando expreses una consulta o revisión.\n"
-        "Si hace falta ofrecer una consulta o revisión, usa formulaciones neutras como "
-        "'¿quieres que lo consulte?', 'voy a consultarlo', 'si quieres, lo reviso' o 'voy a comprobarlo'.\n"
+        "Si hace falta ofrecer una consulta o revisión, usa formulaciones neutras alineadas con la instrucción de tono.\n"
+        f"{tone_rule}"
         "Si se proporcionan 'ajustes', incorpóralos en el tono o contenido."
     )
 

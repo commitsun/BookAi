@@ -213,10 +213,16 @@ async def _llm_rewrite_honest_non_escalated_response(
     user_message: str,
     assistant_response: str,
     target_lang: str,
+    tone: str = "",
 ) -> str:
     if not llm:
         return ""
     try:
+        tone_rule = (
+            f"- Ajusta el tono y el tratamiento exactamente a esta instrucción de la property: {tone}.\n"
+            if str(tone or "").strip()
+            else ""
+        )
         system = (
             "Eres un reescritor de respuestas para huéspedes de hotel.\n"
             "Contexto de verdad: NO existe escalación ni gestión humana activa en backend.\n"
@@ -224,11 +230,11 @@ async def _llm_rewrite_honest_non_escalated_response(
             "Reglas:\n"
             "- No afirmes ni insinúes que ya consultaste/consultarás con una figura humana o interna.\n"
             "- No prometas confirmación futura basada en una gestión humana no ejecutada.\n"
-            "- Si aplica, puedes ofrecer la consulta en condicional (ej: '¿quieres que lo consulte?').\n"
+            "- Si aplica, puedes ofrecer la consulta en condicional, alineada con el tono de la property.\n"
             "- Mantén el sentido útil y el tono cordial.\n"
-            "- Usa tuteo en español.\n"
             "- Máximo 2 frases.\n"
             f"- Idioma objetivo: {target_lang or 'es'}.\n"
+            f"{tone_rule}"
             "Devuelve SOLO el mensaje final."
         )
         user = (
@@ -259,6 +265,17 @@ async def _align_response_with_human_escalation_state(
     candidate = _sanitize_guest_facing_response(assistant_response)
     if not candidate:
         return "", False
+    tone = ""
+    mm = getattr(state, "memory_manager", None)
+    if mm:
+        for chat_id in chat_ids or []:
+            try:
+                resolved = str(mm.get_flag(chat_id, "tone") or "").strip()
+            except Exception:
+                resolved = ""
+            if resolved:
+                tone = resolved
+                break
     if _has_real_human_escalation(state, *(chat_ids or [])):
         return candidate, False
     if not _may_reference_human_escalation(candidate):
@@ -277,12 +294,25 @@ async def _align_response_with_human_escalation_state(
         user_message=user_message,
         assistant_response=candidate,
         target_lang=target_lang,
+        tone=tone,
     )
     if not rewritten:
-        rewritten = (
-            "Ahora mismo no tengo una gestión humana activa para confirmarte ese dato. "
-            "¿Quieres que lo consulte?"
-        )
+        lowered_tone = str(tone or "").lower()
+        if (
+            "usted" in lowered_tone
+            or "3ª persona" in lowered_tone
+            or "3a persona" in lowered_tone
+            or "tercera persona" in lowered_tone
+        ):
+            rewritten = (
+                "Ahora mismo no tengo una gestión humana activa para confirmarle ese dato. "
+                "¿Quiere que lo consulte?"
+            )
+        else:
+            rewritten = (
+                "Ahora mismo no tengo una gestión humana activa para confirmarte ese dato. "
+                "¿Quieres que lo consulte?"
+            )
     return rewritten.strip(), True
 
 

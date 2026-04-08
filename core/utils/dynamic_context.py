@@ -17,6 +17,7 @@ def build_dynamic_context_block(
     property_id: Optional[Any] = None,
     property_name: Optional[str] = None,
     property_display_name: Optional[str] = None,
+    tone: Optional[str] = None,
     kb: Optional[str] = None,
     guest_number: Optional[str] = None,
     guest_name: Optional[str] = None,
@@ -38,6 +39,7 @@ def build_dynamic_context_block(
         f"Property_id: {_stringify(property_id)},\n"
         f"Property_name: {_stringify(property_name)},\n"
         f"Property_display_name: {_stringify(property_display_name)},\n"
+        f"Tone: {_stringify(tone)},\n"
         f"Kb: {_stringify(kb)},\n"
         f"Guest_number: {_stringify(guest_number)},\n"
         f"Guest_name: {_stringify(guest_name)},\n"
@@ -64,6 +66,7 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
     kb = memory_manager.get_flag(chat_id, "kb")
     property_name = memory_manager.get_flag(chat_id, "property_name")
     property_display_name = memory_manager.get_flag(chat_id, "property_display_name")
+    tone = memory_manager.get_flag(chat_id, "tone")
     guest_number = (
         memory_manager.get_flag(chat_id, "guest_number")
         or memory_manager.get_flag(chat_id, "whatsapp_number")
@@ -86,6 +89,7 @@ def build_dynamic_context_from_memory(memory_manager, chat_id: str) -> str:
         property_id=property_id,
         property_name=property_name,
         property_display_name=property_display_name,
+        tone=tone,
         kb=kb,
         guest_number=guest_number,
         guest_name=guest_name,
