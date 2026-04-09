@@ -328,13 +328,15 @@ def _sanitize_guest_facing_response(text: str) -> str:
         "agent stopped due to max",
         "maximum number of iterations",
         "maximum number of steps",
+        "[escalation request]",
+        "nueva consulta escalada",
     )
     if any(marker in lowered_raw for marker in internal_fail_markers):
         return ""
 
-    # Si el modelo devolvió bloque tipo "Response to the user:", usa solo esa parte.
+    # Si el modelo devolvió un bloque con marcador explícito de salida al huésped, usa solo esa parte.
     marker_match = re.search(
-        r"(response to the user|respuesta (?:al|para el) (?:hu[eé]sped|usuario)|respuesta final)\s*:\s*",
+        r"(response to the user|respuesta (?:al|para el|enviada al) (?:hu[eé]sped|usuario)|respuesta final)\s*:\s*",
         raw,
         re.IGNORECASE,
     )
@@ -351,9 +353,21 @@ def _sanitize_guest_facing_response(text: str) -> str:
         r"^\s*analysis\s*:.*$",
         r"^\s*thought\s*:.*$",
         r"^\s*mensaje del usuario\s*:.*$",
+        r"^\s*mensaje del usuario detectado\s*:?.*$",
         r"^\s*la consulta.*$",
         r"^\s*por lo tanto.*$",
+        r"^\s*acci[oó]n\s*:.*$",
+        r"^\s*action\s*:.*$",
+        r"^\s*resumen de la petici[oó]n\s*:?.*$",
+        r"^\s*summary of (?:the )?request\s*:?.*$",
+        r"^\s*estado\s*:.*$",
+        r"^\s*motivo\s*:.*$",
+        r"^\s*prueba\s*:.*$",
+        r"^\s*sugerencia\s*:.*$",
+        r"^\s*interno\s*\(.*$",
+        r"^\s*escalaci[oó]n\s+[a-z0-9_\-]+\s+(?:ya\s+pendiente;?\s+)?(?:notificada|actualizada).*$",
         r"^\s*respuesta (?:al|para el) (?:hu[eé]sped|usuario)\s*:.*$",
+        r"^\s*respuesta enviada al hu[eé]sped\s*:.*$",
     ]
 
     cleaned_lines = []
@@ -361,7 +375,8 @@ def _sanitize_guest_facing_response(text: str) -> str:
         ln = line.strip()
         if not ln:
             continue
-        if any(re.search(p, ln, re.IGNORECASE) for p in meta_line_patterns):
+        normalized_ln = re.sub(r"^[\-\*\u2022\s]+", "", ln).replace("**", "").strip()
+        if any(re.search(p, normalized_ln, re.IGNORECASE) for p in meta_line_patterns):
             continue
         cleaned_lines.append(ln)
 
@@ -371,7 +386,7 @@ def _sanitize_guest_facing_response(text: str) -> str:
         if any(marker in lowered_clean for marker in internal_fail_markers):
             return ""
         return cleaned
-    return raw
+    return ""
 
 
 def _extract_json_object(raw: str) -> dict[str, Any] | None:
