@@ -29,7 +29,9 @@ from core.escalation_db import (
 from core.template_registry import TemplateRegistry, TemplateDefinition
 from core.instance_context import (
     ensure_instance_credentials,
+    fetch_instance_by_phone_id,
     fetch_instance_by_code,
+    resolve_forced_whatsapp_phone_id_for_property,
     resolve_instance_payload_for_routing,
 )
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
@@ -237,8 +239,10 @@ def _instance_chat_sets(
     chat_ids: set[str] = set()
     original_chat_ids: set[str] = set()
     original_prefixes: set[str] = {str(instance_id or "").strip()}
-    try:
-        instance_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+
+    def _add_instance_prefixes(instance_payload: Dict[str, Any]) -> None:
+        if not isinstance(instance_payload, dict):
+            return
         instance_number = _resolve_instance_number(instance_payload)
         if instance_number:
             original_prefixes.add(str(instance_number).strip())
@@ -248,8 +252,31 @@ def _instance_chat_sets(
         phone_id = str(instance_payload.get("whatsapp_phone_id") or "").strip()
         if phone_id:
             original_prefixes.add(phone_id)
+        for key in ("instance_id", "instance_url"):
+            alias = str(instance_payload.get(key) or "").strip()
+            if alias:
+                original_prefixes.add(alias)
+
+    try:
+        instance_payload = fetch_instance_by_code(str(instance_id).strip()) or {}
+        _add_instance_prefixes(instance_payload)
     except Exception as exc:
         log.warning("No se pudo resolver payload de instancia %s: %s", instance_id, exc)
+
+    if property_id is not None:
+        try:
+            forced_phone_id = resolve_forced_whatsapp_phone_id_for_property(property_id)
+            if forced_phone_id:
+                original_prefixes.add(str(forced_phone_id).strip())
+                forced_payload = fetch_instance_by_phone_id(str(forced_phone_id).strip()) or {}
+                _add_instance_prefixes(forced_payload)
+        except Exception as exc:
+            log.warning(
+                "No se pudo resolver routing temporal para property_id=%s instance_id=%s: %s",
+                property_id,
+                instance_id,
+                exc,
+            )
 
     try:
         query = (
