@@ -38,6 +38,7 @@ from core.utils.utils_prompt import load_prompt
 from tools.interno_tool import (
     ESCALATIONS_STORE,
     Escalation,
+    _merge_escalation_text,
     _synthesize_escalation_query,
     create_interno_tools,
     send_to_encargado,
@@ -653,6 +654,8 @@ class InternoAgent:
                 ).strip()
                 prev_context = str((existing_pending or {}).get("context") or "").strip()
 
+                merged_message = _synthesize_escalation_query(prev_msg, guest_message)
+                merged_reason = _merge_escalation_text(prev_reason, reason)
                 def _merge_lines(base: str, extra: str) -> str:
                     b = str(base or "").strip()
                     e = str(extra or "").strip()
@@ -663,9 +666,6 @@ class InternoAgent:
                     if e.lower() in b.lower():
                         return b
                     return f"{b}\n{e}".strip()
-
-                merged_message = _synthesize_escalation_query(prev_msg, guest_message)
-                merged_reason = _merge_lines(prev_reason, reason)
                 merged_context = _merge_lines(prev_context, context)
                 update_payload = {
                     "guest_message": merged_message,

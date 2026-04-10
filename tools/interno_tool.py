@@ -185,11 +185,13 @@ def _merge_escalation_text(previous: str, addition: str) -> str:
         return prev
     if add.lower() in prev.lower():
         return prev
-    return f"{prev} {add}".strip()
+    if prev.lower() in add.lower():
+        return add
+    return _synthesize_escalation_query(prev, add)
 
 
 def _synthesize_escalation_query(previous: str, addition: str) -> str:
-    """Sintetiza en una sola consulta lo ya pendiente + la nueva ampliación."""
+    """Sintetiza el texto acumulado de la escalación en una sola frase breve y útil."""
     prev = (previous or "").strip()
     add = (addition or "").strip()
     if not prev:
@@ -220,24 +222,26 @@ def _synthesize_escalation_query(previous: str, addition: str) -> str:
     try:
         llm = ModelConfig.get_llm(ModelTier.INTERNAL)
         system_prompt = (
-            "Eres asistente interno hotelero. Reescribe la consulta acumulada del huésped en UNA sola frase breve, "
-            "clara y no redundante.\n"
+            "Eres asistente interno hotelero. Sintetiza el texto acumulado de una escalación en UNA sola frase breve, "
+            "clara, útil y no redundante.\n"
             "Reglas:\n"
             "- Devuelve SOLO la frase final.\n"
             "- No uses listas ni numeración.\n"
-            "- Mantén el idioma original del huésped. No traduzcas.\n"
+            "- Mantén el idioma predominante del texto original. No traduzcas.\n"
+            "- Prioriza la petición principal, el contexto mínimo útil y lo que requiere revisión o acción.\n"
             "- Elimina repeticiones literales o semánticas (no dupliques la misma idea).\n"
-            "- Si la ampliación ya incluye la consulta previa, no repitas la parte previa.\n"
-            "- Máximo 28 palabras."
+            "- No rehagas la conversación ni copies frases de más.\n"
+            "- Si la ampliación ya incluye lo anterior o solo confirma lo mismo, conserva la versión más útil y específica.\n"
+            "- Máximo 32 palabras."
         )
         previous_clean = " ".join(_dedupe_lines(prev))
         addition_clean = " ".join(_dedupe_lines(add))
         user_prompt = (
-            "Consulta previa:\n"
+            "Texto previo:\n"
             f"{previous_clean}\n\n"
-            "Nueva ampliación:\n"
+            "Nuevo texto:\n"
             f"{addition_clean}\n\n"
-            "Consulta sintetizada:"
+            "Síntesis operativa:"
         )
         raw = llm.invoke(
             [
