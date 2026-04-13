@@ -38,6 +38,7 @@ from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.language_manager import language_manager
 from core.template_structured import (
     build_template_structured_payload,
+    build_template_sent_preview,
     extract_template_sent_metadata,
     extract_structured_csv,
 )
@@ -596,6 +597,11 @@ def _format_history_content(content: str) -> str:
     text = re.sub(r"\s*\|\s*", ";", text)
     text = re.sub(r"\s*;\s*", ";", text)
     return text
+
+
+def _template_message_preview(content: Any, structured_payload: Any = None) -> Optional[str]:
+    metadata = extract_template_sent_metadata(structured_payload, content)
+    return build_template_sent_preview(metadata)
 
 
 def _normalize_pending_key(guest_id: str) -> str:
@@ -2315,6 +2321,7 @@ def register_chatter_routes(app, state) -> None:
         client_languages: Dict[str, Tuple[str, float]] = {}
         last_guest_message_at_by_cid: Dict[str, Optional[str]] = {}
         last_template_sent_at_by_cid: Dict[str, Optional[str]] = {}
+        last_template_preview_by_cid: Dict[str, Optional[str]] = {}
         expected_original_by_cid: Dict[str, str] = {}
         if page_keys:
             conv_ids = [
@@ -2439,10 +2446,11 @@ def register_chatter_routes(app, state) -> None:
                         )
                         resp_template_rows = resp_without_property.data or []
                     for row in resp_template_rows:
-                        if not extract_template_sent_metadata(
-                            row.get("structured_payload"),
+                        template_preview = _template_message_preview(
                             row.get("content"),
-                        ):
+                            row.get("structured_payload"),
+                        )
+                        if not template_preview:
                             continue
                         cid = str(row.get("conversation_id") or "").strip()
                         if not cid:
@@ -2453,6 +2461,7 @@ def register_chatter_routes(app, state) -> None:
                             continue
                         if cid not in last_template_sent_at_by_cid:
                             last_template_sent_at_by_cid[cid] = row.get("created_at")
+                            last_template_preview_by_cid[cid] = template_preview
                 except Exception as exc:
                     try:
                         template_query = (
@@ -2590,6 +2599,15 @@ def register_chatter_routes(app, state) -> None:
                 client_language, client_language_confidence = fallback_lang_meta
             chat_channel = str(last.get("channel") or "whatsapp").strip() or "whatsapp"
             chat_channel_norm = chat_channel.lower()
+            last_message_preview = (
+                _template_message_preview(last.get("content"))
+                or (
+                    last_template_preview_by_cid.get(cid)
+                    if str(last.get("created_at") or "").strip()
+                    == str(last_template_sent_at_by_cid.get(cid) or "").strip()
+                    else None
+                )
+            )
             chat_payload = {
                 "chat_id": cid,
                 "property_id": prop_id,
@@ -2600,7 +2618,7 @@ def register_chatter_routes(app, state) -> None:
                 "checkin": checkin,
                 "checkout": checkout,
                 "channel": chat_channel,
-                "last_message": last.get("content"),
+                "last_message": last_message_preview or last.get("content"),
                 "last_message_at": last.get("created_at"),
                 "avatar": None,
                 "client_name": reservation_client_name or client_names.get(cid) or last.get("client_name"),
@@ -2823,14 +2841,19 @@ def register_chatter_routes(app, state) -> None:
                 except Exception:
                     structured_payload = None
             structured_csv = extract_structured_csv(structured_payload)
+            template_preview = _template_message_preview(
+                row.get("content"),
+                structured_payload,
+            )
             items.append(
                 {
                     "message_id": row.get("id") or row.get("message_id"),
                     "chat_id": clean_id,
                     "created_at": row.get("created_at"),
                     "read_status": row.get("read_status"),
-                    "content": _format_history_content(row.get("content")),
+                    "content": template_preview or _format_history_content(row.get("content")),
                     "message": row.get("content"),
+                    "preview": template_preview,
                     "sender": _map_sender(row.get("role")),
                     "original_chat_id": row.get("original_chat_id"),
                     "property_id": row.get("property_id"),
@@ -5139,6 +5162,7 @@ def register_chatter_routes(app, state) -> None:
             )
         except Exception:
             client_language, client_language_confidence = "es", 0.0
+        template_preview = _template_message_preview(rendered or template_name, structured_payload)
         whatsapp_window = _resolve_whatsapp_window_for_chat(
             chat_id,
             property_id=property_id,
@@ -5196,7 +5220,7 @@ def register_chatter_routes(app, state) -> None:
                         "checkin": checkin,
                         "checkout": checkout,
                         "channel": "whatsapp",
-                        "last_message": rendered or template_name,
+                        "last_message": template_preview or rendered or template_name,
                         "last_message_at": now_iso,
                         "avatar": None,
                         "client_name": reservation_client_name,
@@ -5231,6 +5255,8 @@ def register_chatter_routes(app, state) -> None:
                 "channel": "whatsapp",
                 "sender": "bookai",
                 "message": rendered or template_name,
+                "content": template_preview or rendered or template_name,
+                "preview": template_preview,
                 "created_at": now_iso,
                 "template": template_name,
                 "template_language": language,
@@ -5252,7 +5278,7 @@ def register_chatter_routes(app, state) -> None:
                 "chat_id": chat_id,
                 "property_id": property_id,
                 "channel": "whatsapp",
-                "last_message": rendered or template_name,
+                "last_message": template_preview or rendered or template_name,
                 "last_message_at": now_iso,
                 "whatsapp_window": whatsapp_window,
                 **_pending_snapshot_for_chat(
@@ -5271,6 +5297,7 @@ def register_chatter_routes(app, state) -> None:
             "language": language,
             "instance_id": instance_id,
             "button_base_url": button_base_url,
+            "preview": template_preview,
             "structured_payload": structured_payload,
             "structured_csv": structured_csv,
         }

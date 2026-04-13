@@ -326,6 +326,21 @@ def build_template_sent_marker(metadata: Dict[str, Any] | None) -> str:
     return " ".join(parts)
 
 
+def build_template_sent_preview(
+    metadata: Dict[str, Any] | None,
+    *,
+    label: str = "Plantilla enviada",
+) -> Optional[str]:
+    if metadata is None:
+        return None
+    payload = metadata or {}
+    template_name = _to_text(payload.get("template_name")) or _to_text(payload.get("template_code"))
+    if template_name:
+        return f"{label}: {template_name}"
+    clean_label = _to_text(label)
+    return clean_label or None
+
+
 def extract_structured_csv(structured_payload: Any) -> Optional[str]:
     if not isinstance(structured_payload, dict):
         return None

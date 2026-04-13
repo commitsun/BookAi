@@ -31,6 +31,8 @@ from core.instance_context import (
 from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.template_structured import (
     build_template_structured_payload,
+    build_template_sent_preview,
+    extract_template_sent_metadata,
     extract_structured_csv,
 )
 from core.template_button_url import (
@@ -1160,6 +1162,9 @@ def register_template_routes(app, state) -> None:
                 pass
 
             now_iso = datetime.now(timezone.utc).isoformat()
+            template_preview = build_template_sent_preview(
+                extract_template_sent_metadata(structured_payload, rendered or wa_template)
+            )
             whatsapp_window = {
                 "status": "pending_reply",
                 "remaining_hours": 0.0,
@@ -1246,7 +1251,7 @@ def register_template_routes(app, state) -> None:
                             "checkin": checkin,
                             "checkout": checkout,
                             "channel": "whatsapp",
-                            "last_message": rendered or wa_template,
+                            "last_message": template_preview or rendered or wa_template,
                             "last_message_at": now_iso,
                             "avatar": None,
                             "client_name": reservation_client_name,
@@ -1291,6 +1296,8 @@ def register_template_routes(app, state) -> None:
                     "channel": "whatsapp",
                     "sender": "bookai",
                     "message": rendered or wa_template,
+                    "content": template_preview or rendered or wa_template,
+                    "preview": template_preview,
                     "created_at": now_iso,
                     "template": wa_template,
                     "template_language": language,
@@ -1313,7 +1320,7 @@ def register_template_routes(app, state) -> None:
                     "chat_id": chat_id,
                     "property_id": property_id,
                     "channel": "whatsapp",
-                    "last_message": rendered or wa_template,
+                    "last_message": template_preview or rendered or wa_template,
                     "last_message_at": now_iso,
                     "whatsapp_window": whatsapp_window,
                     **_pending_snapshot_for_chat(
@@ -1338,6 +1345,7 @@ def register_template_routes(app, state) -> None:
                 "instance_id": instance_id,
                 "language": language,
                 "button_base_url": button_base_url,
+                "preview": template_preview,
                 "structured_payload": structured_payload,
                 "structured_csv": structured_csv,
             }
