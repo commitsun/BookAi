@@ -1117,6 +1117,7 @@ def register_template_routes(app, state) -> None:
                 structured_payload = build_template_structured_payload(
                     template_code=template_def.code if template_def else template_code,
                     template_name=wa_template,
+                    template_label=template_def.description if template_def else None,
                     language=language,
                     parameters=payload.template.parameters or {},
                     reservation_locator=reservation_locator,

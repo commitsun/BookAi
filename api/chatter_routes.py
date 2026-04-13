@@ -5110,6 +5110,7 @@ def register_chatter_routes(app, state) -> None:
             structured_payload = build_template_structured_payload(
                 template_code=template_def.code if template_def else template_code,
                 template_name=template_name,
+                template_label=template_def.description if template_def else None,
                 language=language,
                 parameters=template_params_raw,
                 reservation_locator=reservation_locator,

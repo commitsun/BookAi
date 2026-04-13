@@ -94,10 +94,34 @@ def _infer_kind(template_code: str, template_name: str, trigger: Optional[str] =
     return "template"
 
 
+def _humanize_template_label(value: Any) -> Optional[str]:
+    text = _to_text(value)
+    if not text:
+        return None
+    slug = str(text).strip()
+    if not slug:
+        return None
+    if "_" not in slug and "-" not in slug:
+        return slug
+    normalized = re.sub(r"[-_]+", " ", slug).strip()
+    normalized = re.sub(r"\bv\d+\b", "", normalized, flags=re.IGNORECASE).strip()
+    normalized = re.sub(
+        r"\b(?:aldahotels?|bookai|roomdoo|whatsapp|template)\b",
+        "",
+        normalized,
+        flags=re.IGNORECASE,
+    ).strip()
+    normalized = re.sub(r"\s+", " ", normalized).strip()
+    if not normalized:
+        return None
+    return " ".join(part[:1].upper() + part[1:] for part in normalized.split(" "))
+
+
 def build_template_structured_payload(
     *,
     template_code: Optional[str],
     template_name: Optional[str],
+    template_label: Optional[str] = None,
     language: Optional[str],
     parameters: Dict[str, Any] | None,
     reservation_locator: Optional[str] = None,
@@ -115,6 +139,10 @@ def build_template_structured_payload(
     flat = _flat_params(parameters)
     tpl_code = _to_text(template_code) or _pick(flat, "template_code", "template")
     tpl_name = _to_text(template_name) or tpl_code
+    tpl_label = (
+        _to_text(template_label)
+        or _pick(flat, "template_label", "template_title", "template_description")
+    )
     kind = _infer_kind(tpl_code or "", tpl_name or "", trigger=trigger)
 
     data: Dict[str, str] = {"kind": kind}
@@ -122,6 +150,8 @@ def build_template_structured_payload(
         data["template_code"] = tpl_code
     if tpl_name and tpl_name != tpl_code:
         data["template_name"] = tpl_name
+    if tpl_label:
+        data["template_label"] = tpl_label
     if language:
         normalized_lang = str(language).strip().lower()
         if normalized_lang:
@@ -209,6 +239,7 @@ def build_template_structured_payload(
         "kind",
         "template_code",
         "template_name",
+        "template_label",
         "template_language",
         "reservation_code",
         "folio_id",
@@ -275,6 +306,10 @@ def extract_template_sent_metadata(
             or _to_text(payload.get("template_name"))
             or template_code
         )
+        template_label = (
+            _to_text(data.get("template_label"))
+            or _to_text(payload.get("template_label"))
+        )
         template_language = (
             _to_text(data.get("template_language"))
             or _to_text(payload.get("template_language"))
@@ -290,6 +325,8 @@ def extract_template_sent_metadata(
                 metadata["template_code"] = template_code
             if template_name:
                 metadata["template_name"] = template_name
+            if template_label:
+                metadata["template_label"] = template_label
             if template_language:
                 metadata["template_language"] = template_language.lower()
             return metadata
@@ -334,9 +371,15 @@ def build_template_sent_preview(
     if metadata is None:
         return None
     payload = metadata or {}
-    template_name = _to_text(payload.get("template_name")) or _to_text(payload.get("template_code"))
-    if template_name:
-        return f"{label}: {template_name}"
+    template_label = (
+        _to_text(payload.get("template_label"))
+        or _humanize_template_label(payload.get("template_name"))
+        or _humanize_template_label(payload.get("template_code"))
+        or _to_text(payload.get("template_name"))
+        or _to_text(payload.get("template_code"))
+    )
+    if template_label:
+        return f"{label}: {template_label}"
     clean_label = _to_text(label)
     return clean_label or None
 
