@@ -38,6 +38,7 @@ from core.offer_semantics import sync_guest_offer_state_from_sent_wa
 from core.language_manager import language_manager
 from core.template_structured import (
     build_template_structured_payload,
+    extract_template_sent_metadata,
     extract_structured_csv,
 )
 from core.template_button_url import (
@@ -1477,17 +1478,32 @@ def _resolve_last_template_sent_at(
     try:
         query = (
             supabase.table("chat_history")
-            .select("created_at")
+            .select("created_at, content, structured_payload")
             .eq("channel", str(channel or "whatsapp").strip() or "whatsapp")
             .eq("role", "bookai")
-            .like("content", "[TEMPLATE_SENT]%")
         )
         if property_id is not None:
             query = query.eq("property_id", property_id)
-        rows = query.or_(",".join(filters)).order("created_at", desc=True).limit(1).execute().data or []
-        return rows[0].get("created_at") if rows else None
+        rows = query.or_(",".join(filters)).order("created_at", desc=True).limit(1000).execute().data or []
+        for row in rows:
+            if extract_template_sent_metadata(row.get("structured_payload"), row.get("content")):
+                return row.get("created_at")
     except Exception:
-        return None
+        try:
+            query = (
+                supabase.table("chat_history")
+                .select("created_at, content")
+                .eq("channel", str(channel or "whatsapp").strip() or "whatsapp")
+                .eq("role", "bookai")
+                .like("content", "[TEMPLATE_SENT]%")
+            )
+            if property_id is not None:
+                query = query.eq("property_id", property_id)
+            rows = query.or_(",".join(filters)).order("created_at", desc=True).limit(1).execute().data or []
+            return rows[0].get("created_at") if rows else None
+        except Exception:
+            return None
+    return None
 
 
 def _resolve_whatsapp_window_for_chat(
@@ -2387,11 +2403,10 @@ def register_chatter_routes(app, state) -> None:
                 try:
                     template_query = (
                         supabase.table("chat_history")
-                        .select("conversation_id, original_chat_id, created_at, content")
+                        .select("conversation_id, original_chat_id, created_at, content, structured_payload")
                         .in_("conversation_id", conv_ids)
                         .eq("channel", channel)
                         .eq("role", "bookai")
-                        .like("content", "[TEMPLATE_SENT]%")
                     )
                     resp_template_rows: List[Dict[str, Any]] = []
                     if property_id is not None:
@@ -2399,20 +2414,19 @@ def register_chatter_routes(app, state) -> None:
                             template_query
                             .eq("property_id", property_id)
                             .order("created_at", desc=True)
-                            .limit(2000)
+                            .limit(4000)
                             .execute()
                         )
                         resp_template_rows = resp_with_property.data or []
                         if not resp_template_rows:
                             resp_without_property = (
                                 supabase.table("chat_history")
-                                .select("conversation_id, original_chat_id, created_at, content")
+                                .select("conversation_id, original_chat_id, created_at, content, structured_payload")
                                 .in_("conversation_id", conv_ids)
                                 .eq("channel", channel)
                                 .eq("role", "bookai")
-                                .like("content", "[TEMPLATE_SENT]%")
                                 .order("created_at", desc=True)
-                                .limit(2000)
+                                .limit(4000)
                                 .execute()
                             )
                             resp_template_rows = resp_without_property.data or []
@@ -2420,11 +2434,16 @@ def register_chatter_routes(app, state) -> None:
                         resp_without_property = (
                             template_query
                             .order("created_at", desc=True)
-                            .limit(2000)
+                            .limit(4000)
                             .execute()
                         )
                         resp_template_rows = resp_without_property.data or []
                     for row in resp_template_rows:
+                        if not extract_template_sent_metadata(
+                            row.get("structured_payload"),
+                            row.get("content"),
+                        ):
+                            continue
                         cid = str(row.get("conversation_id") or "").strip()
                         if not cid:
                             continue
@@ -2435,7 +2454,58 @@ def register_chatter_routes(app, state) -> None:
                         if cid not in last_template_sent_at_by_cid:
                             last_template_sent_at_by_cid[cid] = row.get("created_at")
                 except Exception as exc:
-                    log.warning("No se pudo cargar timestamps de plantilla whatsapp: %s", exc)
+                    try:
+                        template_query = (
+                            supabase.table("chat_history")
+                            .select("conversation_id, original_chat_id, created_at, content")
+                            .in_("conversation_id", conv_ids)
+                            .eq("channel", channel)
+                            .eq("role", "bookai")
+                            .like("content", "[TEMPLATE_SENT]%")
+                        )
+                        resp_template_rows = []
+                        if property_id is not None:
+                            resp_with_property = (
+                                template_query
+                                .eq("property_id", property_id)
+                                .order("created_at", desc=True)
+                                .limit(2000)
+                                .execute()
+                            )
+                            resp_template_rows = resp_with_property.data or []
+                            if not resp_template_rows:
+                                resp_without_property = (
+                                    supabase.table("chat_history")
+                                    .select("conversation_id, original_chat_id, created_at, content")
+                                    .in_("conversation_id", conv_ids)
+                                    .eq("channel", channel)
+                                    .eq("role", "bookai")
+                                    .like("content", "[TEMPLATE_SENT]%")
+                                    .order("created_at", desc=True)
+                                    .limit(2000)
+                                    .execute()
+                                )
+                                resp_template_rows = resp_without_property.data or []
+                        else:
+                            resp_without_property = (
+                                template_query
+                                .order("created_at", desc=True)
+                                .limit(2000)
+                                .execute()
+                            )
+                            resp_template_rows = resp_without_property.data or []
+                        for row in resp_template_rows:
+                            cid = str(row.get("conversation_id") or "").strip()
+                            if not cid:
+                                continue
+                            row_original = str(row.get("original_chat_id") or "").strip()
+                            expected_original = expected_original_by_cid.get(cid) or ""
+                            if expected_original and row_original and row_original != expected_original:
+                                continue
+                            if cid not in last_template_sent_at_by_cid:
+                                last_template_sent_at_by_cid[cid] = row.get("created_at")
+                    except Exception:
+                        log.warning("No se pudo cargar timestamps de plantilla whatsapp: %s", exc)
 
         items = []
         memory_manager = getattr(state, "memory_manager", None)
@@ -5029,25 +5099,15 @@ def register_chatter_routes(app, state) -> None:
                 cta_url=resolved_cta_url,
             )
             structured_csv = extract_structured_csv(structured_payload)
-            if rendered:
-                if property_id is not None:
-                    state.memory_manager.set_flag(chat_id, "property_id", property_id)
-                state.memory_manager.save(
-                    session_id,
-                    role="bookai",
-                    content=rendered,
-                    channel="whatsapp",
-                    original_chat_id=context_id or None,
-                    structured_payload=structured_payload,
-                )
             if property_id is not None:
                 state.memory_manager.set_flag(chat_id, "property_id", property_id)
             state.memory_manager.save(
                 session_id,
-                role="system",
-                content=f"[TEMPLATE_SENT] plantilla={template_name} lang={language}",
+                role="bookai",
+                content=rendered or template_name,
                 channel="whatsapp",
                 original_chat_id=context_id or None,
+                structured_payload=structured_payload,
             )
         except Exception as exc:
             log.warning("No se pudo registrar plantilla en memoria: %s", exc)

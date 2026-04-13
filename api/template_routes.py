@@ -1135,28 +1135,15 @@ def register_template_routes(app, state) -> None:
                     context_id or None,
                     chat_visible_before,
                 )
-                if rendered:
-                    for target in [chat_id, context_id] if context_id else [chat_id]:
-                        state.memory_manager.set_flag(target, "default_channel", "whatsapp")
-                    state.memory_manager.save(
-                        session_id,
-                        role="bookai",
-                        content=rendered,
-                        channel="whatsapp",
-                        original_chat_id=context_id or None,
-                        structured_payload=structured_payload,
-                    )
-                meta_excerpt = f"trigger={payload.meta.trigger}" if payload.meta else ""
-                source_tag = instance_id or payload.source.instance_url or property_code
+                for target in [chat_id, context_id] if context_id else [chat_id]:
+                    state.memory_manager.set_flag(target, "default_channel", "whatsapp")
                 state.memory_manager.save(
                     session_id,
-                    role="system",
-                    content=(
-                        f"[TEMPLATE_SENT] plantilla={wa_template} lang={language} instance={instance_id or ''} "
-                        f"origen={source_tag} {meta_excerpt}"
-                    ).strip(),
+                    role="bookai",
+                    content=rendered or wa_template,
                     channel="whatsapp",
                     original_chat_id=context_id or None,
+                    structured_payload=structured_payload,
                 )
             except Exception as exc:
                 log.warning("No se pudo registrar el envío en memoria: %s", exc)

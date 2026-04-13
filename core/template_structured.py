@@ -6,6 +6,15 @@ import json
 import re
 from typing import Any, Dict, Optional
 
+_TEMPLATE_SENT_EVENT = "template_sent"
+_TEMPLATE_STRUCTURED_KINDS = {
+    "template",
+    "reservation_confirmation",
+    "reservation_update",
+    "reservation_cancellation",
+    "pre_checkin",
+}
+
 
 def _norm_key(value: Any) -> str:
     return re.sub(r"[^a-z0-9_]+", "_", str(value or "").strip().lower()).strip("_")
@@ -229,12 +238,92 @@ def build_template_structured_payload(
         csv += ";"
 
     return {
+        "event": _TEMPLATE_SENT_EVENT,
         "kind": kind,
         "format": "kv_semicolon",
         "csv_delimiter": ";",
         "csv": csv,
         "data": data,
     }
+
+
+def _coerce_structured_payload(structured_payload: Any) -> Optional[Dict[str, Any]]:
+    if isinstance(structured_payload, dict):
+        return structured_payload
+    if isinstance(structured_payload, str):
+        try:
+            parsed = json.loads(structured_payload)
+        except Exception:
+            return None
+        if isinstance(parsed, dict):
+            return parsed
+    return None
+
+
+def extract_template_sent_metadata(
+    structured_payload: Any,
+    content: Any = None,
+) -> Optional[Dict[str, str]]:
+    payload = _coerce_structured_payload(structured_payload)
+    if payload:
+        data = payload.get("data") if isinstance(payload.get("data"), dict) else {}
+        event = (_to_text(payload.get("event")) or _to_text(data.get("event")) or "").lower()
+        kind = (_to_text(payload.get("kind")) or _to_text(data.get("kind")) or "").lower()
+        template_code = _to_text(data.get("template_code")) or _to_text(payload.get("template_code"))
+        template_name = (
+            _to_text(data.get("template_name"))
+            or _to_text(payload.get("template_name"))
+            or template_code
+        )
+        template_language = (
+            _to_text(data.get("template_language"))
+            or _to_text(payload.get("template_language"))
+        )
+        looks_like_template = bool(template_code or template_name) and (
+            event == _TEMPLATE_SENT_EVENT
+            or kind in _TEMPLATE_STRUCTURED_KINDS
+            or bool(template_language)
+        )
+        if looks_like_template:
+            metadata: Dict[str, str] = {"event": _TEMPLATE_SENT_EVENT}
+            if template_code:
+                metadata["template_code"] = template_code
+            if template_name:
+                metadata["template_name"] = template_name
+            if template_language:
+                metadata["template_language"] = template_language.lower()
+            return metadata
+
+    raw = str(content or "").strip()
+    if not raw.lower().startswith("[template_sent]"):
+        return None
+
+    metadata = {"event": _TEMPLATE_SENT_EVENT}
+    for key, value in re.findall(r"([a-zA-Z_]+)=([^\s]+)", raw):
+        normalized_key = str(key or "").strip().lower()
+        normalized_value = str(value or "").strip()
+        if not normalized_value:
+            continue
+        if normalized_key in {"plantilla", "template"}:
+            metadata["template_name"] = normalized_value
+        elif normalized_key == "lang":
+            metadata["template_language"] = normalized_value.lower()
+        elif normalized_key == "template_code":
+            metadata["template_code"] = normalized_value
+    return metadata
+
+
+def build_template_sent_marker(metadata: Dict[str, Any] | None) -> str:
+    payload = metadata or {}
+    template_name = _to_text(payload.get("template_name")) or _to_text(payload.get("template_code"))
+    template_language = _to_text(payload.get("template_language"))
+
+    parts = ["[TEMPLATE_SENT]"]
+    if template_name:
+        parts.append(f"plantilla={template_name}")
+    if template_language:
+        parts.append(f"lang={template_language.lower()}")
+    return " ".join(parts)
 
 
 def extract_structured_csv(structured_payload: Any) -> Optional[str]:

@@ -12,6 +12,10 @@ from core.db import (
     get_last_property_id_for_original_chat,
     upsert_chat_reservation,
 )
+from core.template_structured import (
+    build_template_sent_marker,
+    extract_template_sent_metadata,
+)
 
 log = logging.getLogger("MemoryManager")
 
@@ -666,18 +670,28 @@ class MemoryManager:
             for msg in raw_messages:
                 role = msg.get("role", "assistant")
                 content = msg.get("content", "")
-                if not content:
+                template_meta = extract_template_sent_metadata(
+                    msg.get("structured_payload"),
+                    content,
+                )
+                template_marker = build_template_sent_marker(template_meta) if template_meta else None
+                content_text = str(content or "").strip()
+                if not content_text:
+                    if template_marker:
+                        messages.append(AIMessage(content=template_marker))
                     continue
 
                 if role == "guest":
-                    messages.append(HumanMessage(content=content))
+                    messages.append(HumanMessage(content=content_text))
                 elif role == "user":
                     # Mensajes del hotel/propietario: mantener rol user pero no como huésped.
-                    messages.append(SystemMessage(content=f"Hotel: {content}"))
+                    messages.append(SystemMessage(content=f"Hotel: {content_text}"))
                 elif role == "system":
-                    messages.append(SystemMessage(content=content))
+                    messages.append(SystemMessage(content=content_text))
                 else:
-                    messages.append(AIMessage(content=content))
+                    messages.append(AIMessage(content=content_text))
+                if template_marker and not content_text.lower().startswith("[template_sent]"):
+                    messages.append(AIMessage(content=template_marker))
 
             log.debug(
                 f"🧩 get_memory_as_messages → {len(messages)} mensajes convertidos para {conversation_id}"
