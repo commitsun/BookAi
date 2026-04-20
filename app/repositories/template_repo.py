@@ -51,6 +51,7 @@ async def create_template(
             header_text=t.get("header_text"),
             footer_text=t.get("footer_text"),
             button_texts=t.get("button_texts"),
+            parameters=t.get("parameters"),
         )
         db.add(trans)
         await db.flush()
@@ -95,11 +96,13 @@ async def upsert_translations(
                 trans.footer_text = t["footer_text"]
             if "button_texts" in t:
                 trans.button_texts = t["button_texts"]
+            if "parameters" in t:
+                trans.parameters = t["parameters"]
             await db.flush()
         else:
             trans = WhatsAppTemplateTranslation(
                 template_id=template.id,
-                whatsapp_name=t["whatsapp_name"],
+                whatsapp_name=t.get("whatsapp_name", ""),
                 language=lang,
                 components=t.get("components", []),
                 active=t.get("active", True),
@@ -107,6 +110,7 @@ async def upsert_translations(
                 header_text=t.get("header_text"),
                 footer_text=t.get("footer_text"),
                 button_texts=t.get("button_texts"),
+                parameters=t.get("parameters"),
             )
             db.add(trans)
             await db.flush()

@@ -70,11 +70,15 @@ class WhatsAppTemplateTranslation(Base):
         String(20), nullable=False, default="draft",
     )  # draft | pending | approved | rejected | disabled
 
-    # Template text with placeholders (for Meta creation, different from components)
+    # Template text with named placeholders (e.g. "Hola {{ guest_name }}")
     header_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     button_texts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
+    # Ordered parameter names — defines the name→position mapping for Meta
+    # e.g. ["guest_name", "hotel_name", "checkin"] → {{1}}, {{2}}, {{3}}
+    parameters: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
 
