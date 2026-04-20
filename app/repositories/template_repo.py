@@ -31,12 +31,12 @@ async def create_template(
     instance_id: int,
     code: str,
     translations: list[dict],
+    category: str = "UTILITY",
 ) -> WhatsAppTemplate:
-    """Create a template with translations and property bindings.
-
-    Each item in translations: {whatsapp_name, language, components, property_ids}
-    """
-    template = WhatsAppTemplate(instance_id=instance_id, code=code)
+    """Create a template with translations and property bindings."""
+    template = WhatsAppTemplate(
+        instance_id=instance_id, code=code, category=category,
+    )
     db.add(template)
     await db.flush()
 
@@ -47,6 +47,10 @@ async def create_template(
             language=t.get("language", "es"),
             components=t.get("components", []),
             active=t.get("active", True),
+            body_text=t.get("body_text"),
+            header_text=t.get("header_text"),
+            footer_text=t.get("footer_text"),
+            button_texts=t.get("button_texts"),
         )
         db.add(trans)
         await db.flush()
@@ -83,6 +87,14 @@ async def upsert_translations(
                 trans.components = t["components"]
             if "active" in t:
                 trans.active = t["active"]
+            if "body_text" in t:
+                trans.body_text = t["body_text"]
+            if "header_text" in t:
+                trans.header_text = t["header_text"]
+            if "footer_text" in t:
+                trans.footer_text = t["footer_text"]
+            if "button_texts" in t:
+                trans.button_texts = t["button_texts"]
             await db.flush()
         else:
             trans = WhatsAppTemplateTranslation(
@@ -91,6 +103,10 @@ async def upsert_translations(
                 language=lang,
                 components=t.get("components", []),
                 active=t.get("active", True),
+                body_text=t.get("body_text"),
+                header_text=t.get("header_text"),
+                footer_text=t.get("footer_text"),
+                button_texts=t.get("button_texts"),
             )
             db.add(trans)
             await db.flush()

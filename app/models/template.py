@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, UniqueConstraint, func
+from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -25,6 +25,9 @@ class WhatsAppTemplate(Base):
         ForeignKey("instances.id"), nullable=False,
     )
     code: Mapped[str] = mapped_column(String(255), nullable=False)
+    category: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="UTILITY",
+    )  # UTILITY | MARKETING | AUTHENTICATION
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
 
     instance: Mapped["Instance"] = relationship()
@@ -60,6 +63,19 @@ class WhatsAppTemplateTranslation(Base):
     language: Mapped[str] = mapped_column(String(10), nullable=False, default="es")
     components: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Meta Cloud API state
+    meta_template_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meta_status: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="draft",
+    )  # draft | pending | approved | rejected | disabled
+
+    # Template text with placeholders (for Meta creation, different from components)
+    header_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    footer_text: Mapped[str | None] = mapped_column(Text, nullable=True)
+    button_texts: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
 
     template: Mapped["WhatsAppTemplate"] = relationship(back_populates="translations")

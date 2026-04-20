@@ -89,6 +89,16 @@ async def process_send_template(
             ),
         )
 
+    if translation.meta_status not in ("approved", "draft"):
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"Template '{request.template.code}' ({request.template.language}) "
+                f"is not approved by Meta (status: {translation.meta_status}). "
+                "Wait for approval before sending."
+            ),
+        )
+
     # --- Resolve ChannelEndpoint ---
     channel_endpoint = await instance_repo.find_channel_endpoint_by_id(
         db, prop.channel_endpoint_id
