@@ -43,6 +43,7 @@ async def try_ai_response(
     sio: socketio.AsyncServer,
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
+    tracker=None,  # UsageTracker | None
 ) -> None:
     """Generate and send an AI response if the property has AI enabled.
 
@@ -53,7 +54,7 @@ async def try_ai_response(
         await _generate_and_send(
             conversation_id, message_content, attention_session_id,
             routed_property_id, channel_endpoint, contact,
-            db, wa_client, sio, sdk_registry, llm_client,
+            db, wa_client, sio, sdk_registry, llm_client, tracker,
         )
     except Exception as exc:
         log.error(
@@ -74,6 +75,7 @@ async def _generate_and_send(
     sio: socketio.AsyncServer,
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
+    tracker=None,
 ) -> None:
     # --- Load property and check ai_enabled ---
     from sqlalchemy import select
@@ -148,39 +150,49 @@ async def _generate_and_send(
         log.error("LLM call failed for agent=%s: %s", agent.technical_name, exc)
         return
 
-    log.info(
-        "AI response generated: agent=%s model=%s tokens=%d/%d",
-        agent.technical_name, response.model,
-        response.tokens_in, response.tokens_out,
-    )
-
-    # --- Calculate cost and log usage to Odoo ---
-    cost_usd: float | None = None
+    # --- Track LLM cost ---
+    llm_cost = 0.0
     try:
         from litellm import cost_per_token
-        prompt_cost, completion_cost = cost_per_token(
+        p, c = cost_per_token(
             response.model,
             prompt_tokens=response.tokens_in,
             completion_tokens=response.tokens_out,
         )
-        cost_usd = prompt_cost + completion_cost
+        llm_cost = p + c
     except Exception:
-        pass  # pricing not available for this model
+        pass
 
+    if tracker:
+        tracker.add_llm(response.tokens_in, response.tokens_out, llm_cost, response.model)
+
+    log.info(
+        "AI response generated: agent=%s model=%s tokens=%d/%d cost=$%.6f",
+        agent.technical_name, response.model,
+        response.tokens_in, response.tokens_out, llm_cost,
+    )
+
+    # --- Log unified usage to Odoo ---
     try:
         from roomdoo_sdk.models import UsageRecord
         roomdoo_client = sdk_registry.get_client(instance)
-        if roomdoo_client:
+        if roomdoo_client and tracker:
+            log.info("Usage: %s", tracker.summary())
             await roomdoo_client.usage.log(UsageRecord(
                 pms_property_id=routed_property_id,
                 agent_id=agent.id,
                 llm_account_id=agent.llm_account.id,
-                tokens_in=response.tokens_in,
-                tokens_out=response.tokens_out,
-                model=response.model,
+                tokens_in=tracker.tokens_in,
+                tokens_out=tracker.tokens_out,
+                model=tracker.llm_model or response.model,
                 conversation_id=str(conversation_id),
                 status="success",
-                cost_usd=cost_usd,
+                cost_usd=tracker.llm_cost_usd,
+                whisper_seconds=tracker.whisper_seconds or None,
+                whisper_cost_usd=tracker.whisper_cost_usd or None,
+                vision_calls=tracker.vision_calls or None,
+                vision_cost_usd=tracker.vision_cost_usd or None,
+                total_cost_usd=tracker.total_cost_usd,
             ))
     except Exception as exc:
         log.warning("Failed to log usage to Odoo: %s", exc)

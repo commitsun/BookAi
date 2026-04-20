@@ -20,6 +20,7 @@ Also handles delivery status updates (delivered / read webhooks from Meta).
 import asyncio
 import logging
 
+import httpx
 import socketio
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -69,7 +70,11 @@ def _extract_text(msg: WebhookMessage) -> str:
             return inter.button_reply.title
         if inter.list_reply:
             return inter.list_reply.title
-    # Audio, image, document, etc. are not processed in Phase 1
+    # Media messages: use caption if available, otherwise type placeholder
+    if msg.type in ("image", "audio", "video", "document"):
+        media = msg.media
+        caption = media.caption if media else None
+        return caption or f"[{msg.type}]"
     return f"[{msg.type}]"
 
 
@@ -230,6 +235,17 @@ async def _process_message(
 
     await db.commit()
 
+    # --- Process media (download, transcribe, describe) ---
+    from app.services.usage_tracker import UsageTracker
+    tracker = UsageTracker(conversation_id=conversation.id)
+
+    if wa_msg.type in ("image", "audio", "video", "document") and wa_msg.media:
+        await _process_media(
+            wa_msg, msg, channel_endpoint, db,
+            wa_client._http if hasattr(wa_client, '_http') else None,
+            tracker=tracker,
+        )
+
     # --- Mark read (fire-and-forget) ---
     asyncio.create_task(wa_client.mark_read(wa_msg.id, channel_endpoint))
 
@@ -275,7 +291,7 @@ async def _process_message(
     if routed_property_id is not None and sdk_registry and llm_client:
         await try_ai_response(
             conversation_id=conversation.id,
-            message_content=content,
+            message_content=msg.content or content,
             attention_session_id=attention_session_id,
             routed_property_id=routed_property_id,
             channel_endpoint=channel_endpoint,
@@ -285,7 +301,83 @@ async def _process_message(
             sio=sio,
             sdk_registry=sdk_registry,
             llm_client=llm_client,
+            tracker=tracker,
         )
+
+
+async def _process_media(
+    wa_msg: WebhookMessage,
+    msg,  # Message ORM object
+    channel_endpoint,
+    db: AsyncSession,
+    http: httpx.AsyncClient | None,
+    tracker=None,  # UsageTracker | None
+) -> None:
+    """Download, store, and AI-process media attachments."""
+    from app.core.config import settings
+    from app.models.message import MessageMedia
+    from app.services.media_service import download_and_store, MediaDownloadError
+    from app.services.media_storage import LocalStorage
+
+    media = wa_msg.media
+    if not media or not media.id or not http:
+        return
+
+    storage = LocalStorage("/app/media")
+
+    try:
+        key, size, mime = await download_and_store(
+            http, channel_endpoint.access_token, media.id,
+            wa_msg.type, storage, media.mime_type, media.filename,
+        )
+    except MediaDownloadError as exc:
+        log.warning("Media download failed: %s", exc)
+        return
+
+    media_record = MessageMedia(
+        message_id=msg.id,
+        media_type=wa_msg.type,
+        mime_type=mime,
+        filename=media.filename,
+        size_bytes=size,
+        wa_media_id=media.id,
+        storage_backend="local",
+        storage_key=key,
+    )
+    db.add(media_record)
+    await db.flush()
+
+    # AI processing: transcription for audio, vision for images
+    file_path = f"/app/media/{key}"
+
+    api_key = settings.openai_api_key
+    if not api_key:
+        log.debug("No openai_api_key configured — skipping AI media processing")
+        await db.commit()
+        return
+
+    if wa_msg.type == "audio":
+        from app.services.transcription_service import transcribe_audio
+        text, duration = await transcribe_audio(http, api_key, file_path)
+        if text:
+            media_record.transcription = text
+            msg.content = f"[audio transcrito] {text}"
+        if tracker and duration > 0:
+            tracker.add_whisper(duration)
+
+    elif wa_msg.type == "image":
+        from app.services.vision_service import describe_image
+        desc, v_in, v_out, v_cost = await describe_image(
+            file_path, api_key=api_key, model="gpt-4o-mini",
+        )
+        if desc:
+            media_record.vision_description = desc
+            caption = media.caption or ""
+            msg.content = f"[imagen: {desc}]" + (f" {caption}" if caption else "")
+        if tracker and (v_in or v_out):
+            tracker.add_vision(v_in, v_out, v_cost)
+
+    await db.commit()
 
 
 async def _process_status_update(
