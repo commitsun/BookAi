@@ -23,6 +23,7 @@ services:
       - .env
     volumes:
       - .:/app
+      - ../roomdoo-sdk:/roomdoo-sdk
     ports:
       - "8000:8000"
     depends_on:

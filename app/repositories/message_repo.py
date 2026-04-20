@@ -56,6 +56,24 @@ async def create_note(
     )
 
 
+async def find_recent_by_conversation(
+    db: AsyncSession,
+    conversation_id: int,
+    limit: int = 20,
+) -> list[Message]:
+    """Return the last *limit* regular messages (excluding notes), newest first."""
+    result = await db.execute(
+        select(Message)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.kind == MessageKind.message,
+        )
+        .order_by(Message.created_at.desc())
+        .limit(limit)
+    )
+    return list(result.scalars().all())
+
+
 async def update_delivery(
     db: AsyncSession,
     message: Message,
