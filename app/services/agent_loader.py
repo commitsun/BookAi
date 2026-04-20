@@ -44,6 +44,9 @@ class AgentLoader:
                 return cached
         return None
 
+    def remove(self, technical_name: str) -> None:
+        self._cache.pop(technical_name, None)
+
     def list_for_caller_type(self, caller_type: str) -> list[CachedAgent]:
         return [
             c for c in self._cache.values()

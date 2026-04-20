@@ -7,6 +7,7 @@ from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
 from app.api.v1 import (
+    ai_webhooks,
     chatter,
     conversations,
     email,
@@ -120,6 +121,7 @@ app.include_router(property_webhooks.api_router, prefix="/api/v1")
 app.include_router(webhooks.router)
 app.include_router(email_webhooks.router)
 app.include_router(property_webhooks.webhook_router)
+app.include_router(ai_webhooks.router)
 app.mount("/media", StaticFiles(directory="/app/media"), name="media")
 app.mount("/dev-ui", StaticFiles(directory="dev_ui", html=True), name="dev-ui")
 

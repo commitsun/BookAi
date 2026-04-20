@@ -16,5 +16,8 @@ class Settings(BaseSettings):
     # OpenAI API key for system-level services (Whisper transcription, vision)
     openai_api_key: str | None = None
 
+    # Ollama URL for sensitive_data agents (local LLM)
+    ollama_url: str | None = None
+
 
 settings = Settings()
