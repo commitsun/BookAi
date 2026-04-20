@@ -70,18 +70,22 @@ def _build_system_text(
     kb_context: str,
     property_name: str,
 ) -> str:
-    """Apply template substitution to produce the final system prompt."""
-    if agent.context_template and "{kb_context}" in agent.context_template:
-        text = agent.context_template.replace("{kb_context}", kb_context)
-    elif kb_context:
-        text = (
-            f"{agent.system_prompt}\n\n"
-            f"## Información relevante\n{kb_context}"
-        )
-    else:
-        text = agent.system_prompt
+    """Apply template substitution to produce the final system prompt.
 
-    # Substitute remaining variables in the final text
+    The system_prompt is always the base. The context_template (if present)
+    formats the KB block, which is appended after the system prompt.
+    """
+    base = agent.system_prompt or ""
+
+    if agent.context_template and "{kb_context}" in agent.context_template:
+        kb_block = agent.context_template.replace("{kb_context}", kb_context)
+    elif kb_context:
+        kb_block = f"## Información relevante\n{kb_context}"
+    else:
+        kb_block = ""
+
+    text = f"{base}\n\n{kb_block}".strip() if kb_block else base
+
     text = text.replace("{pms_property_name}", property_name)
     if "{kb_context}" in text:
         text = text.replace("{kb_context}", kb_context)
