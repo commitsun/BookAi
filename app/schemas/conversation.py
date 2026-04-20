@@ -51,6 +51,13 @@ class ConversationListItem(BaseModel):
             "addition to) the numeric unread badge."
         ),
     )
+    ai_enabled: bool | None = Field(
+        default=None,
+        description=(
+            "Whether AI responses are active for this conversation's session. "
+            "None if no active session exists. Can be toggled via PATCH."
+        ),
+    )
 
 
 class ConversationsListResponse(BaseModel):

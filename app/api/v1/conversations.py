@@ -26,7 +26,7 @@ from app.models.contact import Contact
 from app.models.folio import Folio, SessionFolio
 from app.models.instance import Instance
 from app.models.message import Message, MessageKind
-from app.models.session import AttentionSession
+from app.models.session import AttentionSession, SessionStatus
 from app.models.channel import ChannelEndpoint
 from app.repositories import conversation_repo, instance_repo, message_translation_repo, session_repo
 from app.realtime.events import EVENT_CONVERSATION_UPDATED, build_conversation_payload
@@ -607,6 +607,70 @@ async def transfer_conversation(
 
 
 # ---------------------------------------------------------------------------
+# PATCH /conversations/{conversation_id}/ai
+# ---------------------------------------------------------------------------
+
+
+@router.patch(
+    "/{conversation_id}/ai",
+    summary="Toggle AI responses for this conversation's active session",
+    description=(
+        "Enable or disable AI-generated responses for the active session "
+        "of this conversation. Only works if the property has "
+        "`bookai_mode = 'ai'`. Returns the new state."
+    ),
+    responses={
+        401: {"description": "Missing or invalid Bearer token"},
+        404: {"description": "No active session found for this conversation"},
+        409: {"description": "Property does not have AI enabled"},
+    },
+)
+async def toggle_conversation_ai(
+    conversation_id: int,
+    property_id: int = Query(..., description="Property ID"),
+    ai_enabled: bool = Query(..., description="New AI state"),
+    instance: Instance = Depends(get_instance),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    from sqlalchemy import and_
+    result = await db.execute(
+        select(AttentionSession)
+        .options(selectinload(AttentionSession.property))
+        .where(and_(
+            AttentionSession.conversation_id == conversation_id,
+            AttentionSession.property_id == property_id,
+            AttentionSession.status == SessionStatus.active,
+        ))
+    )
+    session = result.scalar_one_or_none()
+    if session is None:
+        raise HTTPException(
+            status_code=http_status.HTTP_404_NOT_FOUND,
+            detail="No active session for this conversation and property",
+        )
+
+    # Check property allows AI
+    if ai_enabled and session.property and not session.property.ai_enabled:
+        raise HTTPException(
+            status_code=http_status.HTTP_409_CONFLICT,
+            detail=(
+                f"Property '{session.property.name}' has "
+                f"bookai_mode='{session.property.bookai_mode}'. "
+                "AI cannot be enabled for this conversation."
+            ),
+        )
+
+    session.ai_enabled = ai_enabled
+    await db.commit()
+
+    return {
+        "conversation_id": conversation_id,
+        "session_id": session.id,
+        "ai_enabled": session.ai_enabled,
+    }
+
+
+# ---------------------------------------------------------------------------
 # GET /conversations/{conversation_id}/channels
 # ---------------------------------------------------------------------------
 
@@ -715,6 +779,25 @@ async def _build_items_with_last_message(
         db, conversation_ids, property_id
     )
 
+    # Load ai_enabled from active sessions for the requesting property
+    session_ai: dict[int, bool | None] = {}
+    if conversation_ids and property_id:
+        from sqlalchemy import and_
+        sess_result = await db.execute(
+            select(
+                AttentionSession.conversation_id,
+                AttentionSession.ai_enabled,
+            ).where(
+                and_(
+                    AttentionSession.conversation_id.in_(conversation_ids),
+                    AttentionSession.property_id == property_id,
+                    AttentionSession.status == SessionStatus.active,
+                )
+            )
+        )
+        for row in sess_result.all():
+            session_ai[row.conversation_id] = row.ai_enabled
+
     items: list[ConversationListItem] = []
     for conv in conversations:
         contact = conv.contact
@@ -745,6 +828,7 @@ async def _build_items_with_last_message(
                 ) if last_msg else None,
                 unread_count=unread_counts.get(conv.id, 0),
                 needs_attention=needs_attention.get(conv.id, False),
+                ai_enabled=session_ai.get(conv.id),
             )
         )
     return items

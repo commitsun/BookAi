@@ -86,6 +86,12 @@ async def _generate_and_send(
     if not prop or not prop.ai_enabled:
         return
 
+    # --- Check session-level AI toggle ---
+    from app.models.session import AttentionSession
+    session = await db.get(AttentionSession, attention_session_id)
+    if session and not session.ai_enabled:
+        return
+
     instance: Instance = prop.instance
 
     # --- Load agents from Odoo via SDK registry ---

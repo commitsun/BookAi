@@ -219,6 +219,18 @@
     flex-shrink: 0;
   }
   .btn-transfer:hover { background: #e5e7eb; }
+  .btn-ai {
+    padding: 5px 12px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 12px;
+    flex-shrink: 0;
+    transition: background 0.15s, border-color 0.15s;
+  }
+  .btn-ai.on { background: #dcfce7; border-color: #22c55e; color: #15803d; }
+  .btn-ai.off { background: #fee2e2; border-color: #ef4444; color: #991b1b; }
+  .btn-ai.na { background: #f3f4f6; color: #9ca3af; cursor: default; }
 
   /* Transfer modal */
   .modal-backdrop {
@@ -469,6 +481,7 @@ let selectedLang = ""         // BCP-47 or "" for original
 let availableChannels = []    // [{id, channel, display, external_code}]
 let selectedChannel = null    // currently selected channel endpoint object
 let lastEmailSubject = ""     // subject of the most recent email in active conv (for Re: pre-fill)
+let convAiEnabled = null      // null | true | false — AI state from active session
 
 // ─────────────────────────────────────────────
 // DOM refs
@@ -668,6 +681,7 @@ async function openConversation(conv) {
     phone_code: conv.contact?.phone_code,
     name: conv.contact?.display_name || conv.contact?.phone_code || "—"
   }
+  convAiEnabled = conv.ai_enabled ?? null
 
   // Mark active in list
   document.querySelectorAll(".conv-item").forEach(el => {
@@ -681,7 +695,10 @@ async function openConversation(conv) {
         ${esc(activeConv.name)}
         <small>${esc(activeConv.phone_code || "")}</small>
       </div>
-      <button class="btn-transfer" onclick="openTransferModal()">↪ Transferir</button>
+      <div style="display:flex;gap:6px;align-items:center">
+        <button id="btn-ai-toggle" class="btn-ai na" onclick="toggleAi()">IA: —</button>
+        <button class="btn-transfer" onclick="openTransferModal()">↪ Transferir</button>
+      </div>
     </div>
     <div id="messages"></div>
     <div id="composer">
@@ -734,6 +751,41 @@ async function openConversation(conv) {
   }
 
   renderChannelBar()
+  renderAiButton()
+}
+
+function renderAiButton() {
+  const btn = document.getElementById("btn-ai-toggle")
+  if (!btn) return
+  if (convAiEnabled === null) {
+    btn.className = "btn-ai na"
+    btn.textContent = "IA: —"
+  } else if (convAiEnabled) {
+    btn.className = "btn-ai on"
+    btn.textContent = "IA: ON"
+  } else {
+    btn.className = "btn-ai off"
+    btn.textContent = "IA: OFF"
+  }
+}
+
+async function toggleAi() {
+  if (!activeConv || convAiEnabled === null) return
+  const newState = !convAiEnabled
+  const btn = document.getElementById("btn-ai-toggle")
+  if (btn) btn.disabled = true
+  try {
+    const data = await apiFetch(
+      `/api/v1/conversations/${activeConv.id}/ai?property_id=${propertyId}&ai_enabled=${newState}`,
+      { method: "PATCH" }
+    )
+    convAiEnabled = data.ai_enabled
+    renderAiButton()
+  } catch (e) {
+    alert("Error al cambiar IA: " + e.message)
+  } finally {
+    if (btn) btn.disabled = false
+  }
 }
 
 function renderChannelBar() {
