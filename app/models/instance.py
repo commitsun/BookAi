@@ -20,6 +20,18 @@ class Instance(Base):
     bookai_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
     default_language: Mapped[str] = mapped_column(String(5), nullable=False, default="es")
+
+    # Roomdoo SDK connection (instance_url is reused as Odoo base URL)
+    roomdoo_db: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    roomdoo_username: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    roomdoo_password: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # Router LLM credentials (used by AgentSelector to pick the right agent)
+    router_llm_provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    router_llm_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+    router_llm_api_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
+    router_llm_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         default=func.now(), onupdate=func.now(), nullable=False
@@ -43,6 +55,8 @@ class Property(Base):
     channel_endpoint_id: Mapped[int | None] = mapped_column(
         ForeignKey("channel_endpoints.id"), nullable=True
     )
+    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         default=func.now(), onupdate=func.now(), nullable=False

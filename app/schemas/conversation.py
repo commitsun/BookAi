@@ -23,7 +23,7 @@ class ContactSummary(BaseModel):
 class LastMessageSummary(BaseModel):
     id: int
     direction: Literal["inbound", "outbound"]
-    sender: Literal["guest", "agent", "system"]
+    sender: Literal["guest", "agent", "system", "ai"]
     content: str | None
     created_at: str
 
@@ -66,7 +66,7 @@ class MessageOut(BaseModel):
     channel: str | None = None
     kind: Literal["message", "note"] = "message"
     direction: Literal["inbound", "outbound"]
-    sender: Literal["guest", "agent", "system"]
+    sender: Literal["guest", "agent", "system", "ai"]
     content: str | None = Field(
         description=(
             "Text in the requested language (original or translated)."
