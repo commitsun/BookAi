@@ -64,6 +64,13 @@ class InstanceSDKRegistry:
         self._loaders[instance.id] = loader
         return loader
 
+    def evict(self, instance_id: int) -> None:
+        """Remove cached client and loader for an instance (e.g. after credential change)."""
+        client = self._clients.pop(instance_id, None)
+        self._loaders.pop(instance_id, None)
+        if client:
+            log.info("Evicted SDK client for instance %d", instance_id)
+
     # -- Lifecycle -----------------------------------------------------------
 
     async def close_all(self) -> None:

@@ -164,34 +164,47 @@ async def sync_properties(
 # ── Setup: full instance initialization ──────────────────────────────
 
 
+class SetupPayload(BaseModel):
+    odoo_url: str
+    odoo_db: str
+    odoo_username: str
+    odoo_api_key: str
+
+
 @api_router.post(
     "/setup",
     summary="Full instance setup — called by Odoo after module install",
     description=(
         "Odoo calls this endpoint after the pms_bookai module is installed "
-        "and configured. BookAI verifies the SDK connection, syncs all "
-        "properties, and pre-loads AI agents into cache.\n\n"
-        "Prerequisites: the instance must already exist in BookAI with "
-        "valid SDK connection fields (instance_url, roomdoo_db, "
-        "roomdoo_username, roomdoo_password)."
+        "and configured. Receives Odoo connection credentials, stores them, "
+        "verifies the SDK connection, syncs all properties, and pre-loads "
+        "AI agents into cache."
     ),
 )
 async def instance_setup(
+    body: SetupPayload,
     instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
     sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
 ) -> dict:
     steps: list[dict] = []
 
+    # 0. Store Odoo credentials on the instance
+    instance.instance_url = body.odoo_url
+    instance.roomdoo_db = body.odoo_db
+    instance.roomdoo_username = body.odoo_username
+    instance.roomdoo_password = body.odoo_api_key
+    await db.flush()
+
+    # Evict any cached client with old credentials
+    sdk_registry.evict(instance.id)
+
     # 1. Verify SDK connection
     client = sdk_registry.get_client(instance)
     if client is None:
         return {
             "status": "error",
-            "detail": (
-                "Instance has no SDK configuration. "
-                "Set roomdoo_db, roomdoo_username, roomdoo_password."
-            ),
+            "detail": "Failed to create SDK client with provided credentials.",
             "steps": [],
         }
 
@@ -204,6 +217,9 @@ async def instance_setup(
             "detail": f"SDK connection failed: {exc}",
             "steps": [{"step": "sdk_connection", "status": "error", "detail": str(exc)}],
         }
+
+    # Credentials verified — persist them
+    await db.commit()
 
     # 2. Sync properties
     try:

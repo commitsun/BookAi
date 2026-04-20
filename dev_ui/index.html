@@ -722,12 +722,17 @@ async function openConversation(conv) {
   // Mark as read
   markConversationRead(conv.id)
 
-  // Load messages and channels in parallel
+  // Load messages, channels, and fresh inbox data in parallel
   const langParam = selectedLang ? `&language=${selectedLang}` : ""
-  const [msgData, chData] = await Promise.all([
+  const [msgData, chData, inboxData] = await Promise.all([
     apiFetch(`/api/v1/conversations/${conv.id}/messages?limit=100&property_id=${propertyId}${langParam}`),
     apiFetch(`/api/v1/conversations/${conv.id}/channels?property_id=${propertyId}`).catch(() => ({ channels: [] })),
+    apiFetch(`/api/v1/conversations/?property_id=${propertyId}`).catch(() => ({ conversations: [] })),
   ])
+
+  // Refresh ai_enabled from fresh inbox data
+  const freshConv = (inboxData.conversations || []).find(c => c.id === conv.id)
+  if (freshConv) convAiEnabled = freshConv.ai_enabled ?? null
 
   // Render messages
   const msgs = document.getElementById("messages")
