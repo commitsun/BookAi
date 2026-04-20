@@ -12,6 +12,7 @@ from app.api.v1 import (
     email,
     email_webhooks,
     folios,
+    property_webhooks,
     templates,
     webhooks,
 )
@@ -113,8 +114,10 @@ app.include_router(chatter.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(folios.router, prefix="/api/v1")
 app.include_router(email.router, prefix="/api/v1")
+app.include_router(property_webhooks.api_router, prefix="/api/v1")
 app.include_router(webhooks.router)
 app.include_router(email_webhooks.router)
+app.include_router(property_webhooks.webhook_router)
 app.mount("/dev-ui", StaticFiles(directory="dev_ui", html=True), name="dev-ui")
 
 

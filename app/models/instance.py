@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, func
+from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -50,14 +50,24 @@ class Property(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
     instance_id: Mapped[int] = mapped_column(ForeignKey("instances.id"), nullable=False)
+    odoo_property_id: Mapped[int | None] = mapped_column(Integer, unique=True, nullable=True)
     name: Mapped[str] = mapped_column(String(255), nullable=False)
     roomdoo_external_code: Mapped[str] = mapped_column(String(255), nullable=False)
     channel_endpoint_id: Mapped[int | None] = mapped_column(
         ForeignKey("channel_endpoints.id"), nullable=True
     )
-    ai_enabled: Mapped[bool] = mapped_column(Boolean, default=False, nullable=False)
+    bookai_mode: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="disabled",
+    )
+    tz: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    email: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    phone: Mapped[str | None] = mapped_column(String(50), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
+
+    @property
+    def ai_enabled(self) -> bool:
+        return self.bookai_mode == "ai"
     updated_at: Mapped[datetime] = mapped_column(
         default=func.now(), onupdate=func.now(), nullable=False
     )
