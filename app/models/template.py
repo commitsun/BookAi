@@ -16,10 +16,18 @@ class WhatsAppTemplate(Base):
     """
 
     __tablename__ = "whatsapp_templates"
+    __table_args__ = (
+        UniqueConstraint("code", "instance_id", name="uq_template_code_instance"),
+    )
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    code: Mapped[str] = mapped_column(String(255), nullable=False, unique=True)
+    instance_id: Mapped[int] = mapped_column(
+        ForeignKey("instances.id"), nullable=False,
+    )
+    code: Mapped[str] = mapped_column(String(255), nullable=False)
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
+
+    instance: Mapped["Instance"] = relationship()
 
     translations: Mapped[list["WhatsAppTemplateTranslation"]] = relationship(
         back_populates="template", cascade="all, delete-orphan"

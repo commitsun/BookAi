@@ -13,6 +13,7 @@ from app.api.v1 import (
     email_webhooks,
     folios,
     property_webhooks,
+    template_crud,
     templates,
     webhooks,
 )
@@ -110,6 +111,7 @@ app = FastAPI(
 )
 
 app.include_router(templates.router, prefix="/api/v1")
+app.include_router(template_crud.router, prefix="/api/v1")
 app.include_router(chatter.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(folios.router, prefix="/api/v1")

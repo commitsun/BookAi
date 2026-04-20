@@ -1,11 +1,113 @@
-from sqlalchemy import select
+from sqlalchemy import select, delete
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
 
 from app.models.template import (
     TemplateTranslationProperty,
     WhatsAppTemplate,
     WhatsAppTemplateTranslation,
 )
+
+
+async def find_by_code_and_instance(
+    db: AsyncSession, code: str, instance_id: int,
+) -> WhatsAppTemplate | None:
+    result = await db.execute(
+        select(WhatsAppTemplate)
+        .options(
+            selectinload(WhatsAppTemplate.translations)
+            .selectinload(WhatsAppTemplateTranslation.translation_properties)
+        )
+        .where(
+            WhatsAppTemplate.code == code,
+            WhatsAppTemplate.instance_id == instance_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
+async def create_template(
+    db: AsyncSession,
+    instance_id: int,
+    code: str,
+    translations: list[dict],
+) -> WhatsAppTemplate:
+    """Create a template with translations and property bindings.
+
+    Each item in translations: {whatsapp_name, language, components, property_ids}
+    """
+    template = WhatsAppTemplate(instance_id=instance_id, code=code)
+    db.add(template)
+    await db.flush()
+
+    for t in translations:
+        trans = WhatsAppTemplateTranslation(
+            template_id=template.id,
+            whatsapp_name=t["whatsapp_name"],
+            language=t.get("language", "es"),
+            components=t.get("components", []),
+            active=t.get("active", True),
+        )
+        db.add(trans)
+        await db.flush()
+        for pid in t.get("property_ids", []):
+            db.add(TemplateTranslationProperty(
+                translation_id=trans.id, property_id=pid,
+            ))
+
+    await db.flush()
+    return template
+
+
+async def upsert_translations(
+    db: AsyncSession,
+    template: WhatsAppTemplate,
+    translations: list[dict],
+) -> None:
+    """Upsert translations on an existing template.
+
+    For each item: if language exists → update; if not → create.
+    property_ids replaces existing bindings completely.
+    """
+    existing_by_lang: dict[str, WhatsAppTemplateTranslation] = {
+        t.language: t for t in template.translations
+    }
+
+    for t in translations:
+        lang = t.get("language", "es")
+        trans = existing_by_lang.get(lang)
+
+        if trans:
+            trans.whatsapp_name = t["whatsapp_name"]
+            if "components" in t:
+                trans.components = t["components"]
+            if "active" in t:
+                trans.active = t["active"]
+            await db.flush()
+        else:
+            trans = WhatsAppTemplateTranslation(
+                template_id=template.id,
+                whatsapp_name=t["whatsapp_name"],
+                language=lang,
+                components=t.get("components", []),
+                active=t.get("active", True),
+            )
+            db.add(trans)
+            await db.flush()
+
+        # Replace property bindings
+        if "property_ids" in t:
+            await db.execute(
+                delete(TemplateTranslationProperty).where(
+                    TemplateTranslationProperty.translation_id == trans.id,
+                )
+            )
+            for pid in t["property_ids"]:
+                db.add(TemplateTranslationProperty(
+                    translation_id=trans.id, property_id=pid,
+                ))
+
+    await db.flush()
 
 
 async def find_translation_for_property(
