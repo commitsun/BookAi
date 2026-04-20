@@ -13,5 +13,8 @@ class Settings(BaseSettings):
     # App
     debug: bool = False
 
+    # OpenAI API key for system-level services (Whisper transcription, vision)
+    openai_api_key: str | None = None
+
 
 settings = Settings()

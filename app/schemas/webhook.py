@@ -33,6 +33,14 @@ class WebhookInteractive(BaseModel):
     list_reply: WebhookInteractiveListReply | None = None
 
 
+class WebhookMediaContent(BaseModel):
+    id: str | None = None       # Meta media_id for downloading
+    mime_type: str | None = None
+    sha256: str | None = None
+    caption: str | None = None
+    filename: str | None = None
+
+
 class WebhookMessage(BaseModel):
     id: str
     from_: str = Field(alias="from")  # sender phone in E.164 digits (no +)
@@ -40,9 +48,17 @@ class WebhookMessage(BaseModel):
     type: str = "text"
     text: WebhookTextContent | None = None
     interactive: WebhookInteractive | None = None
-    # Audio / image / other types are not processed in Phase 1 — stored as placeholder
+    image: WebhookMediaContent | None = None
+    audio: WebhookMediaContent | None = None
+    video: WebhookMediaContent | None = None
+    document: WebhookMediaContent | None = None
 
     model_config = {"populate_by_name": True}
+
+    @property
+    def media(self) -> WebhookMediaContent | None:
+        """Return the media object for this message, regardless of type."""
+        return self.image or self.audio or self.video or self.document
 
 
 class WebhookContact(BaseModel):

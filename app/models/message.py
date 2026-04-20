@@ -162,3 +162,46 @@ class Message(Base):
     ] = relationship(
         "EmailMessageMetadata", back_populates="message", uselist=False
     )
+    # Media attachments (images, audio, video, documents)
+    media_attachments: Mapped[list["MessageMedia"]] = relationship(
+        back_populates="message", cascade="all, delete-orphan",
+    )
+
+
+class MessageMedia(Base):
+    """
+    Media attachment on a message (image, audio, video, document).
+
+    Storage is abstracted: storage_backend + storage_key define where the file
+    lives. In dev it's local disk; in production it can be S3, R2, etc.
+    """
+
+    __tablename__ = "message_media"
+
+    id: Mapped[int] = mapped_column(BigInteger, primary_key=True, autoincrement=True)
+    message_id: Mapped[int] = mapped_column(
+        BigInteger, ForeignKey("messages.id", ondelete="CASCADE"), nullable=False,
+    )
+    media_type: Mapped[str] = mapped_column(
+        String(20), nullable=False,
+    )  # image | audio | video | document
+    mime_type: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    filename: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    size_bytes: Mapped[int | None] = mapped_column(BigInteger, nullable=True)
+    wa_media_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Storage location
+    storage_backend: Mapped[str] = mapped_column(
+        String(20), nullable=False, default="local",
+    )  # local | s3 | r2
+    storage_key: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    # AI processing results
+    transcription: Mapped[str | None] = mapped_column(Text, nullable=True)
+    vision_description: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=func.now(), nullable=False,
+    )
+
+    message: Mapped["Message"] = relationship(back_populates="media_attachments")
