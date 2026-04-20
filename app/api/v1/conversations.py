@@ -2,6 +2,7 @@
 GET   /api/v1/conversations              — inbox listing for a property
 GET   /api/v1/conversations/search                   — search conversations
 GET   /api/v1/conversations/{conversation_id}/messages — message history
+GET   /api/v1/conversations/{conversation_id}/channels — available send channels
 PATCH /api/v1/conversations/{conversation_id}/read  — mark conversation as read
 POST  /api/v1/conversations/{conversation_id}/assign   — assign to a property
 POST  /api/v1/conversations/{conversation_id}/transfer — transfer to another property
@@ -18,13 +19,15 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
 from app.api.dependencies import get_db, get_instance, get_sio
-from app.models.conversation import Conversation
+from app.models.conversation import Conversation, ConversationChannelState
+from app.models.email_message import EmailMessageMetadata
 from app.models.folio import FolioStatus
 from app.models.contact import Contact
 from app.models.folio import Folio, SessionFolio
 from app.models.instance import Instance
 from app.models.message import Message, MessageKind
 from app.models.session import AttentionSession
+from app.models.channel import ChannelEndpoint
 from app.repositories import conversation_repo, instance_repo, message_translation_repo, session_repo
 from app.realtime.events import EVENT_CONVERSATION_UPDATED, build_conversation_payload
 from app.schemas.conversation import (
@@ -33,6 +36,7 @@ from app.schemas.conversation import (
     ContactSummary,
     ConversationListItem,
     ConversationsListResponse,
+    EmailMetadataOut,
     LastMessageSummary,
     MessageOut,
     MessagesResponse,
@@ -316,7 +320,14 @@ async def get_messages(
             Message.attention_session_id.in_(property_sessions_sq)
         )
 
-    result = await db.execute(query)
+    result = await db.execute(
+        query.options(
+            selectinload(Message.channel_endpoint),
+            selectinload(Message.email_metadata).selectinload(
+                EmailMessageMetadata.attachments
+            ),
+        )
+    )
     messages = list(result.scalars().all())
     messages.reverse()
 
@@ -327,7 +338,9 @@ async def get_messages(
         is_translated = False
 
         if language and msg.content_language != language and msg.content:
-            cached = await message_translation_repo.find(db, msg.id, language)
+            cached = await message_translation_repo.find(
+                db, msg.id, language
+            )
             if cached:
                 content = cached.content
                 is_translated = True
@@ -338,23 +351,42 @@ async def get_messages(
             ):
                 try:
                     ctx = msg.template_payload or {}
-                    translated = render_note(msg.template_code, language, **ctx)
-                    await message_translation_repo.create(db, msg.id, language, translated)
+                    translated = render_note(
+                        msg.template_code, language, **ctx
+                    )
+                    await message_translation_repo.create(
+                        db, msg.id, language, translated
+                    )
                     translation_written = True
                     content = translated
                     is_translated = True
                 except KeyError:
                     pass  # unknown template key — return original
 
+        ep = msg.channel_endpoint
+        em = msg.email_metadata
+
+        email_meta_out = None
+        if em is not None:
+            email_meta_out = EmailMetadataOut(
+                subject=em.subject or "",
+                from_address=em.from_address,
+                from_name=em.from_name,
+                has_attachments=bool(em.attachments),
+            )
+
         out.append(MessageOut(
             id=msg.id,
             conversation_id=msg.conversation_id,
             channel_endpoint_id=msg.channel_endpoint_id,
+            channel=ep.channel if ep else None,
             kind=msg.kind.value,
             direction=msg.direction.value,
             sender=msg.sender.value,
             content=content,
-            content_language=language if is_translated else msg.content_language,  # noqa: E501
+            content_language=(
+                language if is_translated else msg.content_language
+            ),
             is_translated=is_translated,
             agent_user_id=msg.agent_user_id,
             agent_display_name=msg.agent_display_name,
@@ -365,7 +397,10 @@ async def get_messages(
                 msg.routing_status.value if msg.routing_status else None
             ),
             template_code=msg.template_code,
-            created_at=msg.created_at.isoformat() if msg.created_at else "",
+            created_at=(
+                msg.created_at.isoformat() if msg.created_at else ""
+            ),
+            email_metadata=email_meta_out,
         ))
 
     if translation_written:
@@ -569,6 +604,73 @@ async def transfer_conversation(
         note_text=body.note,
     )
     return TransferConversationResponse(**result)
+
+
+# ---------------------------------------------------------------------------
+# GET /conversations/{conversation_id}/channels
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/{conversation_id}/channels",
+    summary="List send channels available for a conversation",
+    responses={401: {"description": "Missing or invalid Bearer token"}},
+)
+async def get_conversation_channels(
+    conversation_id: int,
+    property_id: int = Query(..., description="Property requesting the channel list"),
+    instance: Instance = Depends(get_instance),
+    db: AsyncSession = Depends(get_db),
+) -> dict:
+    """
+    Returns the channel endpoints through which messages can be sent within
+    this conversation. Includes:
+    - The WhatsApp endpoint linked to the property (if any)
+    - Any email endpoints that appear in the conversation's channel states
+    """
+    channels: list[dict] = []
+
+    # WhatsApp: from property.channel_endpoint_id
+    prop = await instance_repo.find_property_by_id(db, property_id, instance.id)
+    if prop and prop.channel_endpoint_id:
+        wa_ep = await instance_repo.find_channel_endpoint_by_id(
+            db, prop.channel_endpoint_id
+        )
+        if wa_ep:
+            channels.append({
+                "id": wa_ep.id,
+                "channel": wa_ep.channel,
+                "display": wa_ep.display_number or wa_ep.external_code,
+                "external_code": wa_ep.external_code,
+            })
+
+    # Email: from conversation channel states
+    result = await db.execute(
+        select(ChannelEndpoint)
+        .join(
+            ConversationChannelState,
+            ConversationChannelState.channel_endpoint_id == ChannelEndpoint.id,
+        )
+        .where(
+            ConversationChannelState.conversation_id == conversation_id,
+            ChannelEndpoint.channel == "email",
+        )
+    )
+    for email_ep in result.scalars().all():
+        if not any(c["id"] == email_ep.id for c in channels):
+            display = (
+                f"{email_ep.display_number} <{email_ep.external_code}>"
+                if email_ep.display_number
+                else email_ep.external_code
+            )
+            channels.append({
+                "id": email_ep.id,
+                "channel": "email",
+                "display": display,
+                "external_code": email_ep.external_code,
+            })
+
+    return {"channels": channels}
 
 
 # ---------------------------------------------------------------------------

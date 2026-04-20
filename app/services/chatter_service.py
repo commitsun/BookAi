@@ -19,6 +19,7 @@ import socketio
 from fastapi import HTTPException
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from app.core.config import settings
 from app.models.instance import Instance
 from app.models.message import DeliveryStatus, MessageDirection, MessageSender
 from app.repositories import (
@@ -92,16 +93,34 @@ async def process_send_message(
     channel_state = await conversation_repo.find_channel_state(
         db, conversation.id, channel_endpoint.id
     )
-    if not _window_open(
-        channel_state.last_inbound_at if channel_state else None,
-        channel_endpoint.channel,
-    ):
+    last_inbound = channel_state.last_inbound_at if channel_state else None
+    window_hours = _messaging_window_hours(channel_endpoint.channel)
+
+    if not settings.debug and not _window_open(last_inbound, channel_endpoint.channel):
+        if last_inbound is None:
+            reason = (
+                f"No inbound message has ever been received on channel "
+                f"'{channel_endpoint.channel}' (endpoint {channel_endpoint.id}) "
+                f"for conversation {conversation.id}."
+            )
+        elif window_hours is not None:
+            elapsed = datetime.now(timezone.utc) - last_inbound
+            elapsed_h = round(elapsed.total_seconds() / 3600, 1)
+            reason = (
+                f"The {window_hours}h messaging window for channel "
+                f"'{channel_endpoint.channel}' (endpoint {channel_endpoint.id}) "
+                f"is closed. Last inbound message was {elapsed_h}h ago "
+                f"({last_inbound.isoformat()})."
+            )
+        else:
+            reason = (
+                f"Messaging window is closed for channel "
+                f"'{channel_endpoint.channel}' (endpoint {channel_endpoint.id})."
+            )
+
         raise HTTPException(
             status_code=422,
-            detail=(
-                f"Messaging window is closed for channel {channel_endpoint.channel}. "
-                "The guest must send a message first to reopen it."
-            ),
+            detail=reason,
         )
 
     # --- Routing: find active session for context ---

@@ -81,22 +81,35 @@ def build_message_created_payload(
     message: Message,
     contact: Contact | None = None,
 ) -> dict:
+    ep = message.channel_endpoint if hasattr(message, "channel_endpoint") else None
     payload: dict = {
         "id": message.id,
         "conversation_id": message.conversation_id,
         "channel_endpoint_id": message.channel_endpoint_id,
-        "direction": message.direction.value if message.direction else None,
+        "channel": ep.channel if ep else None,
+        "direction": (
+            message.direction.value if message.direction else None
+        ),
         "sender": message.sender.value if message.sender else None,
         "content": message.content,
         "content_language": message.content_language,
         "wa_message_id": message.wa_message_id,
         "wa_message_type": message.wa_message_type,
-        "delivery_status": message.delivery_status.value if message.delivery_status else None,
-        "routing_status": message.routing_status.value if message.routing_status else None,
+        "delivery_status": (
+            message.delivery_status.value
+            if message.delivery_status else None
+        ),
+        "routing_status": (
+            message.routing_status.value
+            if message.routing_status else None
+        ),
         "template_code": message.template_code,
         "agent_user_id": message.agent_user_id,
         "agent_display_name": message.agent_display_name,
-        "created_at": message.created_at.isoformat() if message.created_at else None,
+        "created_at": (
+            message.created_at.isoformat()
+            if message.created_at else None
+        ),
     }
     if contact:
         payload["contact"] = {

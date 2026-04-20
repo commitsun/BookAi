@@ -30,7 +30,9 @@ class DeliveryStatus(str, enum.Enum):
     delivered = "delivered"
     read = "read"
     failed = "failed"
-    skipped = "skipped"  # delivery tracking not applicable (e.g. notes)
+    skipped = "skipped"    # delivery tracking not applicable (e.g. notes)
+    accepted = "accepted"  # provider queued the message for sending (email)
+    bounced = "bounced"    # permanent delivery failure / hard bounce (email)
 
 
 class RoutingStatus(str, enum.Enum):
@@ -152,4 +154,10 @@ class Message(Base):
     )
     translations: Mapped[list["MessageTranslation"]] = relationship(
         back_populates="message"
+    )
+    # 1:1 with EmailMessageMetadata — only present for email-channel messages
+    email_metadata: Mapped[  # type: ignore[name-defined]
+        "EmailMessageMetadata | None"
+    ] = relationship(
+        "EmailMessageMetadata", back_populates="message", uselist=False
     )

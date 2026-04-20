@@ -13,6 +13,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.core.database import get_db
 from app.models.instance import Instance
 from app.repositories import instance_repo
+from app.services.email_channel_client import EmailChannelClient
 from app.services.whatsapp_client import WhatsAppClient
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -45,6 +46,10 @@ async def get_instance(
 
 def get_wa_client(request: Request) -> WhatsAppClient:
     return request.app.state.wa_client
+
+
+def get_email_client(request: Request) -> EmailChannelClient:
+    return request.app.state.email_client
 
 
 def get_sio(request: Request) -> socketio.AsyncServer:

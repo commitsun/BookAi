@@ -189,6 +189,10 @@
   }
   .msg-row.outbound.system .bubble { background: #7c3aed; }
 
+  /* Email bubbles */
+  .msg-row.inbound.email .bubble { background: #f0f9ff; border-left: 3px solid #0ea5e9; }
+  .msg-row.outbound.email .bubble { background: #0369a1; }
+
   /* Internal notes */
   .msg-row.note { justify-content: center; }
   .msg-row.note .bubble {
@@ -284,15 +288,68 @@
   .msg-row.inbound .bubble-meta { text-align: left; }
   .msg-row.outbound .bubble-meta { text-align: right; }
 
+  .email-subject {
+    font-size: 11px;
+    font-weight: 600;
+    opacity: 0.75;
+    margin-bottom: 4px;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
   /* ── Composer ── */
   #composer {
     background: #fff;
     border-top: 1px solid #e5e7eb;
     padding: 10px 12px;
     display: flex;
+    flex-direction: column;
+    gap: 6px;
+    flex-shrink: 0;
+  }
+  #channel-bar {
+    display: flex;
+    gap: 6px;
+    align-items: center;
+  }
+  .channel-pill {
+    padding: 3px 10px;
+    border-radius: 12px;
+    border: 1px solid #d1d5db;
+    background: #f9fafb;
+    color: #374151;
+    font-size: 12px;
+    cursor: pointer;
+    transition: background 0.1s, border-color 0.1s;
+    white-space: nowrap;
+  }
+  .channel-pill:hover { background: #f3f4f6; }
+  .channel-pill.active-wa {
+    background: #dcfce7;
+    border-color: #22c55e;
+    color: #15803d;
+    font-weight: 600;
+  }
+  .channel-pill.active-email {
+    background: #e0f2fe;
+    border-color: #0ea5e9;
+    color: #0369a1;
+    font-weight: 600;
+  }
+  #inp-subject {
+    width: 100%;
+    padding: 6px 10px;
+    border: 1px solid #d1d5db;
+    border-radius: 6px;
+    font-size: 13px;
+    font-family: inherit;
+    display: none;
+  }
+  #composer-row {
+    display: flex;
     gap: 8px;
     align-items: flex-end;
-    flex-shrink: 0;
   }
   #inp-msg {
     flex: 1;
@@ -409,6 +466,9 @@ let conversations = []        // [{id, contact, last_message}]
 let activeConv = null         // {id, phone_code, name}
 let searchDebounce = null
 let selectedLang = ""         // BCP-47 or "" for original
+let availableChannels = []    // [{id, channel, display, external_code}]
+let selectedChannel = null    // currently selected channel endpoint object
+let lastEmailSubject = ""     // subject of the most recent email in active conv (for Re: pre-fill)
 
 // ─────────────────────────────────────────────
 // DOM refs
@@ -435,6 +495,8 @@ btnConnect.addEventListener("click", () => {
   // Reset UI state for the new property
   activeConv = null
   conversations = []
+  availableChannels = []
+  selectedChannel = null
   convList.innerHTML = ""
   panelRight.innerHTML = '<div id="placeholder">Selecciona una conversación</div>'
   inpSearch.value = ""
@@ -494,7 +556,14 @@ async function apiFetch(path, opts = {}) {
       ...(opts.headers || {})
     }
   })
-  if (!res.ok) throw new Error(res.status + " " + res.statusText)
+  if (!res.ok) {
+    let detail = res.status + " " + res.statusText
+    try {
+      const body = await res.json()
+      if (body.detail) detail += "\n" + body.detail
+    } catch {}
+    throw new Error(detail)
+  }
   if (res.status === 204) return null
   return res.json()
 }
@@ -550,12 +619,16 @@ function buildConvItem(conv) {
     ? `<span style="background:#ef4444;color:#fff;border-radius:10px;padding:1px 7px;font-size:11px;font-weight:700;flex-shrink:0">${unread}</span>`
     : ""
 
+  // Channel indicators for last message
+  const ch = conv.last_message?.channel
+  const chIcon = ch === "email" ? " ✉" : ch === "whatsapp" ? " 📱" : ""
+
   el.innerHTML = `
     <div class="conv-meta">
       <div class="conv-name">${esc(name)}</div>
       <div style="display:flex;align-items:center;gap:5px">${badge}<span class="conv-time">${esc(time)}</span></div>
     </div>
-    <div class="conv-preview">${esc(preview)}</div>
+    <div class="conv-preview">${esc(chIcon + preview)}</div>
   `
   el.addEventListener("click", () => openConversation(conv))
   return el
@@ -606,14 +679,18 @@ async function openConversation(conv) {
     <div id="chat-header">
       <div>
         ${esc(activeConv.name)}
-        <small>+${esc(activeConv.phone_code || "")}</small>
+        <small>${esc(activeConv.phone_code || "")}</small>
       </div>
       <button class="btn-transfer" onclick="openTransferModal()">↪ Transferir</button>
     </div>
     <div id="messages"></div>
     <div id="composer">
-      <textarea id="inp-msg" placeholder="Escribe un mensaje…" rows="1"></textarea>
-      <button id="btn-send">Enviar</button>
+      <div id="channel-bar"></div>
+      <input id="inp-subject" type="text" placeholder="Asunto del email…">
+      <div id="composer-row">
+        <textarea id="inp-msg" placeholder="Escribe un mensaje…" rows="1"></textarea>
+        <button id="btn-send">Enviar</button>
+      </div>
     </div>
   `
 
@@ -628,14 +705,74 @@ async function openConversation(conv) {
   // Mark as read
   markConversationRead(conv.id)
 
-  // Load messages
+  // Load messages and channels in parallel
   const langParam = selectedLang ? `&language=${selectedLang}` : ""
-  const data = await apiFetch(`/api/v1/conversations/${conv.id}/messages?limit=100&property_id=${propertyId}${langParam}`)
+  const [msgData, chData] = await Promise.all([
+    apiFetch(`/api/v1/conversations/${conv.id}/messages?limit=100&property_id=${propertyId}${langParam}`),
+    apiFetch(`/api/v1/conversations/${conv.id}/channels?property_id=${propertyId}`).catch(() => ({ channels: [] })),
+  ])
+
+  // Render messages
   const msgs = document.getElementById("messages")
   if (msgs) {
-    ;(data.messages || []).forEach(m => appendMessage(m, selectedLang))
+    ;(msgData.messages || []).forEach(m => appendMessage(m, selectedLang))
     msgs.scrollTop = msgs.scrollHeight
   }
+
+  // Set up channel selector
+  availableChannels = chData.channels || []
+  selectedChannel = availableChannels[0] || null
+
+  // Pre-fill Re: subject from last email message
+  const allMsgs = msgData.messages || []
+  const lastEmailMsg = allMsgs.filter(m => m.channel === "email").at(-1)
+  if (lastEmailMsg?.email_metadata?.subject) {
+    const sub = lastEmailMsg.email_metadata.subject
+    lastEmailSubject = sub.toLowerCase().startsWith("re:") ? sub : "Re: " + sub
+  } else {
+    lastEmailSubject = ""
+  }
+
+  renderChannelBar()
+}
+
+function renderChannelBar() {
+  const bar = document.getElementById("channel-bar")
+  const subjectInp = document.getElementById("inp-subject")
+  if (!bar) return
+
+  if (availableChannels.length <= 1) {
+    bar.style.display = "none"
+    if (subjectInp) subjectInp.style.display = "none"
+    return
+  }
+
+  bar.style.display = "flex"
+  bar.innerHTML = availableChannels.map(ch => {
+    const isActive = selectedChannel && selectedChannel.id === ch.id
+    const icon = ch.channel === "email" ? "✉ " : "📱 "
+    const label = ch.channel === "email"
+      ? "Email"
+      : (ch.display || "WhatsApp")
+    const activeClass = isActive
+      ? (ch.channel === "email" ? "active-email" : "active-wa")
+      : ""
+    return `<button class="channel-pill ${activeClass}" onclick="selectChannel(${ch.id})">${icon}${esc(label)}</button>`
+  }).join("")
+
+  // Show/hide subject input and pre-fill Re: subject
+  if (subjectInp) {
+    const isEmail = selectedChannel?.channel === "email"
+    subjectInp.style.display = isEmail ? "block" : "none"
+    if (isEmail && !subjectInp.value) {
+      subjectInp.value = lastEmailSubject
+    }
+  }
+}
+
+function selectChannel(channelId) {
+  selectedChannel = availableChannels.find(c => c.id === channelId) || null
+  renderChannelBar()
 }
 
 function appendMessage(msg, requestedLang) {
@@ -646,7 +783,14 @@ function appendMessage(msg, requestedLang) {
   const isNote = msg.kind === "note"
   const isOutbound = msg.direction === "outbound"
   const isSystem = msg.sender === "system"
-  row.className = `msg-row ${isNote ? "note" : (isOutbound ? "outbound" : "inbound")} ${!isNote && isSystem ? "system" : ""}`
+  const isEmail = msg.channel === "email"
+
+  row.className = [
+    "msg-row",
+    isNote ? "note" : (isOutbound ? "outbound" : "inbound"),
+    !isNote && isSystem ? "system" : "",
+    !isNote && isEmail ? "email" : "",
+  ].filter(Boolean).join(" ")
 
   const senderLabel = isNote ? "📋 Nota interna"
     : msg.sender === "agent"
@@ -655,6 +799,11 @@ function appendMessage(msg, requestedLang) {
       : "Huésped"
 
   const time = msg.created_at ? new Date(msg.created_at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }) : ""
+
+  // Channel badge
+  const channelBadge = isEmail ? " · ✉ Email"
+    : msg.channel === "whatsapp" ? " · 📱 WA"
+    : ""
 
   // Translation state
   const needsTranslation = requestedLang && !msg.is_translated && msg.content_language !== requestedLang
@@ -665,10 +814,16 @@ function appendMessage(msg, requestedLang) {
     ? `<span style="opacity:0.6;font-size:10px"> · 🌐 ${esc(msg.content_language)}</span>`
     : ""
 
+  // Email subject line (shown for email messages when subject is present)
+  const subjectHtml = isEmail && msg.email_metadata?.subject
+    ? `<div class="email-subject">📌 ${esc(msg.email_metadata.subject)}</div>`
+    : ""
+
   row.innerHTML = `
     <div class="bubble">
+      ${subjectHtml}
       ${contentHtml}
-      <div class="bubble-meta">${esc(senderLabel)} · ${esc(time)}${translatedBadge}</div>
+      <div class="bubble-meta">${esc(senderLabel)}${channelBadge} · ${esc(time)}${translatedBadge}</div>
     </div>
   `
   msgs.appendChild(row)
@@ -695,15 +850,32 @@ async function sendMessage() {
   btn.disabled = true
 
   try {
-    await apiFetch("/api/v1/chatter/send-message", {
-      method: "POST",
-      body: JSON.stringify({
-        conversation_id: activeConv.id,
-        content,
-        agent_user_id: 1,
-        agent_display_name: "Dev User"
+    if (selectedChannel?.channel === "email") {
+      const subjectInp = document.getElementById("inp-subject")
+      const subject = subjectInp?.value?.trim() || "(sin asunto)"
+      await apiFetch("/api/v1/email/send", {
+        method: "POST",
+        body: JSON.stringify({
+          conversation_id: activeConv.id,
+          channel_endpoint_id: selectedChannel.id,
+          subject,
+          text_body: content,
+          agent_user_id: 1,
+          agent_display_name: "Dev User",
+        })
       })
-    })
+      if (subjectInp) subjectInp.value = ""
+    } else {
+      await apiFetch("/api/v1/chatter/send-message", {
+        method: "POST",
+        body: JSON.stringify({
+          conversation_id: activeConv.id,
+          content,
+          agent_user_id: 1,
+          agent_display_name: "Dev User"
+        })
+      })
+    }
     inp.value = ""
   } catch (e) {
     alert("Error al enviar: " + e.message)

@@ -7,6 +7,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
+class EmailMetadataOut(BaseModel):
+    subject: str
+    from_address: str
+    from_name: str | None
+    has_attachments: bool = False
+
+
 class ContactSummary(BaseModel):
     id: int
     phone_code: str
@@ -55,11 +62,15 @@ class MessageOut(BaseModel):
     id: int
     conversation_id: int
     channel_endpoint_id: int | None
+    # Channel that carried this message (e.g. "whatsapp", "email")
+    channel: str | None = None
     kind: Literal["message", "note"] = "message"
     direction: Literal["inbound", "outbound"]
     sender: Literal["guest", "agent", "system"]
     content: str | None = Field(
-        description="Text in the requested language (original or translated)."
+        description=(
+            "Text in the requested language (original or translated)."
+        )
     )
     content_language: str | None = Field(
         description="BCP-47 tag of the language that `content` is in."
@@ -74,10 +85,15 @@ class MessageOut(BaseModel):
     agent_display_name: str | None
     wa_message_id: str | None
     wa_message_type: str
-    delivery_status: Literal["pending", "sent", "delivered", "read", "failed", "skipped"]
+    delivery_status: Literal[
+        "pending", "sent", "delivered", "read",
+        "failed", "skipped", "accepted", "bounced",
+    ]
     routing_status: Literal["routed", "unassigned", "ambiguous"] | None
     template_code: str | None
     created_at: str
+    # Only populated when channel == "email"
+    email_metadata: EmailMetadataOut | None = None
 
 
 class MessagesResponse(BaseModel):

@@ -6,10 +6,19 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
-from app.api.v1 import chatter, conversations, folios, templates, webhooks
+from app.api.v1 import (
+    chatter,
+    conversations,
+    email,
+    email_webhooks,
+    folios,
+    templates,
+    webhooks,
+)
 from app.core.config import settings
 from app.core.database import engine
 from app.realtime.socket_manager import create_socket_server
+from app.services.email_channel_client import EmailChannelClient
 from app.services.whatsapp_client import WhatsAppClient
 
 _DESCRIPTION = """
@@ -76,6 +85,7 @@ async def lifespan(app: FastAPI):
 
     http_client = httpx.AsyncClient()
     app.state.wa_client = WhatsAppClient(http_client)
+    app.state.email_client = EmailChannelClient(http_client)
     app.state.sio = sio
 
     yield
@@ -97,7 +107,9 @@ app.include_router(templates.router, prefix="/api/v1")
 app.include_router(chatter.router, prefix="/api/v1")
 app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(folios.router, prefix="/api/v1")
+app.include_router(email.router, prefix="/api/v1")
 app.include_router(webhooks.router)
+app.include_router(email_webhooks.router)
 app.mount("/dev-ui", StaticFiles(directory="dev_ui", html=True), name="dev-ui")
 
 

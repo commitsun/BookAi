@@ -21,11 +21,14 @@ class Contact(Base):
 
     id: Mapped[int] = mapped_column(primary_key=True)
 
-    # E.164 digits only — canonical unique identifier for this guest on the channel
-    phone_code: Mapped[str] = mapped_column(String(20), unique=True, nullable=False)
+    # E.164 digits only for WhatsApp; "email:<address>" synthetic key for email-only contacts
+    phone_code: Mapped[str] = mapped_column(String(255), unique=True, nullable=False)
 
     display_name: Mapped[str | None] = mapped_column(String(255), nullable=True)
     country_code: Mapped[str | None] = mapped_column(String(2), nullable=True)
+
+    # Email address — used as identity for the email channel (Phase 1: one email per contact)
+    email: Mapped[str | None] = mapped_column(String(255), unique=True, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
