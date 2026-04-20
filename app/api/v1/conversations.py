@@ -38,6 +38,7 @@ from app.schemas.conversation import (
     ConversationsListResponse,
     EmailMetadataOut,
     LastMessageSummary,
+    MediaOut,
     MessageOut,
     MessagesResponse,
     TransferConversationRequest,
@@ -326,6 +327,7 @@ async def get_messages(
             selectinload(Message.email_metadata).selectinload(
                 EmailMessageMetadata.attachments
             ),
+            selectinload(Message.media_attachments),
         )
     )
     messages = list(result.scalars().all())
@@ -401,6 +403,19 @@ async def get_messages(
                 msg.created_at.isoformat() if msg.created_at else ""
             ),
             email_metadata=email_meta_out,
+            media=[
+                MediaOut(
+                    id=ma.id,
+                    media_type=ma.media_type,
+                    mime_type=ma.mime_type,
+                    filename=ma.filename,
+                    size_bytes=ma.size_bytes,
+                    url=f"/media/{ma.storage_key}" if ma.storage_key else None,
+                    transcription=ma.transcription,
+                    vision_description=ma.vision_description,
+                )
+                for ma in (msg.media_attachments or [])
+            ] or None,
         ))
 
     if translation_written:

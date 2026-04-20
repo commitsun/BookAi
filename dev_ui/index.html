@@ -232,6 +232,21 @@
   .btn-ai.off { background: #fee2e2; border-color: #ef4444; color: #991b1b; }
   .btn-ai.na { background: #f3f4f6; color: #9ca3af; cursor: default; }
 
+  /* Media in bubbles */
+  .media-block { margin-bottom: 6px; }
+  .media-block img { display: block; }
+  .media-block audio { display: block; }
+  .media-block video { display: block; }
+  .media-ai-tag {
+    font-size: 11px;
+    font-style: italic;
+    opacity: 0.75;
+    margin-bottom: 4px;
+    padding: 2px 6px;
+    background: rgba(0,0,0,0.05);
+    border-radius: 4px;
+  }
+
   /* Transfer modal */
   .modal-backdrop {
     position: fixed;
@@ -876,9 +891,33 @@ function appendMessage(msg, requestedLang) {
     ? `<div class="email-subject">📌 ${esc(msg.email_metadata.subject)}</div>`
     : ""
 
+  // Media attachments
+  let mediaHtml = ""
+  if (msg.media && msg.media.length > 0) {
+    for (const ma of msg.media) {
+      if (ma.media_type === "image" && ma.url) {
+        mediaHtml += `<div class="media-block"><img src="${esc(ma.url)}" alt="image" style="max-width:100%;border-radius:8px;margin-bottom:4px;cursor:pointer" onclick="window.open('${esc(ma.url)}','_blank')"></div>`
+        if (ma.vision_description) {
+          mediaHtml += `<div class="media-ai-tag">🔍 ${esc(ma.vision_description)}</div>`
+        }
+      } else if (ma.media_type === "audio" && ma.url) {
+        mediaHtml += `<div class="media-block"><audio controls src="${esc(ma.url)}" style="max-width:100%"></audio></div>`
+        if (ma.transcription) {
+          mediaHtml += `<div class="media-ai-tag">🎙 ${esc(ma.transcription)}</div>`
+        }
+      } else if (ma.media_type === "video" && ma.url) {
+        mediaHtml += `<div class="media-block"><video controls src="${esc(ma.url)}" style="max-width:100%;border-radius:8px"></video></div>`
+      } else if (ma.url) {
+        const fname = ma.filename || "documento"
+        mediaHtml += `<div class="media-block"><a href="${esc(ma.url)}" target="_blank" style="color:inherit;text-decoration:underline">📎 ${esc(fname)}</a></div>`
+      }
+    }
+  }
+
   row.innerHTML = `
     <div class="bubble">
       ${subjectHtml}
+      ${mediaHtml}
       ${contentHtml}
       <div class="bubble-meta">${esc(senderLabel)}${channelBadge} · ${esc(time)}${translatedBadge}</div>
     </div>

@@ -101,6 +101,19 @@ class MessageOut(BaseModel):
     created_at: str
     # Only populated when channel == "email"
     email_metadata: EmailMetadataOut | None = None
+    # Media attachments (images, audio, video, documents)
+    media: list["MediaOut"] | None = None
+
+
+class MediaOut(BaseModel):
+    id: int
+    media_type: str  # image | audio | video | document
+    mime_type: str | None
+    filename: str | None
+    size_bytes: int | None
+    url: str | None  # path to access the media file
+    transcription: str | None
+    vision_description: str | None
 
 
 class MessagesResponse(BaseModel):
