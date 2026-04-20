@@ -31,6 +31,10 @@ class AgentLoader:
     def loaded(self) -> bool:
         return len(self._cache) > 0
 
+    @property
+    def count(self) -> int:
+        return len(self._cache)
+
     def get(self, technical_name: str) -> CachedAgent | None:
         return self._cache.get(technical_name)
 
