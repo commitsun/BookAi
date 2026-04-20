@@ -19,6 +19,8 @@ from app.core.config import settings
 from app.core.database import engine
 from app.realtime.socket_manager import create_socket_server
 from app.services.email_channel_client import EmailChannelClient
+from app.services.instance_sdk_registry import InstanceSDKRegistry
+from app.services.llm_litellm import LiteLLMProvider
 from app.services.whatsapp_client import WhatsAppClient
 
 _DESCRIPTION = """
@@ -86,10 +88,13 @@ async def lifespan(app: FastAPI):
     http_client = httpx.AsyncClient()
     app.state.wa_client = WhatsAppClient(http_client)
     app.state.email_client = EmailChannelClient(http_client)
+    app.state.llm_client = LiteLLMProvider()
+    app.state.sdk_registry = InstanceSDKRegistry()
     app.state.sio = sio
 
     yield
 
+    await app.state.sdk_registry.close_all()
     await http_client.aclose()
     await engine.dispose()
 

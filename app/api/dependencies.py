@@ -2,9 +2,6 @@
 FastAPI dependency functions shared across all routes.
 """
 
-from collections.abc import AsyncGenerator
-
-import httpx
 import socketio
 from fastapi import Depends, HTTPException, Request, status
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
@@ -14,6 +11,8 @@ from app.core.database import get_db
 from app.models.instance import Instance
 from app.repositories import instance_repo
 from app.services.email_channel_client import EmailChannelClient
+from app.services.instance_sdk_registry import InstanceSDKRegistry
+from app.services.llm_client import LLMProvider
 from app.services.whatsapp_client import WhatsAppClient
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -54,3 +53,11 @@ def get_email_client(request: Request) -> EmailChannelClient:
 
 def get_sio(request: Request) -> socketio.AsyncServer:
     return request.app.state.sio
+
+
+def get_sdk_registry(request: Request) -> InstanceSDKRegistry:
+    return request.app.state.sdk_registry
+
+
+def get_llm_client(request: Request) -> LLMProvider:
+    return request.app.state.llm_client

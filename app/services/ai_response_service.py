@@ -1,0 +1,231 @@
+"""
+AI response flow: after an inbound message is persisted, optionally generate
+an AI response and send it back via the channel.
+
+Called from webhook_service._process_message when the property has ai_enabled=True.
+If anything fails, the inbound message is already safe — errors are logged, not raised.
+"""
+
+import logging
+
+import socketio
+from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import selectinload
+
+from app.models.channel import ChannelEndpoint
+from app.models.contact import Contact
+from app.models.instance import Instance, Property
+from app.models.message import DeliveryStatus, MessageDirection, MessageSender
+from app.repositories import conversation_repo, message_repo
+from app.realtime.events import (
+    EVENT_CONVERSATION_UPDATED,
+    EVENT_MESSAGE_CREATED,
+    build_conversation_payload,
+    build_message_created_payload,
+)
+from app.services.context_builder import build_prompt
+from app.services.instance_sdk_registry import InstanceSDKRegistry
+from app.services.llm_client import LLMClientError, LLMProvider
+from app.services.whatsapp_client import WhatsAppClient
+
+log = logging.getLogger("ai_response_service")
+
+
+async def try_ai_response(
+    conversation_id: int,
+    message_content: str,
+    attention_session_id: int,
+    routed_property_id: int,
+    channel_endpoint: ChannelEndpoint,
+    contact: Contact,
+    db: AsyncSession,
+    wa_client: WhatsAppClient,
+    sio: socketio.AsyncServer,
+    sdk_registry: InstanceSDKRegistry,
+    llm_client: LLMProvider,
+) -> None:
+    """Generate and send an AI response if the property has AI enabled.
+
+    This function is fire-and-forget safe: all exceptions are caught and logged.
+    The inbound message is already persisted before this is called.
+    """
+    try:
+        await _generate_and_send(
+            conversation_id, message_content, attention_session_id,
+            routed_property_id, channel_endpoint, contact,
+            db, wa_client, sio, sdk_registry, llm_client,
+        )
+    except Exception as exc:
+        log.error(
+            "AI response failed for conversation=%d: %s",
+            conversation_id, exc, exc_info=True,
+        )
+
+
+async def _generate_and_send(
+    conversation_id: int,
+    message_content: str,
+    attention_session_id: int,
+    routed_property_id: int,
+    channel_endpoint: ChannelEndpoint,
+    contact: Contact,
+    db: AsyncSession,
+    wa_client: WhatsAppClient,
+    sio: socketio.AsyncServer,
+    sdk_registry: InstanceSDKRegistry,
+    llm_client: LLMProvider,
+) -> None:
+    # --- Load property and check ai_enabled ---
+    from sqlalchemy import select
+    result = await db.execute(
+        select(Property)
+        .options(selectinload(Property.instance))
+        .where(Property.id == routed_property_id)
+    )
+    prop = result.scalar_one_or_none()
+    if not prop or not prop.ai_enabled:
+        return
+
+    instance: Instance = prop.instance
+
+    # --- Load agents from Odoo via SDK registry ---
+    loader = await sdk_registry.get_or_load_agents(instance)
+    if loader is None:
+        log.debug("No SDK config for instance %d, skipping AI", instance.id)
+        return
+
+    candidates = loader.list_for_caller_type("external_guest")
+    if not candidates:
+        log.debug("No AI agents for external_guest, skipping")
+        return
+
+    # Pick agent (single candidate or first — AgentSelector is a future PR)
+    agent_entry = candidates[0]
+    agent = agent_entry.config
+    docs = agent_entry.documents
+
+    if not agent.llm_account or not agent.llm_account.api_key:
+        log.warning("Agent %s has no LLM credentials, skipping AI", agent.technical_name)
+        return
+
+    model = agent.effective_model
+    if not model:
+        log.warning("Agent %s has no model configured, skipping AI", agent.technical_name)
+        return
+
+    # --- Build prompt with conversation history ---
+    history = await message_repo.find_recent_by_conversation(db, conversation_id, limit=20)
+    history.reverse()  # oldest first
+
+    prompt_messages = build_prompt(
+        agent=agent,
+        docs=docs,
+        conversation_history=history,
+        current_message=message_content,
+        property_name=prop.name,
+    )
+
+    # --- Call LLM ---
+    llm_messages = [{"role": m.role, "content": m.content} for m in prompt_messages]
+
+    try:
+        response = await llm_client.chat(
+            messages=llm_messages,
+            provider=agent.llm_account.provider,
+            api_key=agent.llm_account.api_key,
+            model=model,
+            api_base_url=agent.llm_account.api_base_url,
+            temperature=agent.temperature,
+            max_tokens=agent.max_tokens,
+        )
+    except LLMClientError as exc:
+        log.error("LLM call failed for agent=%s: %s", agent.technical_name, exc)
+        return
+
+    log.info(
+        "AI response generated: agent=%s model=%s tokens=%d/%d",
+        agent.technical_name, response.model,
+        response.tokens_in, response.tokens_out,
+    )
+
+    # --- Calculate cost and log usage to Odoo ---
+    cost_usd: float | None = None
+    try:
+        from litellm import cost_per_token
+        prompt_cost, completion_cost = cost_per_token(
+            response.model,
+            prompt_tokens=response.tokens_in,
+            completion_tokens=response.tokens_out,
+        )
+        cost_usd = prompt_cost + completion_cost
+    except Exception:
+        pass  # pricing not available for this model
+
+    try:
+        from roomdoo_sdk.models import UsageRecord
+        roomdoo_client = sdk_registry.get_client(instance)
+        if roomdoo_client:
+            await roomdoo_client.usage.log(UsageRecord(
+                pms_property_id=routed_property_id,
+                agent_id=agent.id,
+                llm_account_id=agent.llm_account.id,
+                tokens_in=response.tokens_in,
+                tokens_out=response.tokens_out,
+                model=response.model,
+                conversation_id=str(conversation_id),
+                status="success",
+                cost_usd=cost_usd,
+            ))
+    except Exception as exc:
+        log.warning("Failed to log usage to Odoo: %s", exc)
+
+    # --- Send via WhatsApp ---
+    wa_message_id: str | None = None
+    try:
+        wa_message_id = await wa_client.send_text(
+            to=contact.phone_code,
+            channel_endpoint=channel_endpoint,
+            text=response.content,
+        )
+    except Exception as exc:
+        log.error("Failed to send AI response via WhatsApp: %s", exc)
+        # Still persist the message even if sending fails
+
+    # --- Persist AI message ---
+    delivery = DeliveryStatus.sent if wa_message_id else DeliveryStatus.failed
+    msg = await message_repo.create(
+        db,
+        conversation_id=conversation_id,
+        channel_endpoint_id=channel_endpoint.id,
+        attention_session_id=attention_session_id,
+        direction=MessageDirection.outbound,
+        sender=MessageSender.ai,
+        content=response.content,
+        wa_message_id=wa_message_id,
+        delivery_status=delivery,
+    )
+    await db.commit()
+
+    # --- Socket.IO events ---
+    try:
+        await sio.emit(
+            EVENT_MESSAGE_CREATED,
+            build_message_created_payload(msg, contact),
+            room=f"chat:{contact.phone_code}",
+        )
+        counts = await conversation_repo.get_unread_counts(
+            db, [conversation_id], routed_property_id,
+        )
+        conversation = await conversation_repo.find_by_id(db, conversation_id)
+        if conversation:
+            await sio.emit(
+                EVENT_CONVERSATION_UPDATED,
+                build_conversation_payload(
+                    conversation, contact,
+                    last_message=msg,
+                    unread_count=counts.get(conversation_id, 0),
+                ),
+                room=f"property:{routed_property_id}",
+            )
+    except Exception as exc:
+        log.warning("Socket.IO emit for AI response failed: %s", exc)

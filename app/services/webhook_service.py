@@ -51,6 +51,9 @@ from app.realtime.events import (
     build_delivery_updated_payload,
 )
 from app.schemas.webhook import MetaWebhookPayload, WebhookMessage, WebhookStatus
+from app.services.ai_response_service import try_ai_response
+from app.services.instance_sdk_registry import InstanceSDKRegistry
+from app.services.llm_client import LLMProvider
 from app.services.whatsapp_client import WhatsAppClient
 
 log = logging.getLogger("webhook_service")
@@ -75,6 +78,8 @@ async def process_inbound_webhook(
     db: AsyncSession,
     wa_client: WhatsAppClient,
     sio: socketio.AsyncServer,
+    sdk_registry: InstanceSDKRegistry | None = None,
+    llm_client: LLMProvider | None = None,
 ) -> None:
     for entry in payload.entry:
         for change in entry.changes:
@@ -98,6 +103,8 @@ async def process_inbound_webhook(
                         db=db,
                         wa_client=wa_client,
                         sio=sio,
+                        sdk_registry=sdk_registry,
+                        llm_client=llm_client,
                     )
 
 
@@ -108,6 +115,8 @@ async def _process_message(
     db: AsyncSession,
     wa_client: WhatsAppClient,
     sio: socketio.AsyncServer,
+    sdk_registry: InstanceSDKRegistry | None = None,
+    llm_client: LLMProvider | None = None,
 ) -> None:
     # --- Deduplication ---
     existing = await message_repo.find_by_provider_message_id(db, wa_msg.id)
@@ -261,6 +270,22 @@ async def _process_message(
                 await sio.emit(conv_event, conv_payload, room=room)
     except Exception as exc:
         log.warning("Socket.IO emit failed: %s", exc)
+
+    # --- AI response (if enabled for this property) ---
+    if routed_property_id is not None and sdk_registry and llm_client:
+        await try_ai_response(
+            conversation_id=conversation.id,
+            message_content=content,
+            attention_session_id=attention_session_id,
+            routed_property_id=routed_property_id,
+            channel_endpoint=channel_endpoint,
+            contact=contact,
+            db=db,
+            wa_client=wa_client,
+            sio=sio,
+            sdk_registry=sdk_registry,
+            llm_client=llm_client,
+        )
 
 
 async def _process_status_update(
