@@ -30,12 +30,22 @@ class ConfirmationRequired(Exception):
 # Each entry: (description, parameters_schema)
 # The actual execution is in _execute_tool()
 TOOL_CATALOG: dict[str, dict] = {
-    "folios.get_folio": {
-        "description": "Get folio details by ID (dates, amounts, guest, status)",
+    "folios.search_by_code": {
+        "description": "Search a folio by its code/reference (e.g. F2500008). Use this when the guest gives a folio code instead of a numeric ID.",
         "parameters": {
             "type": "object",
             "properties": {
-                "folio_id": {"type": "integer", "description": "Folio ID in the PMS"},
+                "code": {"type": "string", "description": "Folio code (e.g. F2500008)"},
+            },
+            "required": ["code"],
+        },
+    },
+    "folios.get_folio": {
+        "description": "Get folio details by numeric ID (dates, amounts, guest, status). Use folios.search_by_code if you have a folio code instead.",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "folio_id": {"type": "integer", "description": "Folio numeric ID in the PMS"},
             },
             "required": ["folio_id"],
         },
@@ -273,7 +283,16 @@ class ToolExecutor:
     async def _dispatch(self, tool_name: str, args: dict) -> dict:
         """Route a tool call to the appropriate SDK method."""
         try:
-            if tool_name == "folios.get_folio":
+            if tool_name == "folios.search_by_code":
+                records = await self._client._transport.search_read(
+                    "pms.folio",
+                    [("name", "ilike", args["code"])],
+                    ["id", "name", "state", "partner_name", "first_checkin", "last_checkout",
+                     "amount_total", "pending_amount", "number_of_rooms"],
+                    limit=5,
+                )
+                return {"folios": records}
+            elif tool_name == "folios.get_folio":
                 result = await self._client.folios.get_folio(args["folio_id"])
                 return asdict(result)
             elif tool_name == "folios.get_reservations":
