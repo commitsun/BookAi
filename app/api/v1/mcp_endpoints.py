@@ -69,6 +69,37 @@ async def disconnect_server(
     return {"status": "ok"}
 
 
+@api_router.get("/{server_id}/status", summary="Check MCP server connection status")
+async def server_status(
+    server_id: int,
+    instance: Instance = Depends(get_instance),
+    mcp: MCPManager = Depends(get_mcp_manager),
+) -> dict:
+    key = (instance.id, server_id)
+    state = mcp._servers.get(key)
+    if state is None:
+        return {"server_id": server_id, "connected": False}
+    return {
+        "server_id": server_id,
+        "connected": True,
+        "name": state.name,
+        "transport_type": state.transport_type,
+        "tools_count": len(state.tools),
+    }
+
+
+@api_router.get("/status", summary="List all connected MCP servers for this instance")
+async def list_servers_status(
+    instance: Instance = Depends(get_instance),
+    mcp: MCPManager = Depends(get_mcp_manager),
+) -> dict:
+    servers = [
+        s for s in mcp.connected_servers
+        if s["instance_id"] == instance.id
+    ]
+    return {"servers": servers}
+
+
 webhook_router = APIRouter(prefix="/webhooks", tags=["mcp-webhooks"])
 
 
