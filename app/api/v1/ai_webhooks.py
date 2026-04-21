@@ -1,5 +1,6 @@
 """
 POST /webhooks/agent-updated — receive agent change notifications from Odoo
+GET  /api/v1/sdk/tools        — expose SDK tool catalog for Odoo sync
 """
 
 import logging
@@ -51,3 +52,23 @@ async def agent_updated(
             return {"status": "error", "detail": str(exc)}
 
     return {"status": "ok", "action": payload.action}
+
+
+# ── SDK tool catalog ─────────────────────────────────────────────────
+
+sdk_router = APIRouter(prefix="/sdk", tags=["sdk"])
+
+
+@sdk_router.get(
+    "/tools",
+    summary="List all SDK tools available for agent bindings",
+    description=(
+        "Returns the declarative catalog of tools the SDK exposes. "
+        "Odoo syncs this nightly to populate the bookai.tool model."
+    ),
+)
+async def list_sdk_tools(
+    _instance: Instance = Depends(get_instance),
+) -> dict:
+    from roomdoo_sdk.tools import SDK_TOOLS
+    return {"tools": SDK_TOOLS}
