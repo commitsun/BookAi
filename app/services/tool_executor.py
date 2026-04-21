@@ -119,6 +119,36 @@ TOOL_CATALOG: dict[str, dict] = {
             "required": ["property_id"],
         },
     },
+    "properties.get_amenities": {
+        "description": "Get amenities/services available at a property",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "property_id": {"type": "integer"},
+            },
+            "required": ["property_id"],
+        },
+    },
+    "properties.get_board_services": {
+        "description": "Get board services (meal plans) available at a property",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "property_id": {"type": "integer"},
+            },
+            "required": ["property_id"],
+        },
+    },
+    "properties.get_room_types": {
+        "description": "Get room types available at a property with capacity and features",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "property_id": {"type": "integer"},
+            },
+            "required": ["property_id"],
+        },
+    },
 }
 
 # God mode tool definition
@@ -171,6 +201,16 @@ GOD_MODE_TOOL = {
 }
 
 
+def _to_llm_name(name: str) -> str:
+    """Convert tool name to LLM-safe format: folios.get_folio → folios__get_folio"""
+    return name.replace(".", "__")
+
+
+def _from_llm_name(name: str) -> str:
+    """Convert LLM-safe name back: folios__get_folio → folios.get_folio"""
+    return name.replace("__", ".")
+
+
 class ToolExecutor:
     def __init__(self, client: RoomdooClient):
         self._client = client
@@ -189,7 +229,7 @@ class ToolExecutor:
                 tools.append({
                     "type": "function",
                     "function": {
-                        "name": tool.name,
+                        "name": _to_llm_name(tool.name),
                         "description": tool.description or catalog_entry["description"],
                         "parameters": catalog_entry["parameters"],
                     },
@@ -202,18 +242,20 @@ class ToolExecutor:
         self, tool_name: str, args: dict, agent: AgentConfig,
     ) -> dict:
         """Execute a named tool via SDK. Returns serializable result."""
+        # Convert LLM-safe name back to dotted name
+        canonical_name = _from_llm_name(tool_name)
         # Check requires_confirm
         tool_def = next(
-            (t for t in agent.tools if t.name == tool_name), None,
+            (t for t in agent.tools if t.name == canonical_name), None,
         )
         if tool_def and tool_def.requires_confirm:
             raise ConfirmationRequired(
-                tool_name,
-                tool_def.description or tool_name,
+                canonical_name,
+                tool_def.description or canonical_name,
                 args,
             )
 
-        return await self._dispatch(tool_name, args)
+        return await self._dispatch(canonical_name, args)
 
     async def execute_god_mode(
         self, model_name: str, method: str, args: dict,
@@ -261,10 +303,37 @@ class ToolExecutor:
             elif tool_name == "properties.get":
                 result = await self._client.properties.get(args["property_id"])
                 return asdict(result)
+            elif tool_name == "properties.get_amenities":
+                return await self._generic_search(
+                    "pms.amenity", [("pms_property_ids", "in", [args["property_id"]])],
+                    ["name", "description", "amenity_type"],
+                )
+            elif tool_name == "properties.get_board_services":
+                return await self._generic_search(
+                    "pms.board.service", [("pms_property_ids", "in", [args["property_id"]])],
+                    ["name", "board_service_type", "amount"],
+                )
+            elif tool_name == "properties.get_room_types":
+                return await self._generic_search(
+                    "pms.room.type", [("pms_property_ids", "in", [args["property_id"]])],
+                    ["name", "default_code", "default_max_avail", "list_price"],
+                )
             else:
                 return {"error": f"Unknown tool: {tool_name}"}
         except Exception as exc:
             log.error("Tool execution failed: %s(%s) — %s", tool_name, args, exc)
+            return {"error": str(exc)}
+
+    async def _generic_search(
+        self, model: str, domain: list, fields: list, limit: int = 50,
+    ) -> dict:
+        """Generic search_read via SDK transport."""
+        try:
+            records = await self._client._transport.search_read(
+                model, domain, fields, limit=limit,
+            )
+            return {"records": records}
+        except Exception as exc:
             return {"error": str(exc)}
 
     async def _dispatch_god(
