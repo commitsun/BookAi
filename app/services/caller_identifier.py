@@ -17,10 +17,6 @@ from app.models.instance import Instance
 
 log = logging.getLogger("caller_identifier")
 
-# Roomdoo staff whitelist — for Phase 1 we hardcode known numbers.
-# In production this would come from Instance config or a DB table.
-ROOMDOO_WHITELIST: set[str] = set()
-
 
 async def identify_caller(
     phone_code: str,
@@ -31,8 +27,10 @@ async def identify_caller(
 
     Returns: "roomdoo" | "internal" | "external_guest"
     """
-    # 1. Roomdoo staff (whitelist)
-    if phone_code in ROOMDOO_WHITELIST:
+    # 1. Roomdoo staff (whitelist from instance config)
+    whitelist = set(instance.roomdoo_staff_phones or [])
+    # Match with and without country code prefix
+    if phone_code in whitelist or phone_code[-9:] in {p[-9:] for p in whitelist}:
         log.info("Caller %s identified as roomdoo (whitelist)", phone_code)
         return "roomdoo"
 

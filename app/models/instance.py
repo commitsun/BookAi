@@ -1,6 +1,7 @@
 from datetime import datetime
 
 from sqlalchemy import Boolean, ForeignKey, Integer, String, Text, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -31,6 +32,9 @@ class Instance(Base):
     router_llm_api_key: Mapped[str | None] = mapped_column(Text, nullable=True)
     router_llm_api_base_url: Mapped[str | None] = mapped_column(Text, nullable=True)
     router_llm_model: Mapped[str | None] = mapped_column(String(255), nullable=True)
+
+    # Roomdoo staff phone whitelist — numbers that get supervisor-roomdoo
+    roomdoo_staff_phones: Mapped[list] = mapped_column(JSONB, default=list, nullable=False)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
