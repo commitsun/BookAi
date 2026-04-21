@@ -72,9 +72,10 @@ GOD_MODE_TOOL = {
 
 
 class ToolExecutor:
-    def __init__(self, client: RoomdooClient, mcp_manager=None):
+    def __init__(self, client: RoomdooClient, mcp_manager=None, instance_id: int = 0):
         self._client = client
         self._mcp = mcp_manager  # MCPManager | None
+        self._instance_id = instance_id
 
     # ── Build LLM tools from bindings ────────────────────────────────
 
@@ -183,10 +184,10 @@ class ToolExecutor:
         """Execute a tool via MCP server."""
         if not self._mcp:
             return {"error": "MCP manager not available"}
-        server_id = self._mcp.find_server_for_tool(tool_name)
+        server_id = self._mcp.find_server_for_tool(self._instance_id, tool_name)
         if server_id is None:
             return {"error": f"No MCP server found for tool '{tool_name}'"}
-        return await self._mcp.call_tool(server_id, tool_name, args)
+        return await self._mcp.call_tool(self._instance_id, server_id, tool_name, args)
 
     # ── SDK tool dispatch ────────────────────────────────────────────
 

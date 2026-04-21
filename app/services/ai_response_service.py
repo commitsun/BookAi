@@ -168,7 +168,10 @@ async def _generate_and_send(
 
     # Get SDK client for tool execution
     roomdoo_client = sdk_registry.get_client(instance)
-    tool_executor = ToolExecutor(roomdoo_client, mcp_manager) if roomdoo_client else None
+    tool_executor = (
+        ToolExecutor(roomdoo_client, mcp_manager, instance.id)
+        if roomdoo_client else None
+    )
 
     llm_tools = None
     if tool_executor and agent.tools:
