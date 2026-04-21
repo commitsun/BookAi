@@ -301,7 +301,10 @@ async def get_messages(
 ) -> MessagesResponse:
     query = (
         select(Message)
-        .where(Message.conversation_id == conversation_id)
+        .where(
+            Message.conversation_id == conversation_id,
+            Message.escalation_id.is_(None),  # exclude escalation messages
+        )
         .order_by(Message.id.desc())
         .limit(limit)
     )
@@ -676,6 +679,18 @@ async def toggle_conversation_ai(
         )
 
     session.ai_enabled = ai_enabled
+
+    # Auto-resolve pending escalations when operator takes control (IA OFF)
+    if not ai_enabled:
+        from app.repositories import escalation_repo
+        pending = await escalation_repo.find_pending_for_session(db, session.id)
+        for esc in pending:
+            await escalation_repo.resolve(
+                db, esc,
+                resolution_medium="manual_takeover",
+                resolution_notes="Operator disabled AI and took control",
+            )
+
     await db.commit()
 
     return {
@@ -813,6 +828,20 @@ async def _build_items_with_last_message(
         for row in sess_result.all():
             session_ai[row.conversation_id] = row.ai_enabled
 
+    # Load pending escalation flags
+    pending_escalations: set[int] = set()
+    if conversation_ids:
+        from app.models.escalation import Escalation
+        esc_result = await db.execute(
+            select(Escalation.conversation_id)
+            .where(
+                Escalation.conversation_id.in_(conversation_ids),
+                Escalation.status == "pending",
+            )
+            .distinct()
+        )
+        pending_escalations = {row.conversation_id for row in esc_result.all()}
+
     items: list[ConversationListItem] = []
     for conv in conversations:
         contact = conv.contact
@@ -844,6 +873,7 @@ async def _build_items_with_last_message(
                 unread_count=unread_counts.get(conv.id, 0),
                 needs_attention=needs_attention.get(conv.id, False),
                 ai_enabled=session_ai.get(conv.id),
+                has_pending_escalation=conv.id in pending_escalations,
             )
         )
     return items

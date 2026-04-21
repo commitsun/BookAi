@@ -58,6 +58,10 @@ class ConversationListItem(BaseModel):
             "None if no active session exists. Can be toggled via PATCH."
         ),
     )
+    has_pending_escalation: bool = Field(
+        default=False,
+        description="True when there is at least one unresolved escalation.",
+    )
 
 
 class ConversationsListResponse(BaseModel):

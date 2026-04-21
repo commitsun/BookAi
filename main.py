@@ -16,6 +16,7 @@ from app.api.v1 import (
     conversations,
     email,
     email_webhooks,
+    escalations,
     folios,
     mcp_endpoints,
     property_webhooks,
@@ -126,6 +127,7 @@ app.include_router(conversations.router, prefix="/api/v1")
 app.include_router(folios.router, prefix="/api/v1")
 app.include_router(email.router, prefix="/api/v1")
 app.include_router(property_webhooks.api_router, prefix="/api/v1")
+app.include_router(escalations.router, prefix="/api/v1")
 app.include_router(webhooks.router)
 app.include_router(email_webhooks.router)
 app.include_router(property_webhooks.webhook_router)
