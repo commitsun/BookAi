@@ -1,7 +1,7 @@
 import enum
 from datetime import datetime
 
-from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, func
+from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -57,6 +57,10 @@ class AttentionSession(Base):
     # AI toggle per session. Defaults to True (inherits property setting at runtime).
     # Can be manually disabled by an operator from the app.
     ai_enabled: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
+
+    # Type of caller: external_guest | internal | roomdoo
+    # Set once when the session is created via caller_identifier.
+    caller_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now(), nullable=False

@@ -82,6 +82,12 @@ class Message(Base):
         ForeignKey("attention_sessions.id"), nullable=True
     )
 
+    # NULL = regular message in the conversation thread
+    # Set = message belongs to an escalation's internal thread
+    escalation_id: Mapped[int | None] = mapped_column(
+        ForeignKey("escalations.id"), nullable=True,
+    )
+
     kind: Mapped[MessageKind] = mapped_column(
         Enum(MessageKind, name="message_kind"),
         default=MessageKind.message,
@@ -165,6 +171,10 @@ class Message(Base):
     # Media attachments (images, audio, video, documents)
     media_attachments: Mapped[list["MessageMedia"]] = relationship(
         back_populates="message", cascade="all, delete-orphan",
+    )
+    # Escalation this message belongs to (NULL for regular messages)
+    escalation: Mapped["Escalation | None"] = relationship(
+        back_populates="messages",
     )
 
 
