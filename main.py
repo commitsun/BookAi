@@ -13,6 +13,7 @@ from app.api.v1 import (
     email,
     email_webhooks,
     folios,
+    mcp_endpoints,
     property_webhooks,
     template_crud,
     templates,
@@ -24,6 +25,7 @@ from app.realtime.socket_manager import create_socket_server
 from app.services.email_channel_client import EmailChannelClient
 from app.services.instance_sdk_registry import InstanceSDKRegistry
 from app.services.llm_litellm import LiteLLMProvider
+from app.services.mcp_manager import MCPManager
 from app.services.whatsapp_client import WhatsAppClient
 
 _DESCRIPTION = """
@@ -93,10 +95,12 @@ async def lifespan(app: FastAPI):
     app.state.email_client = EmailChannelClient(http_client)
     app.state.llm_client = LiteLLMProvider()
     app.state.sdk_registry = InstanceSDKRegistry()
+    app.state.mcp_manager = MCPManager()
     app.state.sio = sio
 
     yield
 
+    await app.state.mcp_manager.close_all()
     await app.state.sdk_registry.close_all()
     await http_client.aclose()
     await engine.dispose()
@@ -123,6 +127,8 @@ app.include_router(email_webhooks.router)
 app.include_router(property_webhooks.webhook_router)
 app.include_router(ai_webhooks.router)
 app.include_router(ai_webhooks.sdk_router, prefix="/api/v1")
+app.include_router(mcp_endpoints.api_router, prefix="/api/v1")
+app.include_router(mcp_endpoints.webhook_router)
 app.mount("/media", StaticFiles(directory="/app/media"), name="media")
 app.mount("/dev-ui", StaticFiles(directory="dev_ui", html=True), name="dev-ui")
 

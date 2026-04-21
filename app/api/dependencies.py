@@ -13,6 +13,7 @@ from app.repositories import instance_repo
 from app.services.email_channel_client import EmailChannelClient
 from app.services.instance_sdk_registry import InstanceSDKRegistry
 from app.services.llm_client import LLMProvider
+from app.services.mcp_manager import MCPManager
 from app.services.whatsapp_client import WhatsAppClient
 
 _bearer_scheme = HTTPBearer(auto_error=False)
@@ -61,3 +62,7 @@ def get_sdk_registry(request: Request) -> InstanceSDKRegistry:
 
 def get_llm_client(request: Request) -> LLMProvider:
     return request.app.state.llm_client
+
+
+def get_mcp_manager(request: Request) -> MCPManager:
+    return request.app.state.mcp_manager

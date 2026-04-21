@@ -72,8 +72,9 @@ GOD_MODE_TOOL = {
 
 
 class ToolExecutor:
-    def __init__(self, client: RoomdooClient):
+    def __init__(self, client: RoomdooClient, mcp_manager=None):
         self._client = client
+        self._mcp = mcp_manager  # MCPManager | None
 
     # ── Build LLM tools from bindings ────────────────────────────────
 
@@ -129,7 +130,7 @@ class ToolExecutor:
         if binding.tool_type == "sdk":
             return await self._execute_sdk(binding.sdk_method or canonical, args)
         elif binding.tool_type == "mcp":
-            return {"error": "MCP tool execution not yet implemented"}
+            return await self._execute_mcp(canonical, args)
         elif binding.tool_type == "webhook":
             return {"error": "Webhook tool execution not yet implemented"}
         elif binding.tool_type == "function":
@@ -175,6 +176,17 @@ class ToolExecutor:
                 return {"error": f"Unknown method: {method}"}
         except Exception as exc:
             return {"error": str(exc)}
+
+    # ── MCP tool dispatch ────────────────────────────────────────────
+
+    async def _execute_mcp(self, tool_name: str, args: dict) -> dict:
+        """Execute a tool via MCP server."""
+        if not self._mcp:
+            return {"error": "MCP manager not available"}
+        server_id = self._mcp.find_server_for_tool(tool_name)
+        if server_id is None:
+            return {"error": f"No MCP server found for tool '{tool_name}'"}
+        return await self._mcp.call_tool(server_id, tool_name, args)
 
     # ── SDK tool dispatch ────────────────────────────────────────────
 

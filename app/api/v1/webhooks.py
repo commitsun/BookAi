@@ -10,12 +10,15 @@ from fastapi import APIRouter, BackgroundTasks, Depends, Request
 from fastapi.responses import PlainTextResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from app.api.dependencies import get_db, get_llm_client, get_sdk_registry, get_sio, get_wa_client
+from app.api.dependencies import (
+    get_db, get_llm_client, get_mcp_manager, get_sdk_registry, get_sio, get_wa_client,
+)
 from app.core.database import SessionLocal
 from app.repositories import instance_repo
 from app.schemas.webhook import MetaWebhookPayload
 from app.services.instance_sdk_registry import InstanceSDKRegistry
 from app.services.llm_client import LLMProvider
+from app.services.mcp_manager import MCPManager
 from app.services.webhook_service import process_inbound_webhook
 from app.services.whatsapp_client import WhatsAppClient
 
@@ -69,10 +72,11 @@ async def whatsapp_webhook(
     sio: socketio.AsyncServer = Depends(get_sio),
     sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
     llm_client: LLMProvider = Depends(get_llm_client),
+    mcp_manager: MCPManager = Depends(get_mcp_manager),
 ) -> dict:
     background_tasks.add_task(
         _process_webhook_bg, payload, wa_client, sio,
-        sdk_registry, llm_client,
+        sdk_registry, llm_client, mcp_manager,
     )
     return {"status": "ok"}
 
@@ -83,11 +87,13 @@ async def _process_webhook_bg(
     sio: socketio.AsyncServer,
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
+    mcp_manager: MCPManager | None = None,
 ) -> None:
     try:
         async with SessionLocal() as db:
             await process_inbound_webhook(
                 payload, db, wa_client, sio, sdk_registry, llm_client,
+                mcp_manager,
             )
     except Exception as exc:
         log.error("Error processing webhook in background: %s", exc, exc_info=True)

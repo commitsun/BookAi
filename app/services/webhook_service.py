@@ -85,6 +85,7 @@ async def process_inbound_webhook(
     sio: socketio.AsyncServer,
     sdk_registry: InstanceSDKRegistry | None = None,
     llm_client: LLMProvider | None = None,
+    mcp_manager=None,
 ) -> None:
     for entry in payload.entry:
         for change in entry.changes:
@@ -110,6 +111,7 @@ async def process_inbound_webhook(
                         sio=sio,
                         sdk_registry=sdk_registry,
                         llm_client=llm_client,
+                        mcp_manager=mcp_manager,
                     )
 
 
@@ -122,6 +124,7 @@ async def _process_message(
     sio: socketio.AsyncServer,
     sdk_registry: InstanceSDKRegistry | None = None,
     llm_client: LLMProvider | None = None,
+    mcp_manager=None,
 ) -> None:
     # --- Deduplication ---
     existing = await message_repo.find_by_provider_message_id(db, wa_msg.id)
@@ -302,6 +305,7 @@ async def _process_message(
             sdk_registry=sdk_registry,
             llm_client=llm_client,
             tracker=tracker,
+            mcp_manager=mcp_manager,
         )
 
 

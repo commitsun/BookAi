@@ -61,6 +61,7 @@ async def try_ai_response(
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
     tracker=None,
+    mcp_manager=None,
 ) -> None:
     """Fire-and-forget safe. All exceptions are caught and logged."""
     try:
@@ -68,6 +69,7 @@ async def try_ai_response(
             conversation_id, message_content, attention_session_id,
             routed_property_id, channel_endpoint, contact,
             db, wa_client, sio, sdk_registry, llm_client, tracker,
+            mcp_manager,
         )
     except Exception as exc:
         log.error(
@@ -89,6 +91,7 @@ async def _generate_and_send(
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
     tracker=None,
+    mcp_manager=None,
 ) -> None:
     # --- 1. Check property + session AI flags ---
     result = await db.execute(
@@ -165,7 +168,7 @@ async def _generate_and_send(
 
     # Get SDK client for tool execution
     roomdoo_client = sdk_registry.get_client(instance)
-    tool_executor = ToolExecutor(roomdoo_client) if roomdoo_client else None
+    tool_executor = ToolExecutor(roomdoo_client, mcp_manager) if roomdoo_client else None
 
     llm_tools = None
     if tool_executor and agent.tools:
