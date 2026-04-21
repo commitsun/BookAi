@@ -153,7 +153,17 @@ async def _generate_and_send(
         api_base_url = settings.ollama_url
         log.info("Agent %s uses local model (sensitive_data)", agent.technical_name)
 
-    # --- 5. Build prompt + tools ---
+    # --- 5. Build tools + prompt ---
+    roomdoo_client = sdk_registry.get_client(instance)
+    tool_executor = (
+        ToolExecutor(roomdoo_client, mcp_manager, instance.id)
+        if roomdoo_client else None
+    )
+
+    llm_tools = None
+    if tool_executor and (agent.tools or agent.god_mode):
+        llm_tools = tool_executor.build_llm_tools(agent)
+
     history = await message_repo.find_recent_by_conversation(
         db, conversation_id, limit=20,
     )
@@ -164,20 +174,8 @@ async def _generate_and_send(
         conversation_history=history,
         current_message=message_content,
         property_name=prop.name,
+        tools=llm_tools,
     )
-
-    # Get SDK client for tool execution
-    roomdoo_client = sdk_registry.get_client(instance)
-    tool_executor = (
-        ToolExecutor(roomdoo_client, mcp_manager, instance.id)
-        if roomdoo_client else None
-    )
-
-    llm_tools = None
-    if tool_executor and agent.tools:
-        llm_tools = tool_executor.build_llm_tools(agent)
-    elif tool_executor and agent.god_mode:
-        llm_tools = tool_executor.build_llm_tools(agent)
 
     # --- 6. LLM call with tool execution loop ---
     llm_messages = [{"role": m.role, "content": m.content} for m in prompt_messages]

@@ -25,6 +25,7 @@ def build_prompt(
     conversation_history: list[Message],
     current_message: str,
     property_name: str = "",
+    tools: list[dict] | None = None,
 ) -> list[LLMMessage]:
     """Build the message list ready for an LLM chat completion call.
 
@@ -48,9 +49,14 @@ def build_prompt(
     # 2. Build system prompt with variable substitution
     system_text = _build_system_text(agent, kb_context, property_name)
 
+    # 3. Append tools reminder if tools are available
+    if tools:
+        tools_block = _build_tools_reminder(tools)
+        system_text = f"{system_text}\n\n{tools_block}"
+
     messages: list[LLMMessage] = [LLMMessage(role="system", content=system_text)]
 
-    # 3. Map conversation history
+    # 4. Map conversation history
     for msg in conversation_history:
         if not msg.content:
             continue
@@ -59,7 +65,7 @@ def build_prompt(
         else:
             messages.append(LLMMessage(role="assistant", content=msg.content))
 
-    # 4. Current message
+    # 5. Current message
     messages.append(LLMMessage(role="user", content=current_message))
 
     return messages
@@ -91,3 +97,21 @@ def _build_system_text(
         text = text.replace("{kb_context}", kb_context)
 
     return text
+
+
+def _build_tools_reminder(tools: list[dict]) -> str:
+    """Build an explicit reminder of available tools for the LLM.
+
+    This reinforces tool usage — LLMs sometimes ignore function definitions
+    unless the system prompt explicitly tells them to use them.
+    """
+    lines = ["## Available tools — USE THEM before answering"]
+    lines.append("You MUST call the appropriate tool before responding. "
+                 "Do NOT say 'I don't have that information' if a tool can help.")
+    lines.append("")
+    for tool in tools:
+        fn = tool.get("function", {})
+        name = fn.get("name", "?").replace("__", ".")
+        desc = fn.get("description", "")
+        lines.append(f"- **{name}**: {desc}")
+    return "\n".join(lines)
