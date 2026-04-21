@@ -76,7 +76,14 @@ class MCPManager:
 
         self._servers[key] = state
         log.info("MCP server %s (%s) connected via %s", key, name, transport_type)
-        return {"status": "ok", "message": "Server connected successfully"}
+
+        # Auto-discover tools after connecting
+        tools = await self.discover(instance_id, server_id)
+        return {
+            "status": "ok",
+            "message": "Server connected successfully",
+            "tools_discovered": len(tools),
+        }
 
     async def _connect_stdio(self, state: MCPServerState) -> None:
         config = state.config
@@ -155,7 +162,9 @@ class MCPManager:
                 for block in result.content:
                     if hasattr(block, "text"):
                         content_parts.append(block.text)
-                return {"result": "\n".join(content_parts) if content_parts else str(result)}
+                output = "\n".join(content_parts) if content_parts else str(result)
+                log.info("MCP tool %s returned %d chars", tool_name, len(output))
+                return {"result": output}
             except Exception as exc:
                 log.error("MCP tool call failed: %s on %s: %s", tool_name, key, exc)
                 return {"error": str(exc)}
