@@ -26,6 +26,7 @@ def build_prompt(
     current_message: str,
     property_name: str = "",
     tools: list[dict] | None = None,
+    property_context: dict | None = None,
 ) -> list[LLMMessage]:
     """Build the message list ready for an LLM chat completion call.
 
@@ -49,7 +50,15 @@ def build_prompt(
     # 2. Build system prompt with variable substitution
     system_text = _build_system_text(agent, kb_context, property_name)
 
-    # 3. Append tools reminder if tools are available
+    # 3. Append property context if available
+    if property_context:
+        ctx_parts = [f"## Property context (always use this for location-based queries)"]
+        for k, v in property_context.items():
+            if v:
+                ctx_parts.append(f"- {k}: {v}")
+        system_text = f"{system_text}\n\n" + "\n".join(ctx_parts)
+
+    # 4. Append tools reminder if tools are available
     if tools:
         tools_block = _build_tools_reminder(tools)
         system_text = f"{system_text}\n\n{tools_block}"

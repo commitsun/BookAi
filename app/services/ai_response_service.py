@@ -326,12 +326,35 @@ async def _run_worker(
     history = await message_repo.find_recent_by_conversation(db, conversation_id, limit=20)
     history.reverse()
 
+    # Build property context from SDK (cached per request)
+    property_context = None
+    if roomdoo_client and prop.odoo_property_id:
+        try:
+            pdata = await roomdoo_client.properties.get(prop.odoo_property_id)
+            property_context = {
+                "Hotel name": pdata.name,
+                "Address": f"{pdata.street or ''}, {pdata.city or ''}".strip(", "),
+                "Country": pdata.country_name or "",
+                "Phone": pdata.phone or prop.phone or "",
+                "Email": pdata.email or prop.email or "",
+                "Timezone": pdata.tz or prop.tz or "",
+            }
+        except Exception:
+            pass
+    if not property_context:
+        property_context = {
+            "Hotel name": prop.name,
+            "Phone": prop.phone or "",
+            "Email": prop.email or "",
+        }
+
     prompt_messages = build_prompt(
         agent=agent, docs=docs,
         conversation_history=history,
         current_message=message_content,
         property_name=prop.name,
         tools=llm_tools,
+        property_context=property_context,
     )
 
     llm_messages = [{"role": m.role, "content": m.content} for m in prompt_messages]
