@@ -944,6 +944,7 @@ function appendMessage(msg, requestedLang) {
     : msg.sender === "agent"
       ? (msg.agent_display_name ? `Agente · ${msg.agent_display_name}` : "Agente")
       : msg.sender === "system" ? "Sistema"
+      : msg.sender === "ai" ? "IA"
       : "Huésped"
 
   const time = msg.created_at ? new Date(msg.created_at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }) : ""
