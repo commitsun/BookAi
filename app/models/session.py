@@ -62,6 +62,9 @@ class AttentionSession(Base):
     # Set once when the session is created via caller_identifier.
     caller_type: Mapped[str | None] = mapped_column(String(20), nullable=True)
 
+    # BCP-47 language detected from the guest's first message
+    guest_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now(), nullable=False
     )

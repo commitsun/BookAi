@@ -1,11 +1,14 @@
 """
-Supervisor service — evaluates messages and validates responses.
+Supervisor as active orchestrator.
 
-The supervisor is an agent configured in Odoo (supervisor-external,
-supervisor-internal, supervisor-roomdoo) that decides:
-- Which worker agent should handle the message
-- Whether to escalate to a human
-- Whether a worker's response passes quality checks
+The supervisor participates in EVERY message. It decides:
+- respond: answer directly (simple greetings, etc.)
+- delegate: which worker should handle this message
+- escalate: create an escalation (last resort)
+- reassign_supervisor: wrong supervisor, switch to another
+
+After the worker responds, the supervisor validates. If rejected,
+it can retry with a different worker (max 2 retries).
 """
 
 import json
@@ -17,81 +20,82 @@ from app.services.llm_client import LLMProvider
 
 log = logging.getLogger("supervisor_service")
 
-SUPERVISOR_COOLDOWN = 3  # Evaluate every N messages
-
 
 @dataclass
-class SupervisorDecision:
-    action: str  # delegate | escalate | respond_direct
+class SupervisorResult:
+    action: str  # respond | delegate | escalate | reassign_supervisor
+    response: str | None = None
     worker_technical_name: str | None = None
     worker_id: int | None = None
     escalation_type: str | None = None
     escalation_reason: str | None = None
-    direct_response: str | None = None
+    new_supervisor_name: str | None = None
 
 
 @dataclass
-class OutputValidation:
+class ValidationResult:
     approved: bool
+    retry_with: str | None = None  # technical_name of alternative worker
     escalation_type: str | None = None
     escalation_reason: str | None = None
 
 
-def should_supervise(session, message_count: int) -> bool:
-    """Decide if the supervisor should evaluate this message."""
-    # Always supervise the first message
-    if message_count <= 1:
-        return True
-    # After a worker change, supervise the next message too
-    # (covered by checking if active_agent_id changed recently)
-    # Cooldown: every N messages
-    return message_count % SUPERVISOR_COOLDOWN == 0
+# ── Orchestrate ──────────────────────────────────────────────────────
 
-
-async def run_supervisor(
+async def supervisor_orchestrate(
     supervisor: CachedAgent,
     message: str,
     available_workers: list[CachedAgent],
     current_worker_name: str | None,
     llm_client: LLMProvider,
-) -> SupervisorDecision:
-    """Ask the supervisor to evaluate a message and decide what to do.
+) -> SupervisorResult:
+    """Supervisor evaluates every message and decides what to do."""
 
-    The supervisor receives the message + list of available workers and returns
-    a structured decision: delegate to a worker, escalate, or respond directly.
-    """
     worker_list = "\n".join(
         f"- {w.config.technical_name}: {w.config.description}"
         for w in available_workers
     )
+    current_info = f"\nCurrently active worker: {current_worker_name}" if current_worker_name else ""
 
-    current_info = ""
-    if current_worker_name:
-        current_info = f"\nCurrently active worker: {current_worker_name}"
+    technical_block = f"""
+## ORCHESTRATION INSTRUCTIONS (system — do not share with the user)
 
-    prompt = f"""{supervisor.config.system_prompt}
+You are a supervisor agent. For every message, you MUST respond with a JSON object (no markdown, no explanation, just JSON).
 
-## Available worker agents
+### Available workers
 {worker_list}
 {current_info}
 
-## Guest message
-{message}
+### Possible actions
 
-## Your task
-Evaluate this message and respond with a JSON object (no markdown, no explanation):
-{{
-    "action": "delegate" | "escalate" | "respond_direct",
-    "worker": "technical_name of the best worker" (only if action=delegate),
-    "escalation_type": "manual|info_not_found|bad_response|inappropriate" (only if action=escalate),
-    "escalation_reason": "brief explanation" (only if action=escalate),
-    "response": "your direct response" (only if action=respond_direct)
-}}
+1. **delegate** — assign a worker to handle this message
+   {{"action": "delegate", "worker": "technical_name"}}
+
+2. **respond** — you answer directly (only for very simple cases: greetings, thanks, goodbyes)
+   {{"action": "respond", "response": "your direct response"}}
+
+3. **escalate** — no worker can handle this, human intervention needed (LAST RESORT)
+   {{"action": "escalate", "escalation_type": "manual|info_not_found|bad_response|inappropriate", "escalation_reason": "brief explanation"}}
+
+4. **reassign_supervisor** — you are the wrong supervisor for this caller
+   {{"action": "reassign_supervisor", "new_supervisor": "supervisor-external|supervisor-internal|supervisor-roomdoo"}}
+
+### Rules
+- ALWAYS prefer delegate over escalate
+- Only escalate if the user EXPLICITLY asks for a human, or if the situation truly cannot be handled
+- If in doubt, delegate to the most relevant worker
+- Respond directly ONLY for trivial messages (hi, thanks, bye)
+- JSON only. No text before or after.
 """
+
+    system_prompt = f"{supervisor.config.system_prompt}\n{technical_block}"
 
     try:
         response = await llm_client.chat(
-            messages=[{"role": "user", "content": prompt}],
+            messages=[
+                {"role": "system", "content": system_prompt},
+                {"role": "user", "content": message},
+            ],
             provider=supervisor.config.llm_account.provider,
             api_key=supervisor.config.llm_account.api_key,
             model=supervisor.config.effective_model,
@@ -99,47 +103,49 @@ Evaluate this message and respond with a JSON object (no markdown, no explanatio
             temperature=0.1,
             max_tokens=300,
         )
-
-        decision = _parse_decision(response.content or "", available_workers)
-        log.info(
-            "Supervisor decision: action=%s worker=%s",
-            decision.action, decision.worker_technical_name,
-        )
-        return decision
+        result = _parse_orchestration(response.content or "", available_workers)
+        log.info("Supervisor: action=%s worker=%s", result.action, result.worker_technical_name)
+        return result
 
     except Exception as exc:
-        log.error("Supervisor failed: %s — defaulting to first worker", exc)
-        if available_workers:
-            return SupervisorDecision(
-                action="delegate",
-                worker_technical_name=available_workers[0].config.technical_name,
-                worker_id=available_workers[0].config.id,
-            )
-        return SupervisorDecision(action="escalate", escalation_type="bad_response",
-                                  escalation_reason="Supervisor failed")
+        log.error("Supervisor orchestrate failed: %s", exc)
+        return _fallback_delegate(available_workers)
 
 
-async def validate_output(
+# ── Validate ─────────────────────────────────────────────────────────
+
+async def supervisor_validate(
     supervisor: CachedAgent,
-    response_text: str,
+    worker_response: str,
     original_message: str,
+    worker_name: str,
+    available_workers: list[CachedAgent],
     llm_client: LLMProvider,
-) -> OutputValidation:
-    """Post-check: validate a worker's response before sending to the guest."""
+) -> ValidationResult:
+    """Supervisor validates a worker's response before sending."""
+
+    other_workers = [w for w in available_workers if w.config.technical_name != worker_name]
+    alternatives = ", ".join(w.config.technical_name for w in other_workers) if other_workers else "none"
+
     prompt = f"""{supervisor.config.system_prompt}
 
-## Quality check
-The AI generated the following response to a guest message. Evaluate if it's safe and appropriate to send.
+## VALIDATION TASK (system)
+
+Check if this response is appropriate to send to the user.
 
 Guest message: {original_message}
-AI response: {response_text}
+Worker ({worker_name}) response: {worker_response}
+Alternative workers available: {alternatives}
 
-Respond with a JSON object (no markdown):
-{{
-    "approved": true | false,
-    "escalation_type": "bad_response|inappropriate" (only if not approved),
-    "reason": "brief explanation" (only if not approved)
-}}
+Respond with JSON only:
+- Approved: {{"approved": true}}
+- Reject + retry with another worker: {{"approved": false, "retry_with": "other_worker_technical_name", "reason": "brief explanation"}}
+- Reject + escalate (no alternatives): {{"approved": false, "escalate": true, "escalation_type": "bad_response", "reason": "brief explanation"}}
+
+Rules:
+- Approve unless the response is clearly wrong, offensive, or completely off-topic
+- Do NOT reject for stylistic reasons or minor imperfections
+- If the response addresses the user's question reasonably, approve it
 """
 
     try:
@@ -155,78 +161,95 @@ Respond with a JSON object (no markdown):
         return _parse_validation(result.content or "")
 
     except Exception as exc:
-        log.error("Output validation failed: %s — approving by default", exc)
-        return OutputValidation(approved=True)
+        log.error("Supervisor validate failed: %s — approving by default", exc)
+        return ValidationResult(approved=True)
 
 
-def _parse_decision(text: str, workers: list[CachedAgent]) -> SupervisorDecision:
-    """Parse supervisor JSON response into a SupervisorDecision."""
-    try:
-        # Strip markdown fences if present
-        clean = text.strip()
-        if clean.startswith("```"):
-            clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
-        data = json.loads(clean)
-    except (json.JSONDecodeError, IndexError):
-        # Default: delegate to first worker
-        if workers:
-            return SupervisorDecision(
-                action="delegate",
-                worker_technical_name=workers[0].config.technical_name,
-                worker_id=workers[0].config.id,
-            )
-        return SupervisorDecision(action="escalate", escalation_type="bad_response",
-                                  escalation_reason="Could not parse supervisor response")
+# ── Parsers ──────────────────────────────────────────────────────────
+
+def _parse_orchestration(text: str, workers: list[CachedAgent]) -> SupervisorResult:
+    data = _parse_json(text)
+    if data is None:
+        return _fallback_delegate(workers)
 
     action = data.get("action", "delegate")
 
+    if action == "respond":
+        return SupervisorResult(
+            action="respond",
+            response=data.get("response", ""),
+        )
+
     if action == "delegate":
-        worker_name = data.get("worker", "")
+        name = data.get("worker", "")
         for w in workers:
-            if w.config.technical_name == worker_name:
-                return SupervisorDecision(
+            if w.config.technical_name == name:
+                return SupervisorResult(
                     action="delegate",
-                    worker_technical_name=worker_name,
+                    worker_technical_name=name,
                     worker_id=w.config.id,
                 )
-        # Worker not found — use first
-        if workers:
-            return SupervisorDecision(
-                action="delegate",
-                worker_technical_name=workers[0].config.technical_name,
-                worker_id=workers[0].config.id,
-            )
+        return _fallback_delegate(workers)
 
-    elif action == "escalate":
-        return SupervisorDecision(
+    if action == "escalate":
+        return SupervisorResult(
             action="escalate",
             escalation_type=data.get("escalation_type", "manual"),
             escalation_reason=data.get("escalation_reason", data.get("reason", "")),
         )
 
-    elif action == "respond_direct":
-        return SupervisorDecision(
-            action="respond_direct",
-            direct_response=data.get("response", ""),
+    if action == "reassign_supervisor":
+        return SupervisorResult(
+            action="reassign_supervisor",
+            new_supervisor_name=data.get("new_supervisor", ""),
         )
 
-    return SupervisorDecision(action="delegate",
-                              worker_technical_name=workers[0].config.technical_name if workers else None,
-                              worker_id=workers[0].config.id if workers else None)
+    return _fallback_delegate(workers)
 
 
-def _parse_validation(text: str) -> OutputValidation:
-    """Parse validation JSON response."""
+def _parse_validation(text: str) -> ValidationResult:
+    data = _parse_json(text)
+    if data is None:
+        return ValidationResult(approved=True)
+
+    if data.get("approved", True):
+        return ValidationResult(approved=True)
+
+    if data.get("escalate"):
+        return ValidationResult(
+            approved=False,
+            escalation_type=data.get("escalation_type", "bad_response"),
+            escalation_reason=data.get("reason", ""),
+        )
+
+    if data.get("retry_with"):
+        return ValidationResult(
+            approved=False,
+            retry_with=data["retry_with"],
+        )
+
+    return ValidationResult(approved=True)
+
+
+def _parse_json(text: str) -> dict | None:
+    clean = text.strip()
+    if clean.startswith("```"):
+        clean = clean.split("\n", 1)[1].rsplit("```", 1)[0].strip()
     try:
-        clean = text.strip()
-        if clean.startswith("```"):
-            clean = clean.split("\n", 1)[1].rsplit("```", 1)[0]
-        data = json.loads(clean)
+        return json.loads(clean)
     except (json.JSONDecodeError, IndexError):
-        return OutputValidation(approved=True)
+        return None
 
-    return OutputValidation(
-        approved=data.get("approved", True),
-        escalation_type=data.get("escalation_type"),
-        escalation_reason=data.get("reason"),
+
+def _fallback_delegate(workers: list[CachedAgent]) -> SupervisorResult:
+    if workers:
+        return SupervisorResult(
+            action="delegate",
+            worker_technical_name=workers[0].config.technical_name,
+            worker_id=workers[0].config.id,
+        )
+    return SupervisorResult(
+        action="escalate",
+        escalation_type="bad_response",
+        escalation_reason="No workers available",
     )

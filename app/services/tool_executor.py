@@ -39,32 +39,82 @@ def _from_llm_name(name: str) -> str:
 
 # ── God mode tool definition ─────────────────────────────────────────
 
-GOD_MODE_TOOL = {
-    "type": "function",
-    "function": {
-        "name": "odoo_execute",
-        "description": (
-            "Execute any operation on Odoo. Use for reading or modifying "
-            "any data in the PMS. Write operations require confirmation."
-        ),
-        "parameters": {
-            "type": "object",
-            "properties": {
-                "model_name": {"type": "string"},
-                "method": {
-                    "type": "string",
-                    "enum": ["search_read", "read", "create", "write", "unlink"],
+GOD_MODE_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "odoo_list_models",
+            "description": (
+                "Search for Odoo models by name. Use this FIRST to find the correct "
+                "model name before querying. Example: search 'payment' to find "
+                "account.payment, search 'folio' to find pms.folio."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {"type": "string", "description": "Partial model name to search (e.g. 'folio', 'payment', 'reservation')"},
                 },
-                "domain": {"type": "array"},
-                "fields": {"type": "array", "items": {"type": "string"}},
-                "ids": {"type": "array", "items": {"type": "integer"}},
-                "vals": {"type": "object"},
-                "limit": {"type": "integer"},
+                "required": ["query"],
             },
-            "required": ["model_name", "method"],
         },
     },
-}
+    {
+        "type": "function",
+        "function": {
+            "name": "odoo_get_fields",
+            "description": (
+                "Get field definitions for an Odoo model. Use this to discover "
+                "available fields, their types, and relations before querying."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {"type": "string", "description": "Full model name (e.g. 'pms.folio', 'account.payment')"},
+                },
+                "required": ["model_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "odoo_search_read",
+            "description": (
+                "Search and read records from any Odoo model. For reading data."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {"type": "string"},
+                    "domain": {"type": "string", "description": "JSON search domain, e.g. '[[\"name\",\"=\",\"F2500008\"]]'. Use '[]' for no filter."},
+                    "fields": {"type": "array", "items": {"type": "string"}, "description": "Fields to return. Empty = all fields."},
+                    "limit": {"type": "integer", "description": "Max records (default 20)"},
+                },
+                "required": ["model_name"],
+            },
+        },
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "odoo_write",
+            "description": (
+                "Create, update or delete records in Odoo. ALWAYS requires confirmation. "
+                "Describe what you will do before calling this."
+            ),
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "model_name": {"type": "string"},
+                    "method": {"type": "string", "enum": ["create", "write", "unlink"]},
+                    "ids": {"type": "array", "items": {"type": "integer"}, "description": "Record IDs (for write/unlink)"},
+                    "vals": {"type": "object", "description": "Values (for create/write)"},
+                },
+                "required": ["model_name", "method"],
+            },
+        },
+    },
+]
 
 
 class ToolExecutor:
@@ -77,7 +127,31 @@ class ToolExecutor:
 
     def build_llm_tools(self, agent: AgentConfig) -> list[dict]:
         if agent.god_mode:
-            return [GOD_MODE_TOOL]
+            # God mode: introspection tools + all SDK tools + all agent tools
+            tools = list(GOD_MODE_TOOLS)
+            # Add regular agent tools too (SDK/MCP bindings)
+            for binding in agent.tools:
+                if not binding.active:
+                    continue
+                schema = {}
+                if binding.input_schema:
+                    try:
+                        schema = (
+                            json.loads(binding.input_schema)
+                            if isinstance(binding.input_schema, str)
+                            else binding.input_schema
+                        )
+                    except (json.JSONDecodeError, TypeError):
+                        schema = {}
+                tools.append({
+                    "type": "function",
+                    "function": {
+                        "name": _to_llm_name(binding.tool_name),
+                        "description": binding.description or binding.tool_name,
+                        "parameters": schema or {"type": "object", "properties": {}},
+                    },
+                })
+            return tools
 
         tools = []
         for binding in agent.tools:
@@ -155,38 +229,64 @@ class ToolExecutor:
     # ── God mode: generic Odoo execute ───────────────────────────────
 
     async def execute_god_mode(
-        self, model_name: str, method: str, args: dict,
+        self, tool_name: str, args: dict,
     ) -> dict:
-        write_methods = ("create", "write", "unlink")
-        if method in write_methods:
-            raise ConfirmationRequired(
-                "odoo_execute", f"{method} on {model_name}",
-                {"model_name": model_name, "method": method, **args},
-            )
-
+        """Execute a god mode tool (introspection or write operations)."""
         t = self._client._transport
+
         try:
-            if method == "search_read":
+            if tool_name == "odoo_list_models":
+                query = args.get("query", "")
                 result = await t.search_read(
-                    model_name, args.get("domain", []),
-                    args.get("fields"), limit=args.get("limit", 20),
+                    "ir.model",
+                    [("model", "ilike", query)],
+                    ["model", "name"],
+                    limit=20,
                 )
-                return {"records": result}
-            elif method == "read":
-                result = await t.read(
-                    model_name, args.get("ids", []), args.get("fields"),
+                return {"models": [{"model": r["model"], "name": r["name"]} for r in result]}
+
+            elif tool_name == "odoo_get_fields":
+                model_name = args.get("model_name", "")
+                fields = await t.call(model_name, "fields_get", args=[[]])
+                # Simplify: return name, type, string, relation
+                summary = {}
+                for fname, fdata in fields.items():
+                    if fname.startswith("__"):
+                        continue
+                    summary[fname] = {
+                        "type": fdata.get("type"),
+                        "string": fdata.get("string"),
+                    }
+                    if fdata.get("relation"):
+                        summary[fname]["relation"] = fdata["relation"]
+                return {"model": model_name, "fields": summary}
+
+            elif tool_name == "odoo_search_read":
+                model_name = args.get("model_name", "")
+                domain = args.get("domain", "[]")
+                if isinstance(domain, str):
+                    try:
+                        domain = json.loads(domain)
+                    except json.JSONDecodeError:
+                        domain = []
+                fields = args.get("fields") or None
+                limit = args.get("limit", 20)
+                result = await t.search_read(model_name, domain, fields, limit=limit)
+                return {"records": result, "count": len(result)}
+
+            elif tool_name == "odoo_write":
+                method = args.get("method", "write")
+                model_name = args.get("model_name", "")
+                raise ConfirmationRequired(
+                    "odoo_write",
+                    f"{method} on {model_name}",
+                    args,
                 )
-                return {"records": result}
-            elif method == "create":
-                rid = await t.create(model_name, args.get("vals", {}))
-                return {"id": rid}
-            elif method == "write":
-                await t.write(model_name, args.get("ids", []), args.get("vals", {}))
-                return {"status": "ok"}
-            elif method == "unlink":
-                await t.unlink(model_name, args.get("ids", []))
-                return {"status": "ok"}
+
             else:
-                return {"error": f"Unknown method: {method}"}
+                return {"error": f"Unknown god mode tool: {tool_name}"}
+
+        except ConfirmationRequired:
+            raise
         except Exception as exc:
             return {"error": str(exc)}

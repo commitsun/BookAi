@@ -292,9 +292,25 @@ async def _process_message(
 
     # --- AI response (if enabled for this property) ---
     if routed_property_id is not None and sdk_registry and llm_client:
+        # Buffer rapid messages — wait for pause before processing
+        from app.services.message_buffer import MessageBuffer
+        buffer: MessageBuffer | None = getattr(sio, '_message_buffer', None)
+        # Try to get buffer from app state via the sio reference
+        try:
+            buffer = sio.eio.app.state.message_buffer
+        except Exception:
+            pass
+
+        ai_content = msg.content or content
+        if buffer:
+            buffered = await buffer.add(conversation.id, ai_content)
+            if buffered is None:
+                return  # Still accumulating, will be processed when timer fires
+            ai_content = buffered
+
         await try_ai_response(
             conversation_id=conversation.id,
-            message_content=msg.content or content,
+            message_content=ai_content,
             attention_session_id=attention_session_id,
             routed_property_id=routed_property_id,
             channel_endpoint=channel_endpoint,
