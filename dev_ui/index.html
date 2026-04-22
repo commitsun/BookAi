@@ -822,9 +822,14 @@ async function openConversation(conv) {
   if (msgs) {
     // Merge messages and escalations into a single timeline
     const timeline = []
-    ;(msgData.messages || []).forEach(m => timeline.push({ type: "message", data: m, ts: m.created_at }))
-    ;(escData.escalations || []).forEach(e => timeline.push({ type: "escalation", data: e, ts: e.created_at }))
-    timeline.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+    ;(msgData.messages || []).forEach(m => timeline.push({ type: "message", data: m, sortKey: m.id, ts: m.created_at }))
+    ;(escData.escalations || []).forEach(e => timeline.push({ type: "escalation", data: e, sortKey: 0, ts: e.created_at }))
+    // Messages are ordered by id (DB sequence); escalations by timestamp
+    // Escalations get inserted at the right position by comparing their timestamp with message timestamps
+    timeline.sort((a, b) => {
+      if (a.type === "message" && b.type === "message") return a.sortKey - b.sortKey
+      return new Date(a.ts) - new Date(b.ts)
+    })
     timeline.forEach(item => {
       if (item.type === "message") appendMessage(item.data, selectedLang)
       else appendEscalation(item.data)
