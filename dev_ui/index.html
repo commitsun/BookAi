@@ -817,12 +817,18 @@ async function openConversation(conv) {
   const freshConv = (inboxData.conversations || []).find(c => c.id === conv.id)
   if (freshConv) convAiEnabled = freshConv.ai_enabled ?? null
 
-  // Render messages + escalations interleaved by time
+  // Render messages + escalations interleaved by timestamp
   const msgs = document.getElementById("messages")
   if (msgs) {
-    ;(msgData.messages || []).forEach(m => appendMessage(m, selectedLang))
-    // Render escalations
-    ;(escData.escalations || []).forEach(esc => appendEscalation(esc))
+    // Merge messages and escalations into a single timeline
+    const timeline = []
+    ;(msgData.messages || []).forEach(m => timeline.push({ type: "message", data: m, ts: m.created_at }))
+    ;(escData.escalations || []).forEach(e => timeline.push({ type: "escalation", data: e, ts: e.created_at }))
+    timeline.sort((a, b) => new Date(a.ts) - new Date(b.ts))
+    timeline.forEach(item => {
+      if (item.type === "message") appendMessage(item.data, selectedLang)
+      else appendEscalation(item.data)
+    })
     msgs.scrollTop = msgs.scrollHeight
   }
 

@@ -1,6 +1,7 @@
 import logging
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
+log = logging.getLogger("bookai")
 
 from contextlib import asynccontextmanager
 
@@ -104,6 +105,25 @@ async def lifespan(app: FastAPI):
     app.state.mcp_manager = MCPManager()
     app.state.message_buffer = MessageBuffer()
     app.state.sio = sio
+
+    # Auto-reconnect persisted MCP servers
+    try:
+        from app.core.database import SessionLocal
+        from app.models.mcp_server_config import MCPServerConfig as MCPConfigModel
+        from sqlalchemy import select
+        async with SessionLocal() as db:
+            result = await db.execute(
+                select(MCPConfigModel).where(MCPConfigModel.active.is_(True))
+            )
+            for cfg in result.scalars().all():
+                try:
+                    await app.state.mcp_manager.connect(
+                        cfg.instance_id, cfg.server_id, cfg.config,
+                    )
+                except Exception as exc:
+                    log.warning("Auto-reconnect MCP %d/%d failed: %s", cfg.instance_id, cfg.server_id, exc)
+    except Exception as exc:
+        log.warning("MCP auto-reconnect failed: %s", exc)
 
     yield
 

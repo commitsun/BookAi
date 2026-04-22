@@ -9,7 +9,9 @@ from typing import Literal
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
 
-from app.api.dependencies import get_instance, get_mcp_manager
+from sqlalchemy.ext.asyncio import AsyncSession
+
+from app.api.dependencies import get_db, get_instance, get_mcp_manager
 from app.models.instance import Instance
 from app.services.mcp_manager import MCPManager
 
@@ -43,8 +45,38 @@ async def connect_server(
     body: MCPServerConfig,
     instance: Instance = Depends(get_instance),
     mcp: MCPManager = Depends(get_mcp_manager),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
-    return await mcp.connect(instance.id, server_id, body.model_dump())
+    config_data = body.model_dump()
+    result = await mcp.connect(instance.id, server_id, config_data)
+
+    # Persist config for auto-reconnect on restart
+    if result.get("status") == "ok":
+        from app.models.mcp_server_config import MCPServerConfig as MCPConfigModel
+        from sqlalchemy import select
+        existing = await db.execute(
+            select(MCPConfigModel).where(
+                MCPConfigModel.instance_id == instance.id,
+                MCPConfigModel.server_id == server_id,
+            )
+        )
+        row = existing.scalar_one_or_none()
+        if row:
+            row.name = body.name
+            row.transport_type = body.transport_type
+            row.config = config_data
+            row.active = True
+        else:
+            db.add(MCPConfigModel(
+                instance_id=instance.id,
+                server_id=server_id,
+                name=body.name,
+                transport_type=body.transport_type,
+                config=config_data,
+            ))
+        await db.commit()
+
+    return result
 
 
 @api_router.post("/{server_id}/discover", summary="Discover tools from an MCP server")
@@ -64,8 +96,22 @@ async def disconnect_server(
     server_id: int,
     instance: Instance = Depends(get_instance),
     mcp: MCPManager = Depends(get_mcp_manager),
+    db: AsyncSession = Depends(get_db),
 ) -> dict:
     await mcp.disconnect(instance.id, server_id)
+    # Mark as inactive in DB
+    from app.models.mcp_server_config import MCPServerConfig as MCPConfigModel
+    from sqlalchemy import select
+    existing = await db.execute(
+        select(MCPConfigModel).where(
+            MCPConfigModel.instance_id == instance.id,
+            MCPConfigModel.server_id == server_id,
+        )
+    )
+    row = existing.scalar_one_or_none()
+    if row:
+        row.active = False
+        await db.commit()
     return {"status": "ok"}
 
 
