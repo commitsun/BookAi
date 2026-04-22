@@ -86,6 +86,7 @@ async def process_inbound_webhook(
     sdk_registry: InstanceSDKRegistry | None = None,
     llm_client: LLMProvider | None = None,
     mcp_manager=None,
+    message_buffer=None,
 ) -> None:
     for entry in payload.entry:
         for change in entry.changes:
@@ -112,6 +113,7 @@ async def process_inbound_webhook(
                         sdk_registry=sdk_registry,
                         llm_client=llm_client,
                         mcp_manager=mcp_manager,
+                        message_buffer=message_buffer,
                     )
 
 
@@ -125,6 +127,7 @@ async def _process_message(
     sdk_registry: InstanceSDKRegistry | None = None,
     llm_client: LLMProvider | None = None,
     mcp_manager=None,
+    message_buffer=None,
 ) -> None:
     # --- Deduplication ---
     existing = await message_repo.find_by_provider_message_id(db, wa_msg.id)
@@ -292,18 +295,11 @@ async def _process_message(
 
     # --- AI response (if enabled for this property) ---
     if routed_property_id is not None and sdk_registry and llm_client:
-        # Buffer rapid messages — wait for pause before processing
-        from app.services.message_buffer import MessageBuffer
-        buffer: MessageBuffer | None = getattr(sio, '_message_buffer', None)
-        # Try to get buffer from app state via the sio reference
-        try:
-            buffer = sio.eio.app.state.message_buffer
-        except Exception:
-            pass
-
         ai_content = msg.content or content
-        if buffer:
-            buffered = await buffer.add(conversation.id, ai_content)
+
+        # Buffer rapid messages
+        if message_buffer:
+            buffered = await message_buffer.add(conversation.id, ai_content)
             if buffered is None:
                 return  # Still accumulating, will be processed when timer fires
             ai_content = buffered

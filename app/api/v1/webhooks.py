@@ -73,10 +73,12 @@ async def whatsapp_webhook(
     sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
     llm_client: LLMProvider = Depends(get_llm_client),
     mcp_manager: MCPManager = Depends(get_mcp_manager),
+    request: Request = None,
 ) -> dict:
+    message_buffer = getattr(request.app.state, "message_buffer", None) if request else None
     background_tasks.add_task(
         _process_webhook_bg, payload, wa_client, sio,
-        sdk_registry, llm_client, mcp_manager,
+        sdk_registry, llm_client, mcp_manager, message_buffer,
     )
     return {"status": "ok"}
 
@@ -88,12 +90,13 @@ async def _process_webhook_bg(
     sdk_registry: InstanceSDKRegistry,
     llm_client: LLMProvider,
     mcp_manager: MCPManager | None = None,
+    message_buffer=None,
 ) -> None:
     try:
         async with SessionLocal() as db:
             await process_inbound_webhook(
                 payload, db, wa_client, sio, sdk_registry, llm_client,
-                mcp_manager,
+                mcp_manager, message_buffer,
             )
     except Exception as exc:
         log.error("Error processing webhook in background: %s", exc, exc_info=True)
