@@ -237,6 +237,56 @@
   .media-block img { display: block; }
   .media-block audio { display: block; }
   .media-block video { display: block; }
+  /* Escalation blocks */
+  .escalation-block {
+    background: #fef3c7;
+    border: 1px solid #f59e0b;
+    border-radius: 10px;
+    padding: 10px 14px;
+    margin: 8px 16px;
+    font-size: 12px;
+  }
+  .escalation-block.resolved { background: #f0fdf4; border-color: #22c55e; opacity: 0.7; }
+  .escalation-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 6px;
+  }
+  .escalation-type {
+    font-weight: 700;
+    color: #92400e;
+    font-size: 13px;
+  }
+  .escalation-block.resolved .escalation-type { color: #166534; }
+  .escalation-status {
+    font-size: 11px;
+    padding: 2px 8px;
+    border-radius: 8px;
+    font-weight: 600;
+  }
+  .escalation-status.pending { background: #fde68a; color: #92400e; }
+  .escalation-status.resolved { background: #bbf7d0; color: #166534; }
+  .escalation-reason { color: #78350f; margin-bottom: 6px; }
+  .escalation-block.resolved .escalation-reason { color: #166534; }
+  .escalation-messages {
+    border-top: 1px solid rgba(0,0,0,0.1);
+    margin-top: 6px;
+    padding-top: 6px;
+  }
+  .escalation-msg { font-size: 11px; margin-bottom: 3px; color: #555; }
+  .btn-resolve {
+    padding: 4px 12px;
+    background: #22c55e;
+    color: #fff;
+    border: none;
+    border-radius: 6px;
+    cursor: pointer;
+    font-size: 11px;
+    font-weight: 600;
+  }
+  .btn-resolve:hover { background: #16a34a; }
+
   .media-ai-tag {
     font-size: 11px;
     font-style: italic;
@@ -570,6 +620,20 @@ btnConnect.addEventListener("click", () => {
       markConversationRead(activeConv.id)
     }
   })
+
+  sio.on("escalation.created", (data) => {
+    loadInbox()
+    if (activeConv && data.conversation_id === activeConv.id) {
+      openConversation({ id: activeConv.id, contact: { phone_code: activeConv.phone_code, display_name: activeConv.name } })
+    }
+  })
+
+  sio.on("escalation.resolved", (data) => {
+    loadInbox()
+    if (activeConv && data.conversation_id === activeConv.id) {
+      openConversation({ id: activeConv.id, contact: { phone_code: activeConv.phone_code, display_name: activeConv.name } })
+    }
+  })
 })
 
 // ─────────────────────────────────────────────
@@ -650,11 +714,14 @@ function buildConvItem(conv) {
   // Channel indicators for last message
   const ch = conv.last_message?.channel
   const chIcon = ch === "email" ? " ✉" : ch === "whatsapp" ? " 📱" : ""
+  const escBadge = conv.has_pending_escalation
+    ? `<span style="background:#f59e0b;color:#fff;border-radius:10px;padding:1px 7px;font-size:10px;font-weight:700;flex-shrink:0">ESCALADO</span>`
+    : ""
 
   el.innerHTML = `
     <div class="conv-meta">
       <div class="conv-name">${esc(name)}</div>
-      <div style="display:flex;align-items:center;gap:5px">${badge}<span class="conv-time">${esc(time)}</span></div>
+      <div style="display:flex;align-items:center;gap:5px">${escBadge}${badge}<span class="conv-time">${esc(time)}</span></div>
     </div>
     <div class="conv-preview">${esc(chIcon + preview)}</div>
   `
@@ -739,20 +806,23 @@ async function openConversation(conv) {
 
   // Load messages, channels, and fresh inbox data in parallel
   const langParam = selectedLang ? `&language=${selectedLang}` : ""
-  const [msgData, chData, inboxData] = await Promise.all([
+  const [msgData, chData, inboxData, escData] = await Promise.all([
     apiFetch(`/api/v1/conversations/${conv.id}/messages?limit=100&property_id=${propertyId}${langParam}`),
     apiFetch(`/api/v1/conversations/${conv.id}/channels?property_id=${propertyId}`).catch(() => ({ channels: [] })),
     apiFetch(`/api/v1/conversations/?property_id=${propertyId}`).catch(() => ({ conversations: [] })),
+    apiFetch(`/api/v1/conversations/${conv.id}/escalations`).catch(() => ({ escalations: [] })),
   ])
 
   // Refresh ai_enabled from fresh inbox data
   const freshConv = (inboxData.conversations || []).find(c => c.id === conv.id)
   if (freshConv) convAiEnabled = freshConv.ai_enabled ?? null
 
-  // Render messages
+  // Render messages + escalations interleaved by time
   const msgs = document.getElementById("messages")
   if (msgs) {
     ;(msgData.messages || []).forEach(m => appendMessage(m, selectedLang))
+    // Render escalations
+    ;(escData.escalations || []).forEach(esc => appendEscalation(esc))
     msgs.scrollTop = msgs.scrollHeight
   }
 
@@ -924,6 +994,70 @@ function appendMessage(msg, requestedLang) {
   `
   msgs.appendChild(row)
   msgs.scrollTop = msgs.scrollHeight
+}
+
+function appendEscalation(escObj) {
+  const msgs = document.getElementById("messages")
+  if (!msgs) return
+  const block = document.createElement("div")
+  block.className = "escalation-block" + (escObj.status === "resolved" ? " resolved" : "")
+  block.id = "esc-" + escObj.id
+
+  const typeLabel = {
+    "manual": "Escalado manual",
+    "info_not_found": "Info no disponible",
+    "bad_response": "Respuesta rechazada",
+    "inappropriate": "Contenido inapropiado",
+  }[escObj.escalation_type] || escObj.escalation_type
+
+  const statusLabel = escObj.status === "pending"
+    ? '<span class="escalation-status pending">Pendiente</span>'
+    : '<span class="escalation-status resolved">Resuelto</span>'
+
+  const time = escObj.created_at ? new Date(escObj.created_at).toLocaleString("es", {day:"2-digit",month:"2-digit",hour:"2-digit",minute:"2-digit"}) : ""
+
+  let msgsHtml = ""
+  if (escObj.messages && escObj.messages.length > 0) {
+    msgsHtml = '<div class="escalation-messages">'
+    for (const m of escObj.messages) {
+      const sender = m.sender === "guest" ? "Huésped" : m.sender === "agent" ? "Operador" : "Sistema"
+      msgsHtml += `<div class="escalation-msg"><b>${esc(sender)}:</b> ${esc(m.content || "")}</div>`
+    }
+    msgsHtml += '</div>'
+  }
+
+  const resolveBtn = escObj.status === "pending"
+    ? `<button class="btn-resolve" onclick="resolveEscalation(${escObj.id})">Resolver</button>`
+    : ""
+
+  const resolutionInfo = escObj.status === "resolved" && escObj.resolution_medium
+    ? `<div style="font-size:11px;color:#166534;margin-top:4px">Resuelto via ${esc(escObj.resolution_medium || "")}${escObj.resolution_notes ? ": " + esc(escObj.resolution_notes) : ""}</div>`
+    : ""
+
+  block.innerHTML = `
+    <div class="escalation-header">
+      <span class="escalation-type">${typeLabel} · ${time}</span>
+      <div style="display:flex;gap:6px;align-items:center">${statusLabel} ${resolveBtn}</div>
+    </div>
+    <div class="escalation-reason">${esc(escObj.reason || "")}</div>
+    ${msgsHtml}
+    ${resolutionInfo}
+  `
+  msgs.appendChild(block)
+}
+
+async function resolveEscalation(escalationId) {
+  try {
+    await apiFetch(`/api/v1/escalations/${escalationId}/resolve`, {
+      method: "PATCH",
+      body: JSON.stringify({ resolution_medium: "ai_supervised", resolution_notes: "Resolved from dev UI" })
+    })
+    // Refresh the conversation
+    if (activeConv) openConversation({ id: activeConv.id, contact: { phone_code: activeConv.phone_code, display_name: activeConv.name } })
+    loadInbox()
+  } catch (e) {
+    alert("Error al resolver: " + e.message)
+  }
 }
 
 async function reloadMessages() {
