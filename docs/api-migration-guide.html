@@ -1,0 +1,634 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<title>BookAI - Guia de Migracion API</title>
+<style>
+  body { font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; max-width: 900px; margin: 40px auto; padding: 0 20px; line-height: 1.6; color: #333; }
+  h1 { color: #1a1a2e; border-bottom: 3px solid #e94560; padding-bottom: 10px; }
+  h2 { color: #1a1a2e; border-bottom: 1px solid #ddd; padding-bottom: 5px; margin-top: 40px; }
+  h3 { color: #16213e; }
+  table { border-collapse: collapse; width: 100%; margin: 15px 0; }
+  th, td { border: 1px solid #ddd; padding: 8px 12px; text-align: left; }
+  th { background: #f5f5f5; font-weight: 600; }
+  tr:nth-child(even) { background: #fafafa; }
+  code { background: #f0f0f0; padding: 2px 6px; border-radius: 3px; font-size: 0.9em; }
+  pre { background: #1a1a2e; color: #e0e0e0; padding: 15px; border-radius: 8px; overflow-x: auto; }
+  pre code { background: none; color: inherit; }
+  strong { color: #e94560; }
+  hr { border: none; border-top: 2px solid #eee; margin: 30px 0; }
+  blockquote { border-left: 4px solid #e94560; margin: 0; padding: 10px 20px; background: #fff5f5; }
+</style>
+</head>
+<body>
+<h1>BookAI — Guia de Migracion API para Frontend</h1>
+<p><strong>Version</strong>: Refactorizacion v2 (abril 2026)
+<strong>Audiencia</strong>: Desarrollador frontend
+<strong>Proyecto</strong>: BookAI — Backend conversacional para hoteles</p>
+<hr />
+<h2>Resumen ejecutivo</h2>
+<p>BookAI ha sido refactorizado completamente. Los cambios principales que afectan al frontend son:</p>
+<ol>
+<li><strong>Todas las rutas han cambiado</strong> — nuevo prefijo <code>/api/v1/</code> y estructura RESTful</li>
+<li><strong>Los identificadores cambian</strong> — de <code>chat_id</code> (telefono) a <code>conversation_id</code> (int)</li>
+<li><strong>Socket.IO se simplifica</strong> — eventos renombrados, auto-join de rooms</li>
+<li><strong>Nuevas funcionalidades</strong> — multi-canal, transferencias, media, delivery tracking</li>
+<li><strong>Escalaciones son entidades independientes</strong> — ya no estan embebidas en mensajes</li>
+</ol>
+<hr />
+<h2>1. Cambios de rutas</h2>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>Nuevo</th>
+<th>Notas</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>GET /chats</code></td>
+<td><code>GET /api/v1/conversations/?property_id=X</code></td>
+<td>Params cambian</td>
+</tr>
+<tr>
+<td><code>GET /chats/{chat_id}/messages</code></td>
+<td><code>GET /api/v1/conversations/{id}/messages</code></td>
+<td>chat_id -&gt; conversation_id</td>
+</tr>
+<tr>
+<td><code>POST /messages</code></td>
+<td><code>POST /api/v1/chatter/send-message</code></td>
+<td>Body nuevo</td>
+</tr>
+<tr>
+<td><code>PATCH /chats/{chat_id}/bookai</code></td>
+<td><code>PATCH /api/v1/conversations/{id}/ai?property_id=X&amp;ai_enabled=true</code></td>
+<td>Query params</td>
+</tr>
+<tr>
+<td><code>PATCH /chats/{chat_id}/read</code></td>
+<td><code>PATCH /api/v1/conversations/{id}/read?property_id=X</code></td>
+<td>Necesita property_id</td>
+</tr>
+<tr>
+<td><code>POST /chats/{id}/resolve-escalation</code></td>
+<td><code>PATCH /api/v1/escalations/{escalation_id}/resolve</code></td>
+<td>Por escalation ID</td>
+</tr>
+<tr>
+<td><code>POST /templates/send</code></td>
+<td><code>POST /api/v1/whatsapp/send-template</code></td>
+<td>Compatible con Odoo</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>2. Identificadores - CAMBIO CRITICO</h2>
+<p><strong>Antes</strong>: Todo se identifica por <code>chat_id</code> (string, telefono del huesped, ej: <code>"34699323583"</code>)</p>
+<p><strong>Ahora</strong>: Todo se identifica por <code>conversation_id</code> (int, ID de base de datos, ej: <code>123</code>)</p>
+<ul>
+<li>REST API: usar <code>conversation_id</code> para todas las llamadas</li>
+<li>Socket.IO rooms: usar <code>phone_code</code> del contacto (ej: <code>chat:34699323583</code>)</li>
+<li>El <code>phone_code</code> viene en <code>conversation.contact.phone_code</code> al listar conversaciones</li>
+</ul>
+<hr />
+<h2>3. Listado de conversaciones (Inbox)</h2>
+<h3><code>GET /api/v1/conversations/?property_id=X&amp;limit=50</code></h3>
+<p><strong>Query params</strong>:
+- <code>property_id</code> (int, obligatorio) — ID de la property del hotel. Usar <code>0</code> para inbox sin asignar
+- <code>limit</code> (int, default 50, max 200)</p>
+<p><strong>Respuesta</strong>:</p>
+<pre><code class="language-json">{
+  &quot;property_id&quot;: 5,
+  &quot;conversations&quot;: [
+    {
+      &quot;id&quot;: 123,
+      &quot;created_at&quot;: &quot;2026-04-22T10:30:00&quot;,
+      &quot;updated_at&quot;: &quot;2026-04-22T12:45:00&quot;,
+      &quot;contact&quot;: {
+        &quot;id&quot;: 789,
+        &quot;phone_code&quot;: &quot;34699323583&quot;,
+        &quot;display_name&quot;: &quot;Maria Garcia&quot;
+      },
+      &quot;last_message&quot;: {
+        &quot;id&quot;: 456,
+        &quot;direction&quot;: &quot;inbound&quot;,
+        &quot;sender&quot;: &quot;guest&quot;,
+        &quot;content&quot;: &quot;Hola, necesito ayuda...&quot;,
+        &quot;template_code&quot;: null,
+        &quot;created_at&quot;: &quot;2026-04-22T12:45:00&quot;
+      },
+      &quot;unread_count&quot;: 2,
+      &quot;needs_attention&quot;: false,
+      &quot;ai_enabled&quot;: true,
+      &quot;has_pending_escalation&quot;: false
+    }
+  ]
+}
+</code></pre>
+<p><strong>Diferencias con legacy</strong>:
+- No hay paginacion page/page_size, solo <code>limit</code>
+- <code>property_id</code> es obligatorio (antes era opcional)
+- No hay filtro <code>channel</code> (ahora todas las conversaciones son multi-canal)
+- Busqueda es endpoint separado: <code>GET /api/v1/conversations/search?property_id=X&amp;q=texto</code></p>
+<h3>Busqueda: <code>GET /api/v1/conversations/search</code></h3>
+<p><strong>Query params</strong>:
+- <code>property_id</code> (int, obligatorio)
+- <code>q</code> (string) — busca en nombre de contacto y codigo de folio
+- <code>status</code> (string, opcional) — estado del folio: draft, confirm, onboard, done, cancel
+- <code>limit</code> (int, default 50)</p>
+<hr />
+<h2>4. Historial de mensajes</h2>
+<h3><code>GET /api/v1/conversations/{conversation_id}/messages</code></h3>
+<p><strong>Query params</strong>:
+- <code>limit</code> (int, default 50, max 200)
+- <code>before_id</code> (int, opcional) — cursor para paginacion (mensajes anteriores a este ID)
+- <code>language</code> (string, opcional) — codigo BCP-47 (ej: "es", "en") para traducciones
+- <code>property_id</code> (int, opcional) — filtra notas internas por property</p>
+<p><strong>Respuesta</strong>:</p>
+<pre><code class="language-json">{
+  &quot;conversation_id&quot;: 123,
+  &quot;language&quot;: &quot;es&quot;,
+  &quot;messages&quot;: [
+    {
+      &quot;id&quot;: 456,
+      &quot;conversation_id&quot;: 123,
+      &quot;channel_endpoint_id&quot;: 10,
+      &quot;channel&quot;: &quot;whatsapp&quot;,
+      &quot;kind&quot;: &quot;message&quot;,
+      &quot;direction&quot;: &quot;inbound&quot;,
+      &quot;sender&quot;: &quot;guest&quot;,
+      &quot;content&quot;: &quot;A que hora es el check-in?&quot;,
+      &quot;content_language&quot;: &quot;es&quot;,
+      &quot;is_translated&quot;: false,
+      &quot;agent_user_id&quot;: null,
+      &quot;agent_display_name&quot;: null,
+      &quot;wa_message_id&quot;: &quot;wamid.HBg...&quot;,
+      &quot;wa_message_type&quot;: &quot;text&quot;,
+      &quot;delivery_status&quot;: &quot;delivered&quot;,
+      &quot;routing_status&quot;: null,
+      &quot;template_code&quot;: null,
+      &quot;template_payload&quot;: null,
+      &quot;created_at&quot;: &quot;2026-04-22T10:30:00&quot;,
+      &quot;email_metadata&quot;: null,
+      &quot;media&quot;: null
+    }
+  ]
+}
+</code></pre>
+<p><strong>Mapping de campos legacy -&gt; nuevo</strong>:</p>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>Nuevo</th>
+<th>Notas</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>role</code> ("user"/"assistant")</td>
+<td><code>direction</code> + <code>sender</code></td>
+<td>direction=inbound/outbound, sender=guest/agent/ai/system</td>
+</tr>
+<tr>
+<td><code>read_status</code></td>
+<td>(eliminado)</td>
+<td>Gestionado con <code>unread_count</code> a nivel conversacion</td>
+</tr>
+<tr>
+<td><code>user_id</code></td>
+<td><code>agent_user_id</code></td>
+<td>Solo para mensajes de operador</td>
+</tr>
+<tr>
+<td><code>user_first_name</code> + <code>user_last_name</code></td>
+<td><code>agent_display_name</code></td>
+<td>Nombre completo</td>
+</tr>
+<tr>
+<td><code>structured_payload</code></td>
+<td>(eliminado)</td>
+<td>No aplica</td>
+</tr>
+<tr>
+<td><code>escalation_reason</code></td>
+<td>(eliminado)</td>
+<td>Escalaciones son entidades separadas</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>channel</code></td>
+<td>"whatsapp" o "email"</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>content_language</code></td>
+<td>Idioma detectado del mensaje</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>is_translated</code></td>
+<td>Si content es una traduccion cached</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>template_code</code></td>
+<td>Codigo del template (si es mensaje de template)</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>template_payload</code></td>
+<td>Datos del template</td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>email_metadata</code></td>
+<td><code>{ subject, from_address, from_name, has_attachments }</code></td>
+</tr>
+<tr>
+<td>(no existia)</td>
+<td><code>media</code></td>
+<td><code>[{ id, media_type, url, transcription, vision_description }]</code></td>
+</tr>
+</tbody>
+</table>
+<p><strong>Renderizar templates</strong>: Si <code>content</code> es null pero <code>template_code</code> tiene valor, mostrar algo como "Plantilla: {template_code}".</p>
+<p><strong>Renderizar media</strong>: El array <code>media</code> puede contener imagenes, audio, video o documentos con URLs relativas.</p>
+<hr />
+<h2>5. Envio de mensaje (operador)</h2>
+<h3><code>POST /api/v1/chatter/send-message</code></h3>
+<p><strong>Request body</strong>:</p>
+<pre><code class="language-json">{
+  &quot;conversation_id&quot;: 123,
+  &quot;content&quot;: &quot;Hola, le confirmo la reserva&quot;,
+  &quot;agent_user_id&quot;: 5,
+  &quot;agent_display_name&quot;: &quot;Ana Garcia&quot;,
+  &quot;channel_endpoint_id&quot;: 10
+}
+</code></pre>
+<ul>
+<li><code>conversation_id</code> (int, obligatorio) — reemplaza <code>chat_id</code></li>
+<li><code>content</code> (string, obligatorio) — reemplaza <code>message</code></li>
+<li><code>agent_user_id</code> (int, opcional) — ID del usuario de Odoo</li>
+<li><code>agent_display_name</code> (string, opcional) — nombre visible del operador</li>
+<li><code>channel_endpoint_id</code> (int, opcional) — si no se pasa, auto-detecta el canal mas reciente</li>
+</ul>
+<p><strong>Respuesta</strong>:</p>
+<pre><code class="language-json">{
+  &quot;status&quot;: &quot;ok&quot;,
+  &quot;message_id&quot;: 1205,
+  &quot;wa_message_id&quot;: &quot;wamid.HBg...&quot;,
+  &quot;conversation_id&quot;: 123
+}
+</code></pre>
+<p><strong>Error 422</strong>: Ventana de 24h cerrada. Solo se pueden enviar templates fuera de la ventana.</p>
+<h3>Canales disponibles: <code>GET /api/v1/conversations/{id}/channels?property_id=X</code></h3>
+<pre><code class="language-json">{
+  &quot;channels&quot;: [
+    { &quot;id&quot;: 10, &quot;channel&quot;: &quot;whatsapp&quot;, &quot;display&quot;: &quot;+34 900 123 456&quot; },
+    { &quot;id&quot;: 11, &quot;channel&quot;: &quot;email&quot;, &quot;display&quot;: &quot;bookings@hotel.com&quot; }
+  ]
+}
+</code></pre>
+<hr />
+<h2>6. Toggle IA</h2>
+<h3><code>PATCH /api/v1/conversations/{id}/ai?property_id=X&amp;ai_enabled=true</code></h3>
+<p>Sin body. Todo en query params.</p>
+<p><strong>Respuesta</strong>:</p>
+<pre><code class="language-json">{
+  &quot;conversation_id&quot;: 123,
+  &quot;session_id&quot;: 456,
+  &quot;ai_enabled&quot;: true
+}
+</code></pre>
+<hr />
+<h2>7. Marcar como leido</h2>
+<h3><code>PATCH /api/v1/conversations/{id}/read?property_id=X</code></h3>
+<p><code>property_id</code> obligatorio porque el conteo de no leidos es per-property.</p>
+<p>Respuesta: <code>204 No Content</code></p>
+<hr />
+<h2>8. Escalaciones</h2>
+<p>Las escalaciones son ahora entidades independientes con su propio ciclo de vida, no campos dentro de mensajes.</p>
+<h3>Listar: <code>GET /api/v1/escalations?property_id=X&amp;status=pending</code></h3>
+<pre><code class="language-json">{
+  &quot;property_id&quot;: 5,
+  &quot;escalations&quot;: [
+    {
+      &quot;id&quot;: 123,
+      &quot;conversation_id&quot;: 456,
+      &quot;session_id&quot;: 789,
+      &quot;escalation_type&quot;: &quot;manual&quot;,
+      &quot;reason&quot;: &quot;Guest requested human agent&quot;,
+      &quot;priority&quot;: 2,
+      &quot;status&quot;: &quot;pending&quot;,
+      &quot;created_at&quot;: &quot;2026-04-22T10:30:00&quot;,
+      &quot;resolved_at&quot;: null
+    }
+  ]
+}
+</code></pre>
+<h3>Por conversacion: <code>GET /api/v1/conversations/{id}/escalations</code></h3>
+<p>Incluye <code>messages</code> — timeline de la escalacion.</p>
+<h3>Resolver: <code>PATCH /api/v1/escalations/{escalation_id}/resolve</code></h3>
+<pre><code class="language-json">{
+  &quot;resolution_medium&quot;: &quot;manual_takeover&quot;,
+  &quot;resolution_notes&quot;: &quot;Operador tomo el control&quot;
+}
+</code></pre>
+<p>Medios de resolucion: <code>whatsapp</code>, <code>phone</code>, <code>in_person</code>, <code>ai_supervised</code>, <code>manual_takeover</code>, <code>other</code></p>
+<hr />
+<h2>9. Socket.IO</h2>
+<h3>Conexion</h3>
+<pre><code class="language-javascript">const socket = io(&quot;&quot;, {
+  auth: {
+    token: &quot;mi-bearer-token&quot;,
+    property_id: 5
+  }
+});
+
+// Auto-join a property:5 al conectar
+// Para abrir un chat especifico:
+socket.emit(&quot;join_chat&quot;, { phone_code: &quot;34699323583&quot; });
+
+// Al salir del chat:
+socket.emit(&quot;leave_chat&quot;, { phone_code: &quot;34699323583&quot; });
+</code></pre>
+<h3>Eventos renombrados</h3>
+<table>
+<thead>
+<tr>
+<th>Legacy</th>
+<th>Nuevo</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>chat.message.created</code></td>
+<td><code>message.created</code></td>
+</tr>
+<tr>
+<td><code>chat.message.new</code></td>
+<td><code>message.created</code></td>
+</tr>
+<tr>
+<td><code>chat.updated</code></td>
+<td><code>conversation.updated</code></td>
+</tr>
+</tbody>
+</table>
+<h3>Eventos nuevos</h3>
+<table>
+<thead>
+<tr>
+<th>Evento</th>
+<th>Room</th>
+<th>Descripcion</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>conversation.created</code></td>
+<td><code>property:{id}</code></td>
+<td>Primera conversacion de un contacto</td>
+</tr>
+<tr>
+<td><code>message.delivery_updated</code></td>
+<td><code>chat:{phone}</code></td>
+<td>Cambio de estado de entrega</td>
+</tr>
+<tr>
+<td><code>escalation.created</code></td>
+<td><code>property:{id}</code></td>
+<td>Nueva escalacion</td>
+</tr>
+<tr>
+<td><code>escalation.resolved</code></td>
+<td><code>property:{id}</code></td>
+<td>Escalacion resuelta</td>
+</tr>
+</tbody>
+</table>
+<h3>message.created (Room: <code>chat:{phone_code}</code>)</h3>
+<pre><code class="language-json">{
+  &quot;id&quot;: 456,
+  &quot;conversation_id&quot;: 123,
+  &quot;channel_endpoint_id&quot;: 10,
+  &quot;channel&quot;: &quot;whatsapp&quot;,
+  &quot;direction&quot;: &quot;inbound&quot;,
+  &quot;sender&quot;: &quot;guest&quot;,
+  &quot;content&quot;: &quot;...&quot;,
+  &quot;content_language&quot;: &quot;es&quot;,
+  &quot;wa_message_id&quot;: &quot;wamid.HBg...&quot;,
+  &quot;delivery_status&quot;: &quot;delivered&quot;,
+  &quot;template_code&quot;: null,
+  &quot;template_payload&quot;: null,
+  &quot;agent_user_id&quot;: null,
+  &quot;agent_display_name&quot;: null,
+  &quot;created_at&quot;: &quot;2026-04-22T10:30:00&quot;
+}
+</code></pre>
+<p>Valores de <code>sender</code>: <code>guest</code>, <code>agent</code>, <code>ai</code>, <code>system</code></p>
+<h3>conversation.created / conversation.updated (Room: <code>property:{id}</code>)</h3>
+<pre><code class="language-json">{
+  &quot;id&quot;: 123,
+  &quot;created_at&quot;: &quot;...&quot;,
+  &quot;updated_at&quot;: &quot;...&quot;,
+  &quot;unread_count&quot;: 2,
+  &quot;needs_attention&quot;: false,
+  &quot;contact&quot;: {
+    &quot;id&quot;: 789,
+    &quot;phone_code&quot;: &quot;34699323583&quot;,
+    &quot;display_name&quot;: &quot;Maria Garcia&quot;
+  },
+  &quot;last_message&quot;: {
+    &quot;id&quot;: 456,
+    &quot;direction&quot;: &quot;inbound&quot;,
+    &quot;sender&quot;: &quot;guest&quot;,
+    &quot;content&quot;: &quot;...&quot;,
+    &quot;template_code&quot;: null,
+    &quot;created_at&quot;: &quot;...&quot;
+  }
+}
+</code></pre>
+<h3>message.delivery_updated (Room: <code>chat:{phone_code}</code>)</h3>
+<pre><code class="language-json">{
+  &quot;id&quot;: 456,
+  &quot;conversation_id&quot;: 123,
+  &quot;wa_message_id&quot;: &quot;wamid.HBg...&quot;,
+  &quot;delivery_status&quot;: &quot;read&quot;,
+  &quot;delivery_error&quot;: null
+}
+</code></pre>
+<p>Estados: <code>pending</code> -&gt; <code>sent</code> -&gt; <code>delivered</code> -&gt; <code>read</code> (o <code>failed</code>)</p>
+<h3>escalation.created (Room: <code>property:{id}</code>)</h3>
+<pre><code class="language-json">{
+  &quot;conversation_id&quot;: 123,
+  &quot;escalation_id&quot;: 456,
+  &quot;type&quot;: &quot;manual&quot;,
+  &quot;reason&quot;: &quot;...&quot;,
+  &quot;priority&quot;: 2
+}
+</code></pre>
+<h3>escalation.resolved (Room: <code>property:{id}</code>)</h3>
+<pre><code class="language-json">{
+  &quot;conversation_id&quot;: 123,
+  &quot;escalation_id&quot;: 456,
+  &quot;resolved_by&quot;: null,
+  &quot;resolution_medium&quot;: &quot;manual_takeover&quot;
+}
+</code></pre>
+<h3>Rooms</h3>
+<table>
+<thead>
+<tr>
+<th>Room</th>
+<th>Auto-join</th>
+<th>Eventos recibidos</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td><code>property:{id}</code></td>
+<td>Si (al conectar)</td>
+<td>conversation.created/updated, escalation.created/resolved</td>
+</tr>
+<tr>
+<td><code>property:0</code></td>
+<td>Si (si property_id=0)</td>
+<td>Conversaciones sin asignar</td>
+</tr>
+<tr>
+<td><code>chat:{phone_code}</code></td>
+<td>Manual (join_chat)</td>
+<td>message.created, message.delivery_updated</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>10. Nuevas funcionalidades</h2>
+<h3>Multi-canal (WhatsApp + Email)</h3>
+<ul>
+<li>Cada mensaje indica su <code>channel</code>: "whatsapp" o "email"</li>
+<li>Mensajes email incluyen <code>email_metadata</code>: subject, from_address, from_name</li>
+<li><code>GET /api/v1/conversations/{id}/channels</code> lista canales disponibles para enviar</li>
+</ul>
+<h3>Transferencia de conversaciones</h3>
+<ul>
+<li><code>GET /api/v1/conversations/{id}/transfer-targets</code> — properties destino disponibles</li>
+<li><code>POST /api/v1/conversations/{id}/transfer</code> — transferir con nota opcional</li>
+</ul>
+<h3>Asignacion manual</h3>
+<ul>
+<li><code>POST /api/v1/conversations/{id}/assign</code> — asignar conversacion del inbox sin property</li>
+</ul>
+<h3>Media attachments</h3>
+<ul>
+<li>Campo <code>media</code> en mensajes: imagenes, audio, video, documentos</li>
+<li>Audio con <code>transcription</code> (transcripcion automatica)</li>
+<li>Imagenes con <code>vision_description</code> (descripcion IA)</li>
+</ul>
+<h3>Templates</h3>
+<ul>
+<li>Si <code>content</code> es null y <code>template_code</code> tiene valor, es un mensaje de template</li>
+<li><code>template_payload</code> contiene datos tecnicos del template</li>
+</ul>
+<h3>Delivery tracking en tiempo real</h3>
+<ul>
+<li>Evento <code>message.delivery_updated</code> con estados: pending -&gt; sent -&gt; delivered -&gt; read -&gt; failed</li>
+</ul>
+<hr />
+<h2>11. Funcionalidades pendientes</h2>
+<table>
+<thead>
+<tr>
+<th>Funcionalidad</th>
+<th>Endpoint legacy</th>
+<th>Estado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>Respuesta sugerida IA</td>
+<td><code>POST /chats/{id}/proposed-response</code></td>
+<td>Por implementar</td>
+</tr>
+<tr>
+<td>Archivar conversacion</td>
+<td><code>POST /chats/{id}/archive</code></td>
+<td>Por implementar</td>
+</tr>
+<tr>
+<td>Ocultar conversacion</td>
+<td><code>POST /chats/{id}/hide</code></td>
+<td>Por implementar</td>
+</tr>
+<tr>
+<td>Estado ventana 24h</td>
+<td><code>GET /chats/{id}/window</code></td>
+<td>Por implementar</td>
+</tr>
+</tbody>
+</table>
+<hr />
+<h2>12. Autenticacion</h2>
+<p>Sin cambios respecto a legacy:</p>
+<ul>
+<li><strong>REST API</strong>: Header <code>Authorization: Bearer &lt;token&gt;</code></li>
+<li><strong>Socket.IO</strong>: <code>auth: { token: "&lt;token&gt;", property_id: X }</code></li>
+<li>Tokens por instancia (un token por hotel/cadena)</li>
+</ul>
+<hr />
+<h2>13. Codigos de error</h2>
+<table>
+<thead>
+<tr>
+<th>Codigo</th>
+<th>Significado</th>
+</tr>
+</thead>
+<tbody>
+<tr>
+<td>200</td>
+<td>OK</td>
+</tr>
+<tr>
+<td>201</td>
+<td>Creado</td>
+</tr>
+<tr>
+<td>204</td>
+<td>Sin contenido (exito)</td>
+</tr>
+<tr>
+<td>400</td>
+<td>Request invalido</td>
+</tr>
+<tr>
+<td>401</td>
+<td>Token invalido o ausente</td>
+</tr>
+<tr>
+<td>404</td>
+<td>No encontrado</td>
+</tr>
+<tr>
+<td>409</td>
+<td>Conflicto (duplicado, ya asignado)</td>
+</tr>
+<tr>
+<td>422</td>
+<td>Error de logica (ventana cerrada, property sin canal)</td>
+</tr>
+<tr>
+<td>502</td>
+<td>Error del proveedor de canal (Meta/Mailgun)</td>
+</tr>
+</tbody>
+</table>
+<p>Formato de error:</p>
+<pre><code class="language-json">{ &quot;detail&quot;: &quot;Mensaje legible del error&quot; }
+</code></pre>
+</body>
+</html>
