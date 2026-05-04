@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import DateTime, ForeignKey, UniqueConstraint, func
+from sqlalchemy import DateTime, ForeignKey, Integer, String, func
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -10,23 +10,25 @@ class Conversation(Base):
     """
     The logical thread between BookAI and a Contact.
 
-    A Conversation is channel-agnostic: messages within it can arrive or be sent
-    through any number of channel endpoints (WhatsApp, Telegram, etc.).
-    Which channel was used for each individual message is recorded on the Message,
-    not here.
+    For guest conversations: one per Contact (channel-agnostic).
+    For internal/roomdoo: multiple threads per user (each with its own title).
 
-    One Conversation per Contact — the guest's identity is the anchor, regardless
-    of which channel they used to reach us.
-
-    Per-channel state (e.g. the WhatsApp 24-hour window) is tracked in
-    ConversationChannelState, not here.
+    conversation_type:
+      - "guest": external guest conversation (default, one per contact)
+      - "internal": hotel staff conversation via app or WhatsApp
+      - "roomdoo": Roomdoo team conversation via app or WhatsApp
     """
 
     __tablename__ = "conversations"
-    __table_args__ = (UniqueConstraint("contact_id", name="uq_conversation_contact"),)
 
     id: Mapped[int] = mapped_column(primary_key=True)
     contact_id: Mapped[int] = mapped_column(ForeignKey("contacts.id"), nullable=False)
+
+    # Internal chat fields
+    title: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    conversation_type: Mapped[str] = mapped_column(String(20), nullable=False, default="guest")
+    odoo_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    odoo_user_login: Mapped[str | None] = mapped_column(String(255), nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now(), nullable=False

@@ -2,6 +2,7 @@ import enum
 from datetime import datetime
 
 from sqlalchemy import Boolean, DateTime, Enum, ForeignKey, Integer, String, func
+from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.core.database import Base
@@ -64,6 +65,12 @@ class AttentionSession(Base):
 
     # BCP-47 language detected from the guest's first message
     guest_language: Mapped[str | None] = mapped_column(String(10), nullable=True)
+
+    # Odoo user ID of the identified caller (for internal/roomdoo users)
+    odoo_user_id: Mapped[int | None] = mapped_column(Integer, nullable=True)
+
+    # Structured context shared between workers (tool results, IDs, etc.)
+    worker_context: Mapped[dict | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), default=func.now(), nullable=False
