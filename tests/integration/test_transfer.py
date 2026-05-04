@@ -99,6 +99,7 @@ async def test_transfer_closes_source_and_creates_dest(
     """Transfer from source property to dest property: source closed, dest active."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2001,
         name="Dest Hotel",
         roomdoo_external_code="DEST-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -113,7 +114,7 @@ async def test_transfer_closes_source_and_creates_dest(
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
         json={
-            "destination_property_id": dest_prop.id,
+            "destination_property_id": dest_prop.odoo_property_id,
             "note": "El huésped solicita cambio de hotel.",
         },
         headers=auth_headers,
@@ -121,7 +122,7 @@ async def test_transfer_closes_source_and_creates_dest(
     assert response.status_code == 200
     data = response.json()
     assert data["from_session_id"] == source_session.id
-    assert data["destination_property_id"] == dest_prop.id
+    assert data["destination_property_id"] == dest_prop.odoo_property_id
     assert data["to_session_id"] != source_session.id
 
     await db.refresh(source_session)
@@ -154,6 +155,7 @@ async def test_transfer_notes_in_timeline(
     """After transfer, GET /messages returns both notes with kind='note'."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2002,
         name="Note Hotel",
         roomdoo_external_code="NOTE-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -166,7 +168,7 @@ async def test_transfer_notes_in_timeline(
     await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
         json={
-            "destination_property_id": dest_prop.id,
+            "destination_property_id": dest_prop.odoo_property_id,
             "note": "Traspasar por llegada anticipada.",
         },
         headers=auth_headers,
@@ -208,6 +210,7 @@ async def test_transfer_notes_scoped_to_property(
     """Each property only sees messages (including notes) from its own sessions."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2003,
         name="Dest Hotel",
         roomdoo_external_code="SCOPE-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -219,14 +222,14 @@ async def test_transfer_notes_scoped_to_property(
 
     await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "Traspaso de prueba."},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "Traspaso de prueba."},
         headers=auth_headers,
     )
 
     # Source property sees only the outbound note ("traspasada a Dest Hotel")
     src_resp = await client.get(
         f"/api/v1/conversations/{seed_conversation.id}/messages",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     src_notes = [m for m in src_resp.json()["messages"] if m["kind"] == "note"]
@@ -236,7 +239,7 @@ async def test_transfer_notes_scoped_to_property(
     # Dest property sees only the inbound note ("traspasada desde Test Hotel")
     dst_resp = await client.get(
         f"/api/v1/conversations/{seed_conversation.id}/messages",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
     dst_notes = [m for m in dst_resp.json()["messages"] if m["kind"] == "note"]
@@ -264,7 +267,7 @@ async def test_transfer_from_unrouted_session(
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
         json={
-            "destination_property_id": seed_property.id,
+            "destination_property_id": seed_property.odoo_property_id,
             "note": "Asignar desde bandeja.",
         },
         headers=auth_headers,
@@ -304,7 +307,7 @@ async def test_transfer_no_source_session(
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
         json={
-            "destination_property_id": seed_property.id,
+            "destination_property_id": seed_property.odoo_property_id,
             "note": "Sin sesión previa.",
         },
         headers=auth_headers,
@@ -339,7 +342,7 @@ async def test_transfer_same_property_raises_422(
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
         json={
-            "destination_property_id": seed_property.id,
+            "destination_property_id": seed_property.odoo_property_id,
             "note": "No debería funcionar.",
         },
         headers=auth_headers,
@@ -359,7 +362,7 @@ async def test_transfer_unknown_conversation(
 ) -> None:
     response = await client.post(
         "/api/v1/conversations/999999/transfer",
-        json={"destination_property_id": seed_property.id, "note": "x"},
+        json={"destination_property_id": seed_property.odoo_property_id, "note": "x"},
         headers=auth_headers,
     )
     assert response.status_code == 404
@@ -437,6 +440,7 @@ async def test_transfer_targets_returns_all_properties_with_channel(
     # Property on a different WhatsApp number — should still be included
     prop2 = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2004,
         name="Other Channel Hotel",
         roomdoo_external_code="TARGET-002",
         channel_endpoint_id=other_endpoint.id,
@@ -444,6 +448,7 @@ async def test_transfer_targets_returns_all_properties_with_channel(
     # Property with no channel — should NOT be included
     prop_no_channel = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2005,
         name="No Channel Hotel",
         roomdoo_external_code="TARGET-003",
         channel_endpoint_id=None,
@@ -459,10 +464,10 @@ async def test_transfer_targets_returns_all_properties_with_channel(
     assert response.status_code == 200
     data = response.json()
     assert data["conversation_id"] == seed_conversation.id
-    ids = [p["id"] for p in data["properties"]]
-    assert seed_property.id in ids       # same channel
-    assert prop2.id in ids               # different channel, still valid
-    assert prop_no_channel.id not in ids  # no channel → excluded
+    ids = [p["property_id"] for p in data["properties"]]
+    assert seed_property.odoo_property_id in ids       # same channel
+    assert prop2.odoo_property_id in ids               # different channel
+    assert prop_no_channel.odoo_property_id not in ids  # no channel
 
 
 async def test_transfer_targets_unknown_conversation(
@@ -513,6 +518,7 @@ async def test_messages_scoped_to_property_includes_regular_messages(
     """?property_id scopes ALL messages (not just notes) to the property's sessions."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2006,
         name="Second Hotel",
         roomdoo_external_code="SCOPE-MSG-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -531,7 +537,7 @@ async def test_messages_scoped_to_property_includes_regular_messages(
     # Transfer: source closes, dest session is created with its own note
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "Traspaso para test."},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "Traspaso para test."},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -539,7 +545,7 @@ async def test_messages_scoped_to_property_includes_regular_messages(
     # Source property sees its own message + its own outbound note; NOT dest note
     src_resp = await client.get(
         f"/api/v1/conversations/{seed_conversation.id}/messages",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     src_msgs = src_resp.json()["messages"]
@@ -551,7 +557,7 @@ async def test_messages_scoped_to_property_includes_regular_messages(
     # Dest property does NOT see source's regular message
     dst_resp = await client.get(
         f"/api/v1/conversations/{seed_conversation.id}/messages",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
     dst_msgs = dst_resp.json()["messages"]
@@ -577,6 +583,7 @@ async def test_needs_attention_set_after_transfer(
     """After transfer, dest inbox shows needs_attention=True; src shows False."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2007,
         name="Attention Hotel",
         roomdoo_external_code="ATTN-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -589,14 +596,14 @@ async def test_needs_attention_set_after_transfer(
 
     await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "Test atención."},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "Test atención."},
         headers=auth_headers,
     )
 
     # Destination inbox: needs_attention=True
     dst_resp = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
     dst_convs = dst_resp.json()["conversations"]
@@ -606,7 +613,7 @@ async def test_needs_attention_set_after_transfer(
     # Source inbox: needs_attention=False (session closed, no pending transfer note)
     src_resp = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     src_convs = src_resp.json()["conversations"]
@@ -626,6 +633,7 @@ async def test_needs_attention_cleared_after_read(
     """PATCH /read clears needs_attention for the destination property."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2008,
         name="Read Hotel",
         roomdoo_external_code="READ-001",
         channel_endpoint_id=seed_endpoint.id,
@@ -638,14 +646,14 @@ async def test_needs_attention_cleared_after_read(
 
     await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "Test lectura."},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "Test lectura."},
         headers=auth_headers,
     )
 
     # Confirm flag is set before read
     pre = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
     pre_item = next(
@@ -657,14 +665,14 @@ async def test_needs_attention_cleared_after_read(
     # Mark as read
     await client.patch(
         f"/api/v1/conversations/{seed_conversation.id}/read",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
 
     # Flag should be cleared
     post = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": dest_prop.id},
+        params={"property_id": dest_prop.odoo_property_id},
         headers=auth_headers,
     )
     post_item = next(
@@ -691,6 +699,7 @@ async def test_transfer_same_channel_closes_source(
     """Source and dest share the same endpoint → source session is closed."""
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2009,
         name="Same WA Hotel",
         roomdoo_external_code="SAMEWA-001",
         channel_endpoint_id=seed_endpoint.id,  # same endpoint as seed_property
@@ -704,7 +713,7 @@ async def test_transfer_same_channel_closes_source(
 
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "mismo canal"},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "mismo canal"},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -739,6 +748,7 @@ async def test_transfer_different_channel_keeps_source_active(
 
     dest_prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=2010,
         name="Diff WA Hotel",
         roomdoo_external_code="DIFFWA-001",
         channel_endpoint_id=other_endpoint.id,
@@ -752,7 +762,7 @@ async def test_transfer_different_channel_keeps_source_active(
 
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/transfer",
-        json={"destination_property_id": dest_prop.id, "note": "canal distinto"},
+        json={"destination_property_id": dest_prop.odoo_property_id, "note": "canal distinto"},
         headers=auth_headers,
     )
     assert response.status_code == 200

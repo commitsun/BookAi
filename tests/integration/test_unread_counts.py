@@ -174,7 +174,7 @@ async def test_mark_read_endpoint_returns_204(
 ) -> None:
     response = await client.patch(
         f"/api/v1/conversations/{seed_conversation.id}/read",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 204

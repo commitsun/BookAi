@@ -25,9 +25,11 @@ from app.models.template import (
 # ---------------------------------------------------------------------------
 
 
-async def _seed_template(db: AsyncSession, prop_id: int) -> WhatsAppTemplate:
+async def _seed_template(
+    db: AsyncSession, prop_id: int, instance_id: int = 1,
+) -> WhatsAppTemplate:
     """Insert a WhatsAppTemplate + Spanish translation linked to prop_id."""
-    tmpl = WhatsAppTemplate(code="test_welcome")
+    tmpl = WhatsAppTemplate(code="test_welcome", instance_id=instance_id)
     db.add(tmpl)
     await db.flush()
 
@@ -37,6 +39,7 @@ async def _seed_template(db: AsyncSession, prop_id: int) -> WhatsAppTemplate:
         language="es",
         components=[],
         active=True,
+        meta_status="approved",
     )
     db.add(translation)
     await db.flush()
@@ -86,7 +89,7 @@ async def test_send_template_creates_session(
     seed_endpoint,
 ) -> None:
     """POST /send-template → AttentionSession created for the property."""
-    await _seed_template(db, seed_property.id)
+    await _seed_template(db, seed_property.id, seed_property.instance_id)
 
     response = await client.post(
         "/api/v1/whatsapp/send-template",
@@ -118,7 +121,7 @@ async def test_send_template_idempotent(
     seed_endpoint,
 ) -> None:
     """Same idempotency_key twice → 2x OK, only 1 message in DB."""
-    await _seed_template(db, seed_property.id)
+    await _seed_template(db, seed_property.id, seed_property.instance_id)
     key = "idempotency-test-key-001"
 
     r1 = await client.post(

@@ -56,6 +56,7 @@ def _make_translation() -> MagicMock:
     t = MagicMock()
     t.whatsapp_name = "welcome_es"
     t.language = "es"
+    t.meta_status = "approved"
     return t
 
 
@@ -192,6 +193,7 @@ async def test_unknown_template_raises_404():
             return_value=_make_property()
         )
         tmpl_repo.find_translation_for_property = AsyncMock(return_value=None)
+        tmpl_repo.find_translation_for_property_by_prefix = AsyncMock(return_value=None)
 
         with pytest.raises(HTTPException) as exc_info:
             await process_send_template(
@@ -228,6 +230,7 @@ async def test_invalid_phone_raises_422():
         tmpl_repo.find_translation_for_property = AsyncMock(
             return_value=_make_translation()
         )
+        tmpl_repo.find_waba_entries = AsyncMock(return_value=[])
 
         with pytest.raises(HTTPException) as exc_info:
             await process_send_template(
@@ -277,6 +280,7 @@ async def test_whatsapp_error_sets_message_failed_and_raises_502():
         tmpl_repo.find_translation_for_property = AsyncMock(
             return_value=_make_translation()
         )
+        tmpl_repo.find_waba_entries = AsyncMock(return_value=[])
         contact = MagicMock()
         contact.id = 1
         contact_repo.get_or_create = AsyncMock(return_value=(contact, True))
@@ -341,6 +345,7 @@ async def test_success_returns_sent_response():
         tmpl_repo.find_translation_for_property = AsyncMock(
             return_value=_make_translation()
         )
+        tmpl_repo.find_waba_entries = AsyncMock(return_value=[])
         contact = MagicMock()
         contact.id = 1
         contact_repo.get_or_create = AsyncMock(return_value=(contact, True))

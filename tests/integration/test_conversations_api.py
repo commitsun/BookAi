@@ -68,12 +68,12 @@ async def test_list_conversations_for_property(
 
     response = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["property_id"] == seed_property.id
+    assert data["property_id"] == seed_property.odoo_property_id
     ids = [c["id"] for c in data["conversations"]]
     assert seed_conversation.id in ids
 
@@ -120,7 +120,7 @@ async def test_list_conversations_includes_unread_count(
 
     response = await client.get(
         "/api/v1/conversations/",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -150,7 +150,7 @@ async def test_search_by_name(
 
     response = await client.get(
         "/api/v1/conversations/search",
-        params={"property_id": seed_property.id, "q": "Test"},
+        params={"property_id": seed_property.odoo_property_id, "q": "Test"},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -166,7 +166,7 @@ async def test_search_requires_param(
     """Neither q nor status → 400."""
     response = await client.get(
         "/api/v1/conversations/search",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 400
@@ -195,7 +195,7 @@ async def test_search_by_folio_code(
 
     response = await client.get(
         "/api/v1/conversations/search",
-        params={"property_id": seed_property.id, "q": "FOLIO-TEST-001"},
+        params={"property_id": seed_property.odoo_property_id, "q": "FOLIO-TEST-001"},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -226,7 +226,7 @@ async def test_search_by_status(
 
     response = await client.get(
         "/api/v1/conversations/search",
-        params={"property_id": seed_property.id, "status": "confirm"},
+        params={"property_id": seed_property.odoo_property_id, "status": "confirm"},
         headers=auth_headers,
     )
     assert response.status_code == 200
@@ -358,7 +358,7 @@ async def test_mark_read_returns_204(
 ) -> None:
     response = await client.patch(
         f"/api/v1/conversations/{seed_conversation.id}/read",
-        params={"property_id": seed_property.id},
+        params={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 204
@@ -379,13 +379,13 @@ async def test_assign_creates_session(
     """Unassigned conversation + valid property → 200, AttentionSession created."""
     response = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/assign",
-        json={"property_id": seed_property.id},
+        json={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert response.status_code == 200
     data = response.json()
     assert data["conversation_id"] == seed_conversation.id
-    assert data["property_id"] == seed_property.id
+    assert data["property_id"] == seed_property.odoo_property_id
     assert data["created"] is True
 
     from sqlalchemy import select as sa_select
@@ -408,7 +408,7 @@ async def test_assign_idempotent(
     """Assigning the same property twice → second call returns created=False."""
     r1 = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/assign",
-        json={"property_id": seed_property.id},
+        json={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert r1.status_code == 200
@@ -416,7 +416,7 @@ async def test_assign_idempotent(
 
     r2 = await client.post(
         f"/api/v1/conversations/{seed_conversation.id}/assign",
-        json={"property_id": seed_property.id},
+        json={"property_id": seed_property.odoo_property_id},
         headers=auth_headers,
     )
     assert r2.status_code == 200

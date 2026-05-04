@@ -122,6 +122,7 @@ async def seed_property(
     """Single property linked to seed_endpoint (1-property routing case)."""
     prop = Property(
         instance_id=seed_instance.id,
+        odoo_property_id=1001,
         name="Test Hotel",
         roomdoo_external_code="TEST-HOTEL-001",
         channel_endpoint_id=seed_endpoint.id,
