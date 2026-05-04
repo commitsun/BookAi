@@ -20,10 +20,11 @@ log = logging.getLogger("tool_executor")
 
 class ConfirmationRequired(Exception):
     """Raised when a tool requires human confirmation before execution."""
-    def __init__(self, tool_name: str, description: str, args: dict):
+    def __init__(self, tool_name: str, description: str, args: dict, audit_id: int | None = None):
         self.tool_name = tool_name
         self.description = description
         self.args = args
+        self.audit_id = audit_id
         super().__init__(f"Tool '{tool_name}' requires confirmation")
 
 
@@ -125,63 +126,70 @@ class ToolExecutor:
 
     # ── Build LLM tools from bindings ────────────────────────────────
 
-    def build_llm_tools(self, agent: AgentConfig) -> list[dict]:
+    def build_llm_tools(
+        self, agent: AgentConfig, effective_role: str = "assistant",
+    ) -> list[dict]:
+        from app.services.execution_policy import should_include_tool
+
+        # God mode sensitivity mapping
+        _GOD_SENSITIVITY = {"odoo_write": "irreversible"}
+
         if agent.god_mode:
-            # God mode: introspection tools + all SDK tools + all agent tools
-            tools = list(GOD_MODE_TOOLS)
-            # Add regular agent tools too (SDK/MCP bindings)
+            tools = []
+            for t in GOD_MODE_TOOLS:
+                name = t["function"]["name"]
+                sensitivity = _GOD_SENSITIVITY.get(name, "none")
+                if should_include_tool(effective_role, sensitivity):
+                    tools.append(t)
             for binding in agent.tools:
                 if not binding.active:
                     continue
-                schema = {}
-                if binding.input_schema:
-                    try:
-                        schema = (
-                            json.loads(binding.input_schema)
-                            if isinstance(binding.input_schema, str)
-                            else binding.input_schema
-                        )
-                    except (json.JSONDecodeError, TypeError):
-                        schema = {}
-                tools.append({
-                    "type": "function",
-                    "function": {
-                        "name": _to_llm_name(binding.tool_name),
-                        "description": binding.description or binding.tool_name,
-                        "parameters": schema or {"type": "object", "properties": {}},
-                    },
-                })
+                if not should_include_tool(effective_role, binding.action_sensitivity):
+                    continue
+                tools.append(self._binding_to_tool(binding))
             return tools
 
         tools = []
         for binding in agent.tools:
             if not binding.active:
                 continue
-            schema = {}
-            if binding.input_schema:
-                try:
-                    schema = (
-                        json.loads(binding.input_schema)
-                        if isinstance(binding.input_schema, str)
-                        else binding.input_schema
-                    )
-                except (json.JSONDecodeError, TypeError):
-                    schema = {}
-
-            tools.append({
-                "type": "function",
-                "function": {
-                    "name": _to_llm_name(binding.tool_name),
-                    "description": binding.description or binding.tool_name,
-                    "parameters": schema or {"type": "object", "properties": {}},
-                },
-            })
+            if not should_include_tool(effective_role, binding.action_sensitivity):
+                continue
+            tools.append(self._binding_to_tool(binding))
         return tools
+
+    @staticmethod
+    def _binding_to_tool(binding) -> dict:
+        schema = {}
+        if binding.input_schema:
+            try:
+                schema = (
+                    json.loads(binding.input_schema)
+                    if isinstance(binding.input_schema, str)
+                    else binding.input_schema
+                )
+            except (json.JSONDecodeError, TypeError):
+                schema = {}
+        return {
+            "type": "function",
+            "function": {
+                "name": _to_llm_name(binding.tool_name),
+                "description": binding.description or binding.tool_name,
+                "parameters": schema or {"type": "object", "properties": {}},
+            },
+        }
 
     # ── Execute a tool call ──────────────────────────────────────────
 
     async def execute(
         self, tool_name: str, args: dict, agent: AgentConfig,
+        conversation_id: int | None = None,
+        skip_confirm: bool = False,
+        guest_message: str | None = None,
+        effective_confirmation: str = "sensitive",
+        execution_id: int | None = None,
+        effective_role: str = "assistant",
+        effective_log: str = "basic",
     ) -> dict:
         canonical = _from_llm_name(tool_name)
 
@@ -191,17 +199,66 @@ class ToolExecutor:
         if binding is None:
             return {"error": f"Tool '{canonical}' not bound to this agent"}
 
-        if binding.requires_confirm:
+        from app.services.execution_policy import needs_confirmation
+        requires = needs_confirmation(
+            effective_confirmation, binding.action_sensitivity, binding.requires_confirm,
+        )
+        if requires and not skip_confirm:
+            # Check audit log for existing pending confirmation
+            if self._client and conversation_id:
+                from app.services.audit_service import find_pending_audit, update_audit_status
+                pending = await find_pending_audit(self._client, conversation_id, canonical)
+                if pending:
+                    # Confirmation exists — execute the tool
+                    log.info("Found pending audit %d for %s — executing", pending["id"], canonical)
+                    confirmed_by = f"guest: {guest_message[:200]}" if guest_message else "guest"
+                    await update_audit_status(self._client, pending["id"], "confirmed", confirmed_by=confirmed_by)
+                    result = await self._dispatch_tool(binding, canonical, args)
+                    status = "success" if "error" not in result else "error"
+                    await update_audit_status(
+                        self._client, pending["id"], status,
+                        error_message=result.get("error"),
+                    )
+                    # Log confirmation step with guest's response
+                    if execution_id and self._client:
+                        from app.services.execution_service import log_step
+                        await log_step(
+                            self._client, execution_id, "confirmation",
+                            agent.id, effective_role, effective_log,
+                            tool_name=canonical,
+                            tool_args=args,
+                            tool_result=result,
+                            status=status,
+                            confirmation_summary=pending.get("args_summary", ""),
+                            confirmation_response=guest_message[:500] if guest_message else None,
+                            confirmed=True,
+                        )
+                    return result
+
+            # No pending audit — create one and ask for confirmation
+            audit_id = None
+            if self._client and conversation_id:
+                from app.services.audit_service import create_pending_audit
+                pms_property_id = args.get("property_id")
+                audit_id = await create_pending_audit(
+                    self._client, agent.id, conversation_id, canonical, args,
+                    pms_property_id=pms_property_id,
+                )
             raise ConfirmationRequired(
                 canonical, binding.description or canonical, args,
+                audit_id=audit_id,
             )
 
+        return await self._dispatch_tool(binding, canonical, args)
+
+    async def _dispatch_tool(self, binding, canonical: str, args: dict) -> dict:
+        """Route to the correct executor based on tool_type."""
         if binding.tool_type == "sdk":
             return await self._execute_sdk(binding.sdk_method or canonical, args)
         elif binding.tool_type == "mcp":
             return await self._execute_mcp(canonical, args)
-        elif binding.tool_type == "webhook":
-            return {"error": "Webhook tool execution not yet implemented"}
+        elif binding.tool_type in ("webhook", "http"):
+            return await self._execute_http(binding, args)
         elif binding.tool_type == "function":
             return {"error": "Function tool execution not yet implemented"}
         else:
@@ -225,6 +282,23 @@ class ToolExecutor:
         if server_id is None:
             return {"error": f"No MCP server found for tool '{tool_name}'"}
         return await self._mcp.call_tool(self._instance_id, server_id, tool_name, args)
+
+    # ── HTTP: call external API endpoint ──────────────────────────────
+
+    async def _execute_http(self, binding, args: dict) -> dict:
+        url = getattr(binding, "endpoint_url", None)
+        if not url:
+            return {"error": f"HTTP tool '{binding.tool_name}' has no endpoint_url configured"}
+        headers = getattr(binding, "endpoint_headers", None) or {}
+        try:
+            import httpx
+            async with httpx.AsyncClient(timeout=30) as http:
+                resp = await http.get(url, params=args, headers=headers)
+                resp.raise_for_status()
+                return resp.json()
+        except Exception as exc:
+            log.error("HTTP tool failed: %s %s — %s", binding.tool_name, url, exc)
+            return {"error": f"HTTP tool '{binding.tool_name}' failed: {exc}"}
 
     # ── God mode: generic Odoo execute ───────────────────────────────
 

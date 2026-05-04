@@ -25,7 +25,7 @@ _HUMAN_PATTERNS = [
     r"(?:real|actual)\s+(?:person|human)",
     r"(?:no|stop)\s+(?:bot|chatbot|ai)",
     # French
-    r"(?:je\s+veux|puis-je)\s+parler\s+[àa]\s+(?:une?\s+)?(?:personne|quelqu'un|r[ée]ception)",
+    r"(?:je\s+veux|puis-je)\s+parler\s+(?:[àa]|avec)\s+(?:une?\s+)?(?:personne|quelqu'un|r[ée]ception|humain)",
     # Portuguese
     r"(?:quero|preciso)\s+falar\s+com\s+(?:uma?\s+)?(?:pessoa|algu[ée]m|recep[çc][ãa]o)",
 ]

@@ -48,6 +48,7 @@ async def supervisor_orchestrate(
     available_workers: list[CachedAgent],
     current_worker_name: str | None,
     llm_client: LLMProvider,
+    conversation_history: list | None = None,
 ) -> SupervisorResult:
     """Supervisor evaluates every message and decides what to do."""
 
@@ -57,6 +58,8 @@ async def supervisor_orchestrate(
     )
     current_info = f"\nCurrently active worker: {current_worker_name}" if current_worker_name else ""
 
+    history_block = _format_history(conversation_history) if conversation_history else ""
+
     technical_block = f"""
 ## ORCHESTRATION INSTRUCTIONS (system — do not share with the user)
 
@@ -65,6 +68,7 @@ You are a supervisor agent. For every message, you MUST respond with a JSON obje
 ### Available workers
 {worker_list}
 {current_info}
+{history_block}
 
 ### Possible actions
 
@@ -84,7 +88,8 @@ You are a supervisor agent. For every message, you MUST respond with a JSON obje
 - ALWAYS prefer delegate over escalate
 - Only escalate if the user EXPLICITLY asks for a human, or if the situation truly cannot be handled
 - If in doubt, delegate to the most relevant worker
-- Respond directly ONLY for trivial messages (hi, thanks, bye)
+- If there is a currently active worker, short confirmations (yes, sí, ok, confirm, vale, de acuerdo, por favor, sí por favor) MUST be delegated to that worker — they likely need the confirmation to complete an action
+- Respond directly ONLY for greetings or goodbyes when NO worker is active
 - JSON only. No text before or after.
 """
 
@@ -121,11 +126,26 @@ async def supervisor_validate(
     worker_name: str,
     available_workers: list[CachedAgent],
     llm_client: LLMProvider,
+    tools_used: list[str] | None = None,
+    has_folio_context: bool = False,
 ) -> ValidationResult:
     """Supervisor validates a worker's response before sending."""
 
     other_workers = [w for w in available_workers if w.config.technical_name != worker_name]
     alternatives = ", ".join(w.config.technical_name for w in other_workers) if other_workers else "none"
+
+    data_sources_block = ""
+    if tools_used:
+        tools_list = ", ".join(tools_used)
+        data_sources_block += (
+            f"\nTools executed by the worker: {tools_list}\n"
+            "The tool calls were verified by the system — the data in the response comes from real tool results, not hallucination.\n"
+        )
+    if has_folio_context:
+        data_sources_block += (
+            "\nThe worker had access to verified reservation data (folio codes, dates, status) "
+            "injected by the system from the database. This data is real — do NOT reject for 'unverified data'.\n"
+        )
 
     prompt = f"""{supervisor.config.system_prompt}
 
@@ -135,7 +155,7 @@ Check if this response is appropriate to send to the user.
 
 Guest message: {original_message}
 Worker ({worker_name}) response: {worker_response}
-Alternative workers available: {alternatives}
+{data_sources_block}Alternative workers available: {alternatives}
 
 Respond with JSON only:
 - Approved: {{"approved": true}}
@@ -146,6 +166,7 @@ Rules:
 - Approve unless the response is clearly wrong, offensive, or completely off-topic
 - Do NOT reject for stylistic reasons or minor imperfections
 - If the response addresses the user's question reasonably, approve it
+- If the worker used tools or had system-injected data, the data is verified — do NOT reject for "unverified data"
 """
 
     try:
@@ -239,6 +260,23 @@ def _parse_json(text: str) -> dict | None:
         return json.loads(clean)
     except (json.JSONDecodeError, IndexError):
         return None
+
+
+def _format_history(messages: list) -> str:
+    """Format recent conversation messages as context for the supervisor."""
+    if not messages:
+        return ""
+    lines = []
+    for m in messages:
+        sender = getattr(m, "sender", None)
+        sender_val = sender.value if hasattr(sender, "value") else str(sender)
+        content = getattr(m, "content", None) or ""
+        label = "Guest" if sender_val == "guest" else "AI/Agent"
+        # Truncate long messages to keep supervisor context lean
+        if len(content) > 150:
+            content = content[:150] + "…"
+        lines.append(f"  {label}: {content}")
+    return "\n### Recent conversation context\n" + "\n".join(lines)
 
 
 def _fallback_delegate(workers: list[CachedAgent]) -> SupervisorResult:
