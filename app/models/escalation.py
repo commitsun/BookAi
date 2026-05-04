@@ -79,6 +79,9 @@ class Escalation(Base):
     resolved_at: Mapped[datetime | None] = mapped_column(
         DateTime(timezone=True), nullable=True,
     )
+    notified_at: Mapped[datetime | None] = mapped_column(
+        DateTime(timezone=True), nullable=True,
+    )
 
     # Relationships
     conversation: Mapped["Conversation"] = relationship()

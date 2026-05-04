@@ -94,6 +94,42 @@ async def resolve(
         escalation.resolution_notes = resolution_notes
 
 
+async def update_draft_response(
+    db: AsyncSession, escalation: Escalation, draft: str,
+) -> None:
+    escalation.draft_response = draft
+    await db.flush()
+
+
+async def find_pending_unnotified(db: AsyncSession) -> list[Escalation]:
+    """All pending escalations not yet notified.
+
+    Eager-loads conversation→contact and session→property
+    so the notifier can access guest phone/name and property config.
+    """
+    from app.models.contact import Contact
+    from app.models.conversation import Conversation
+    from app.models.instance import Property
+    from app.models.session import AttentionSession
+
+    result = await db.execute(
+        select(Escalation)
+        .where(
+            Escalation.status == "pending",
+            Escalation.notified_at.is_(None),
+        )
+        .options(
+            selectinload(Escalation.conversation)
+            .selectinload(Conversation.contact),
+            selectinload(Escalation.session)
+            .selectinload(AttentionSession.property)
+            .selectinload(Property.instance),
+        )
+        .order_by(Escalation.created_at)
+    )
+    return list(result.scalars().all())
+
+
 async def list_for_property(
     db: AsyncSession,
     property_id: int,
