@@ -18,7 +18,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
-from app.api.dependencies import get_db, get_instance, get_sio
+from app.api.dependencies import get_db, get_instance, get_sio, resolve_property
 from app.models.conversation import Conversation, ConversationChannelState
 from app.models.email_message import EmailMessageMetadata
 from app.models.folio import FolioStatus
@@ -37,6 +37,7 @@ from app.schemas.conversation import (
     ConversationListItem,
     ConversationsListResponse,
     EmailMetadataOut,
+    FolioSummary,
     LastMessageSummary,
     MediaOut,
     MessageOut,
@@ -99,23 +100,26 @@ async def list_conversations(
     property_id: int = Query(
         ...,
         description=(
-            "ID of the property (hotel). "
+            "Odoo property ID of the hotel. "
             "Use 0 for unrouted conversations."
         ),
     ),
     limit: int = Query(default=50, ge=1, le=200),
-    _instance: Instance = Depends(get_instance),
+    conversation_type: str = Query(default="guest", description="guest|internal|roomdoo"),
+    instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> ConversationsListResponse:
-    if property_id == 0:
+    prop = await resolve_property(property_id, instance, db)
+    internal_id = prop.id if prop else 0
+    if internal_id == 0:
         conversations = await conversation_repo.list_unrouted(db, limit)
     else:
         conversations = await conversation_repo.list_for_property(
-            db, property_id, limit
+            db, internal_id, limit, conversation_type=conversation_type,
         )
 
     items = await _build_items_with_last_message(
-        db, conversations, property_id
+        db, conversations, internal_id
     )
     return ConversationsListResponse(
         property_id=property_id, conversations=items
@@ -161,7 +165,7 @@ Odoo by up to the interval between Roomdoo sync calls.
     },
 )
 async def search_conversations(
-    property_id: int = Query(..., description="ID of the property (hotel)"),
+    property_id: int = Query(..., description="Odoo property ID of the hotel"),
     q: str | None = Query(
         default=None,
         description="Match guest name or folio code (case-insensitive)",
@@ -175,9 +179,11 @@ async def search_conversations(
         ),
     ),
     limit: int = Query(default=50, ge=1, le=200),
-    _instance: Instance = Depends(get_instance),
+    instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> ConversationsListResponse:
+    prop = await resolve_property(property_id, instance, db)
+    internal_id = prop.id if prop else 0
     if not q and not status:
         raise HTTPException(
             status_code=http_status.HTTP_400_BAD_REQUEST,
@@ -202,7 +208,7 @@ async def search_conversations(
             SessionFolio, SessionFolio.session_id == AttentionSession.id
         )
         .outerjoin(Folio, Folio.id == SessionFolio.folio_id)
-        .where(AttentionSession.property_id == property_id)
+        .where(AttentionSession.property_id == internal_id)
         .options(selectinload(Conversation.contact))
         .group_by(Conversation.id)
         .order_by(last_msg_at.desc().nullslast())
@@ -226,7 +232,7 @@ async def search_conversations(
     conversations = list(result.scalars().unique().all())
 
     items = await _build_items_with_last_message(
-        db, conversations, property_id
+        db, conversations, internal_id
     )
     return ConversationsListResponse(
         property_id=property_id, conversations=items
@@ -291,12 +297,12 @@ async def get_messages(
     property_id: int | None = Query(
         default=None,
         description=(
-            "When provided, notes are filtered to only those belonging to "
-            "sessions of this property. Regular messages are always included. "
-            "Use 0 for the unrouted inbox."
+            "When provided (Odoo property ID), notes are filtered to only "
+            "those belonging to sessions of this property. Regular messages "
+            "are always included. Use 0 for the unrouted inbox."
         ),
     ),
-    _instance: Instance = Depends(get_instance),  # auth side-effect only
+    instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> MessagesResponse:
     query = (
@@ -312,12 +318,11 @@ async def get_messages(
         query = query.where(Message.id < before_id)
 
     if property_id is not None:
-        # Each property sees only messages from its own sessions.
-        # property_id=0 means the unrouted inbox (sessions with property_id IS NULL).
-        effective_property_id = None if property_id == 0 else property_id
+        prop = await resolve_property(property_id, instance, db)
+        internal_id = prop.id if prop else None
         property_sessions_sq = (
             select(AttentionSession.id).where(
-                AttentionSession.property_id == effective_property_id
+                AttentionSession.property_id == internal_id
             )
         )
         query = query.where(
@@ -402,6 +407,7 @@ async def get_messages(
                 msg.routing_status.value if msg.routing_status else None
             ),
             template_code=msg.template_code,
+            template_payload=msg.template_payload,
             created_at=(
                 msg.created_at.isoformat() if msg.created_at else ""
             ),
@@ -447,12 +453,14 @@ async def get_messages(
 async def mark_conversation_read(
     conversation_id: int,
     property_id: int = Query(
-        ..., description="Property marking this conversation as read"
+        ..., description="Odoo property ID marking this conversation as read"
     ),
-    _instance: Instance = Depends(get_instance),
+    instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> None:
-    await conversation_repo.mark_read(db, conversation_id, property_id)
+    prop = await resolve_property(property_id, instance, db)
+    internal_id = prop.id if prop else 0
+    await conversation_repo.mark_read(db, conversation_id, internal_id)
     await db.commit()
 
 
@@ -487,7 +495,7 @@ async def assign_conversation(
     if conversation is None:
         raise HTTPException(status_code=404, detail="Conversation not found")
 
-    prop = await instance_repo.find_property_by_id(db, body.property_id, instance.id)
+    prop = await resolve_property(body.property_id, instance, db)
     if prop is None:
         raise HTTPException(
             status_code=404,
@@ -495,7 +503,7 @@ async def assign_conversation(
         )
 
     attention_session, created = await session_repo.get_or_create_active(
-        db, conversation_id, body.property_id
+        db, conversation_id, prop.id
     )
     await db.commit()
 
@@ -508,7 +516,7 @@ async def assign_conversation(
         )
         last_msg = last_msg_result.scalar_one_or_none()
         unread_counts = await conversation_repo.get_unread_counts(
-            db, [conversation_id], body.property_id
+            db, [conversation_id], prop.id
         )
         await sio.emit(
             EVENT_CONVERSATION_UPDATED,
@@ -517,8 +525,9 @@ async def assign_conversation(
                 conversation.contact,
                 last_message=last_msg,
                 unread_count=unread_counts.get(conversation_id, 0),
+                ai_enabled=attention_session.ai_enabled,
             ),
-            room=f"property:{body.property_id}",
+            room=f"property:{prop.id}",
         )
     except Exception as exc:
         log.warning("Socket.IO emit failed on assign: %s", exc)
@@ -574,7 +583,7 @@ async def list_transfer_targets(
         conversation_id=conversation_id,
         properties=[
             TransferTargetProperty(
-                id=p.id,
+                property_id=p.odoo_property_id,
                 name=p.name,
                 roomdoo_external_code=p.roomdoo_external_code,
             )
@@ -613,14 +622,19 @@ async def transfer_conversation(
     db: AsyncSession = Depends(get_db),
     sio: socketio.AsyncServer = Depends(get_sio),
 ) -> TransferConversationResponse:
+    dest_prop = await resolve_property(body.destination_property_id, instance, db)
+    if dest_prop is None:
+        raise HTTPException(status_code=404, detail="Destination property not found")
     result = await transfer_service.transfer_conversation(
         db=db,
         sio=sio,
         instance=instance,
         conversation_id=conversation_id,
-        destination_property_id=body.destination_property_id,
+        destination_property_id=dest_prop.id,
         note_text=body.note,
     )
+    # Map internal destination_property_id back to odoo ID for response
+    result["destination_property_id"] = body.destination_property_id
     return TransferConversationResponse(**result)
 
 
@@ -645,18 +659,20 @@ async def transfer_conversation(
 )
 async def toggle_conversation_ai(
     conversation_id: int,
-    property_id: int = Query(..., description="Property ID"),
+    property_id: int = Query(..., description="Odoo property ID"),
     ai_enabled: bool = Query(..., description="New AI state"),
     instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    prop = await resolve_property(property_id, instance, db)
+    internal_id = prop.id if prop else 0
     from sqlalchemy import and_
     result = await db.execute(
         select(AttentionSession)
         .options(selectinload(AttentionSession.property))
         .where(and_(
             AttentionSession.conversation_id == conversation_id,
-            AttentionSession.property_id == property_id,
+            AttentionSession.property_id == internal_id,
             AttentionSession.status == SessionStatus.active,
         ))
     )
@@ -712,7 +728,7 @@ async def toggle_conversation_ai(
 )
 async def get_conversation_channels(
     conversation_id: int,
-    property_id: int = Query(..., description="Property requesting the channel list"),
+    property_id: int = Query(..., description="Odoo property ID requesting the channel list"),
     instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
@@ -725,7 +741,7 @@ async def get_conversation_channels(
     channels: list[dict] = []
 
     # WhatsApp: from property.channel_endpoint_id
-    prop = await instance_repo.find_property_by_id(db, property_id, instance.id)
+    prop = await resolve_property(property_id, instance, db)
     if prop and prop.channel_endpoint_id:
         wa_ep = await instance_repo.find_channel_endpoint_by_id(
             db, prop.channel_endpoint_id
@@ -842,6 +858,37 @@ async def _build_items_with_last_message(
         )
         pending_escalations = {row.conversation_id for row in esc_result.all()}
 
+    # Load folios linked to active sessions for this property
+    from collections import defaultdict
+    conv_folios: dict[int, list[FolioSummary]] = defaultdict(list)
+    if conversation_ids and property_id:
+        folio_result = await db.execute(
+            select(
+                AttentionSession.conversation_id,
+                Folio,
+            )
+            .join(SessionFolio, SessionFolio.session_id == AttentionSession.id)
+            .join(Folio, Folio.id == SessionFolio.folio_id)
+            .where(
+                AttentionSession.conversation_id.in_(conversation_ids),
+                AttentionSession.property_id == property_id,
+                AttentionSession.status == SessionStatus.active,
+            )
+        )
+        for row in folio_result.all():
+            f = row.Folio
+            pending = None
+            if f.pending_payment_amount is not None:
+                currency = f.pending_payment_currency or ""
+                pending = f"{f.pending_payment_amount} {currency}".strip()
+            conv_folios[row.conversation_id].append(FolioSummary(
+                code=f.odoo_external_code,
+                status=f.status.value if f.status else None,
+                checkin_date=f.checkin_date.isoformat() if f.checkin_date else None,
+                checkout_date=f.checkout_date.isoformat() if f.checkout_date else None,
+                pending_amount=pending,
+            ))
+
     items: list[ConversationListItem] = []
     for conv in conversations:
         contact = conv.contact
@@ -870,7 +917,11 @@ async def _build_items_with_last_message(
                         if last_msg.created_at else ""
                     ),
                 ) if last_msg else None,
-                unread_count=unread_counts.get(conv.id, 0),
+                folios=conv_folios.get(conv.id, []),
+                unread_count=(
+                    0 if session_ai.get(conv.id) is True
+                    else unread_counts.get(conv.id, 0)
+                ),
                 needs_attention=needs_attention.get(conv.id, False),
                 ai_enabled=session_ai.get(conv.id),
                 has_pending_escalation=conv.id in pending_escalations,

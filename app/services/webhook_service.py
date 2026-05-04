@@ -95,6 +95,11 @@ async def process_inbound_webhook(
             value = change.value
             phone_number_id = value.metadata.phone_number_id if value.metadata else None
 
+            # --- Template status updates ---
+            if change.field == "message_template_status_update" and value.event:
+                await _process_template_status(value, db, sdk_registry)
+                continue
+
             # --- Delivery status updates ---
             if value.statuses:
                 for status_event in value.statuses:
@@ -186,11 +191,13 @@ async def _process_message(
         s for s in all_sessions if is_session_active(_folios(s), conv_last_msg)
     ]
     routed_property_id: int | None = None
+    session_ai_enabled: bool | None = None
 
     if len(active_sessions) == 1:
         routing_status = RoutingStatus.routed
         attention_session_id = active_sessions[0].id
         routed_property_id = active_sessions[0].property_id
+        session_ai_enabled = active_sessions[0].ai_enabled
 
     elif len(active_sessions) == 0:
         if len(endpoint_property_ids) == 1:
@@ -208,6 +215,7 @@ async def _process_message(
             routing_status = RoutingStatus.routed
             attention_session_id = auto_session.id
             routed_property_id = endpoint_property_ids[0]
+            session_ai_enabled = auto_session.ai_enabled
         else:
             # Multiple properties → park in admin inbox (property:0)
             unrouted, _ = await session_repo.find_or_create_unrouted(
@@ -222,6 +230,7 @@ async def _process_message(
         routing_status = RoutingStatus.routed
         attention_session_id = chosen.id
         routed_property_id = chosen.property_id
+        session_ai_enabled = chosen.ai_enabled
 
     # --- Persist message ---
     content = _extract_text(wa_msg)
@@ -288,6 +297,7 @@ async def _process_message(
                 conv_payload = build_conversation_payload(
                     conversation, contact,
                     last_message=msg, unread_count=unread,
+                    ai_enabled=session_ai_enabled,
                 )
                 await sio.emit(conv_event, conv_payload, room=room)
     except Exception as exc:
@@ -433,3 +443,135 @@ async def _process_status_update(
             )
     except Exception as exc:
         log.warning("Socket.IO delivery_updated emit failed: %s", exc)
+
+
+async def _process_template_status(
+    value, db: AsyncSession,
+    sdk_registry: InstanceSDKRegistry | None = None,
+) -> None:
+    """Handle Meta template status webhook (APPROVED/REJECTED/etc)."""
+    event = (value.event or "").upper()
+    template_name = value.message_template_name
+    template_lang = value.message_template_language
+    meta_id = value.message_template_id
+
+    if not template_name:
+        return
+
+    # Map Meta event to our status
+    status_map = {
+        "APPROVED": "approved",
+        "REJECTED": "rejected",
+        "PENDING": "pending",
+        "PENDING_DELETION": "pending",
+        "DELETED": "deleted",
+        "DISABLED": "disabled",
+        "PAUSED": "paused",
+        "IN_APPEAL": "in_appeal",
+    }
+    new_status = status_map.get(event, event.lower())
+
+    from app.models.template import WhatsAppTemplate, WhatsAppTemplateTranslation
+
+    result = await db.execute(
+        select(WhatsAppTemplateTranslation)
+        .join(WhatsAppTemplate)
+        .where(
+            WhatsAppTemplate.code == template_name,
+            WhatsAppTemplateTranslation.language == template_lang,
+        )
+    )
+    trans = result.scalar_one_or_none()
+
+    if trans is None and template_lang:
+        # Fallback: try prefix match (en → en_US)
+        result = await db.execute(
+            select(WhatsAppTemplateTranslation)
+            .join(WhatsAppTemplate)
+            .where(
+                WhatsAppTemplate.code == template_name,
+                WhatsAppTemplateTranslation.language.like(f"{template_lang}%"),
+            )
+        )
+        trans = result.scalar_one_or_none()
+
+    if trans is None:
+        log.debug("Template status webhook: %s (%s) not found in DB", template_name, template_lang)
+        return
+
+    # Update WABA entry (primary source of truth for per-WABA status)
+    waba_entry = None
+    if meta_id:
+        from app.models.template import TemplateTranslationWaba
+        waba_result = await db.execute(
+            select(TemplateTranslationWaba).where(
+                TemplateTranslationWaba.meta_template_id == str(meta_id),
+            )
+        )
+        waba_entry = waba_result.scalar_one_or_none()
+        if waba_entry:
+            old_status = waba_entry.meta_status
+            waba_entry.meta_status = new_status
+            log.info(
+                "Template '%s' (%s) WABA %s status: %s → %s (meta_id=%s)",
+                template_name, template_lang, waba_entry.waba_id,
+                old_status, new_status, meta_id,
+            )
+
+    await db.commit()
+
+    # Notify Odoo via SDK (fire-and-forget)
+    waba_id_str = waba_entry.waba_id if waba_entry else None
+    asyncio.create_task(_notify_odoo_template_status_sdk(
+        sdk_registry, trans.template_id, template_name, template_lang,
+        new_status, str(meta_id) if meta_id else None, waba_id_str,
+    ))
+
+
+async def _notify_odoo_template_status_sdk(
+    sdk_registry: InstanceSDKRegistry | None,
+    template_id: int,
+    template_code: str,
+    language: str,
+    meta_status: str,
+    meta_template_id: str | None,
+    waba_id: str | None,
+) -> None:
+    """Update template translation status in Odoo via SDK (fire-and-forget)."""
+    if not sdk_registry:
+        return
+    try:
+        from app.core.database import SessionLocal
+        from app.models.template import WhatsAppTemplate
+        from app.models.instance import Instance
+
+        async with SessionLocal() as bg_db:
+            result = await bg_db.execute(
+                select(Instance)
+                .join(WhatsAppTemplate, WhatsAppTemplate.instance_id == Instance.id)
+                .where(WhatsAppTemplate.id == template_id)
+            )
+            instance = result.scalar_one_or_none()
+            if not instance:
+                return
+
+            client = sdk_registry.get_client(instance)
+            if not client:
+                return
+
+            updated = await client.templates.update_translation_status(
+                template_code=template_code,
+                language=language,
+                meta_status=meta_status,
+                meta_template_id=meta_template_id,
+                waba_id=waba_id,
+            )
+            log.info(
+                "Odoo SDK: template '%s' (%s) → %s (updated=%s)",
+                template_code, language, meta_status, updated,
+            )
+    except Exception as exc:
+        log.warning(
+            "Failed to notify Odoo SDK of template status %s (%s): %s",
+            template_code, language, exc,
+        )

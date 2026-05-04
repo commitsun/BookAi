@@ -244,6 +244,7 @@ async def process_inbound_email(
                 last_message=msg,
                 unread_count=unread_counts.get(conversation.id, 0),
                 needs_attention=needs_attn.get(conversation.id, False),
+                ai_enabled=attention_session.ai_enabled,
             ),
             room=f"property:{room_id}",
         )

@@ -38,6 +38,7 @@ EVENT_CONVERSATION_CREATED = "conversation.created"
 EVENT_CONVERSATION_UPDATED = "conversation.updated"
 EVENT_MESSAGE_CREATED = "message.created"
 EVENT_MESSAGE_DELIVERY_UPDATED = "message.delivery_updated"
+EVENT_ESCALATION_DRAFT_UPDATED = "escalation.draft_updated"
 
 
 def build_conversation_payload(
@@ -46,9 +47,12 @@ def build_conversation_payload(
     last_message: Message | None = None,
     unread_count: int = 0,
     needs_attention: bool = False,
+    ai_enabled: bool | None = None,
 ) -> dict:
     payload: dict = {
         "id": conversation.id,
+        "title": getattr(conversation, "title", None),
+        "conversation_type": getattr(conversation, "conversation_type", "guest"),
         "created_at": (
             conversation.created_at.isoformat()
             if conversation.created_at else None
@@ -57,9 +61,11 @@ def build_conversation_payload(
             conversation.updated_at.isoformat()
             if conversation.updated_at else None
         ),
-        "unread_count": unread_count,
+        "unread_count": 0 if ai_enabled is True else unread_count,
         "needs_attention": needs_attention,
     }
+    if ai_enabled is not None:
+        payload["ai_enabled"] = ai_enabled
     if contact:
         payload["contact"] = {
             "id": contact.id,
@@ -72,6 +78,7 @@ def build_conversation_payload(
             "direction": last_message.direction.value if last_message.direction else None,
             "sender": last_message.sender.value if last_message.sender else None,
             "content": last_message.content,
+            "template_code": last_message.template_code,
             "created_at": last_message.created_at.isoformat() if last_message.created_at else None,
         }
     return payload
@@ -104,6 +111,7 @@ def build_message_created_payload(
             if message.routing_status else None
         ),
         "template_code": message.template_code,
+        "template_payload": message.template_payload,
         "agent_user_id": message.agent_user_id,
         "agent_display_name": message.agent_display_name,
         "created_at": (
@@ -118,6 +126,18 @@ def build_message_created_payload(
             "display_name": contact.display_name,
         }
     return payload
+
+
+def build_escalation_draft_payload(
+    escalation_id: int,
+    conversation_id: int,
+    draft_response: str | None,
+) -> dict:
+    return {
+        "escalation_id": escalation_id,
+        "conversation_id": conversation_id,
+        "draft_response": draft_response,
+    }
 
 
 def build_delivery_updated_payload(message: Message) -> dict:

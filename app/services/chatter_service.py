@@ -127,9 +127,15 @@ async def process_send_message(
     active_sessions = await session_repo.find_active_for_conversation(db, conversation.id)
     attention_session_id: int | None = None
     property_id: int | None = None
+    session_ai_enabled: bool | None = None
     if len(active_sessions) == 1:
         attention_session_id = active_sessions[0].id
         property_id = active_sessions[0].property_id
+        session_ai_enabled = active_sessions[0].ai_enabled
+
+    # --- Format for target channel ---
+    from app.services.channel_formatter import format_for_channel
+    send_text = format_for_channel(request.content, channel_endpoint.channel)
 
     # --- Send via channel ---
     wa_message_id: str | None = None
@@ -137,7 +143,7 @@ async def process_send_message(
         wa_message_id = await wa_client.send_text(
             to=phone_code,
             channel_endpoint=channel_endpoint,
-            text=request.content,
+            text=send_text,
         )
     except ChannelError as exc:
         log.error(
@@ -181,6 +187,7 @@ async def process_send_message(
                     conversation, conversation.contact,
                     last_message=msg,
                     unread_count=counts.get(conversation.id, 0),
+                    ai_enabled=session_ai_enabled,
                 ),
                 room=f"property:{property_id}",
             )

@@ -28,12 +28,26 @@ class LastMessageSummary(BaseModel):
     created_at: str
 
 
+class FolioSummary(BaseModel):
+    code: str = Field(description="Folio code from the PMS (e.g. '206/26/026072')")
+    status: str | None = Field(description="draft, confirm, onboard, done, cancel")
+    checkin_date: str | None
+    checkout_date: str | None
+    pending_amount: str | None = Field(
+        description="Pending payment amount with currency (e.g. '150.00 EUR')",
+    )
+
+
 class ConversationListItem(BaseModel):
     id: int
     created_at: str
     updated_at: str | None
     contact: ContactSummary
     last_message: LastMessageSummary | None
+    folios: list[FolioSummary] = Field(
+        default_factory=list,
+        description="Folios linked to the active session for this property",
+    )
     unread_count: int = Field(
         default=0,
         description=(
@@ -102,6 +116,7 @@ class MessageOut(BaseModel):
     ]
     routing_status: Literal["routed", "unassigned", "ambiguous"] | None
     template_code: str | None
+    template_payload: dict | None = None
     created_at: str
     # Only populated when channel == "email"
     email_metadata: EmailMetadataOut | None = None
@@ -132,7 +147,7 @@ class MessagesResponse(BaseModel):
 
 
 class TransferTargetProperty(BaseModel):
-    id: int
+    property_id: int = Field(description="Odoo property ID")
     name: str
     roomdoo_external_code: str
 

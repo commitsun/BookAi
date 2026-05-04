@@ -178,7 +178,8 @@ async def _emit_transfer_events(
         contact = conversation.contact
 
         async def _emit_to(
-            room: str, property_id: int | None, needs_attention: bool = False
+            room: str, property_id: int | None, needs_attention: bool = False,
+            ai_enabled: bool | None = None,
         ) -> None:
             pid = property_id or 0
             if pid != 0:
@@ -193,6 +194,7 @@ async def _emit_transfer_events(
                 contact,
                 unread_count=unread,
                 needs_attention=needs_attention,
+                ai_enabled=ai_enabled,
             )
             await sio.emit(EVENT_CONVERSATION_UPDATED, payload, room=room)
 
@@ -202,6 +204,7 @@ async def _emit_transfer_events(
                 await _emit_to(
                     f"property:{source_session.property_id}",
                     source_session.property_id,
+                    ai_enabled=source_session.ai_enabled,
                 )
             else:
                 await _emit_to("property:0", None)
@@ -212,6 +215,7 @@ async def _emit_transfer_events(
             f"property:{destination_property_id}",
             destination_property_id,
             needs_attention=True,
+            ai_enabled=dest_session.ai_enabled,
         )
 
     except Exception as exc:

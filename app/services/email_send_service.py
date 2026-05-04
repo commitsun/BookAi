@@ -375,6 +375,7 @@ async def process_send_email(
                     contact,
                     last_message=msg,
                     unread_count=unread_counts.get(conversation.id, 0),
+                    ai_enabled=attention_session.ai_enabled,
                 ),
                 room=f"property:{prop_id}",
             )

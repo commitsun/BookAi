@@ -41,6 +41,61 @@ from app.services.whatsapp_client import ChannelError, WhatsAppClient
 log = logging.getLogger("template_service")
 
 
+import copy
+import re
+
+_PLACEHOLDER_RE = re.compile(r"\{\{\s*(\w+)\s*\}\}")
+
+
+def _render_text(template_text: str | None, param_values: dict[str, str]) -> str | None:
+    """Replace {{param_name}} placeholders in a template string with actual values."""
+    if not template_text:
+        return None
+    def _replacer(m: re.Match) -> str:
+        return param_values.get(m.group(1), m.group(0))
+    return _PLACEHOLDER_RE.sub(_replacer, template_text)
+
+
+def _render_template_content(
+    translation, param_values: dict[str, str],
+) -> str:
+    """Render the full template text (header + body + footer) with parameters filled in."""
+    parts: list[str] = []
+    header = _render_text(translation.header_text, param_values)
+    if header:
+        parts.append(header)
+    body = _render_text(translation.body_text, param_values)
+    if body:
+        parts.append(body)
+    footer = _render_text(translation.footer_text, param_values)
+    if footer:
+        parts.append(footer)
+    return "\n\n".join(parts)
+
+
+def _resolve_named_params(
+    stored_components: list[dict], param_values: dict[str, str],
+) -> list[dict]:
+    """Replace {{param_name}} placeholders in stored components with actual values.
+
+    stored_components has the shape built by _build_send_components, e.g.:
+      [{"type": "body", "parameters": [{"type": "text", "text": "{{buyer_name}}"}]},
+       {"type": "button", "sub_type": "url", "index": "0",
+        "parameters": [{"type": "text", "text": "https://x.com/{{folio_details_url}}"}]}]
+    """
+    result = copy.deepcopy(stored_components)
+    for comp in result:
+        for param in comp.get("parameters", []):
+            text = param.get("text", "")
+            for name, value in param_values.items():
+                text = re.sub(
+                    r"\{\{\s*" + re.escape(name) + r"\s*\}\}",
+                    value, text,
+                )
+            param["text"] = text
+    return result
+
+
 async def process_send_template(
     request: SendTemplateRequest,
     instance: Instance,
@@ -62,13 +117,29 @@ async def process_send_template(
             )
 
     # --- Resolve Property ---
-    prop = await instance_repo.find_property_by_roomdoo_code(
-        db, request.source.hotel.external_code, instance.id
-    )
+    hotel = request.source.hotel
+    prop = None
+    if hotel.odoo_id is not None:
+        prop = await instance_repo.find_property_by_odoo_property_id(
+            db, hotel.odoo_id, instance.id
+        )
+    elif hotel.external_code:
+        prop = await instance_repo.find_property_by_roomdoo_code(
+            db, hotel.external_code, instance.id
+        )
+    else:
+        raise HTTPException(
+            status_code=422,
+            detail="source.hotel must include 'odoo_id' or 'external_code'",
+        )
     if prop is None:
+        if hotel.odoo_id is not None:
+            identifier = f"odoo_id={hotel.odoo_id}"
+        else:
+            identifier = f"external_code={hotel.external_code}"
         raise HTTPException(
             status_code=404,
-            detail=f"Property not found: external_code={request.source.hotel.external_code}",
+            detail=f"Property not found: {identifier}",
         )
     if prop.channel_endpoint_id is None:
         raise HTTPException(
@@ -77,27 +148,41 @@ async def process_send_template(
         )
 
     # --- Resolve Template translation ---
+    lang = request.template.language
     translation = await template_repo.find_translation_for_property(
-        db, request.template.code, request.template.language, prop.id
+        db, request.template.code, lang, prop.id
     )
+    # Fallback: "en" → search for "en_*" (e.g. en_US)
+    if translation is None and "_" not in lang:
+        translation = await template_repo.find_translation_for_property_by_prefix(
+            db, request.template.code, lang, prop.id
+        )
     if translation is None:
         raise HTTPException(
             status_code=404,
             detail=(
                 f"Template not found: code={request.template.code} "
-                f"language={request.template.language} property={prop.id}"
+                f"language={lang} property={prop.id}"
             ),
         )
 
-    if translation.meta_status not in ("approved", "draft"):
-        raise HTTPException(
-            status_code=422,
-            detail=(
-                f"Template '{request.template.code}' ({request.template.language}) "
-                f"is not approved by Meta (status: {translation.meta_status}). "
-                "Wait for approval before sending."
-            ),
+    # Validate template approval via WABA entry (per-WABA status)
+    waba_entries = await template_repo.find_waba_entries(db, translation.id)
+    if waba_entries:
+        # Check if any WABA has the template approved
+        any_approved = any(
+            e.meta_status in ("approved", "draft") for e in waba_entries
         )
+        if not any_approved:
+            statuses = ", ".join(f"{e.waba_id}={e.meta_status}" for e in waba_entries)
+            raise HTTPException(
+                status_code=422,
+                detail=(
+                    f"Template '{request.template.code}' ({request.template.language}) "
+                    f"is not approved by Meta ({statuses}). "
+                    "Wait for approval before sending."
+                ),
+            )
 
     # --- Resolve ChannelEndpoint ---
     channel_endpoint = await instance_repo.find_channel_endpoint_by_id(
@@ -157,13 +242,37 @@ async def process_send_template(
         )
         await folio_repo.attach_to_session(db, attention_session.id, folio.id)
 
-    # --- Persist message (pending) ---
-    template_payload = {
+    # --- Resolve send components ---
+    # If Odoo sends named parameters (dict) instead of pre-built components,
+    # build the Meta-format components by substituting values into the
+    # stored component template from the translation.
+    send_components = request.template.components
+    if not send_components and request.template.parameters and translation.components:
+        send_components = _resolve_named_params(
+            translation.components, request.template.parameters,
+        )
+
+    # --- Render content + build payload ---
+    param_values = request.template.parameters or {}
+    rendered_content = _render_template_content(translation, param_values) or None
+
+    template_payload: dict = {
         "template_code": request.template.code,
         "template_name": translation.whatsapp_name,
         "language": translation.language,
-        "components": request.template.components,
+        "components": send_components,
     }
+    if translation.header_text:
+        template_payload["header_text"] = translation.header_text
+    if translation.body_text:
+        template_payload["body_text"] = translation.body_text
+    if translation.footer_text:
+        template_payload["footer_text"] = translation.footer_text
+    if translation.button_texts:
+        template_payload["button_texts"] = translation.button_texts
+    if param_values:
+        template_payload["parameters"] = param_values
+
     msg = await message_repo.create(
         db,
         conversation_id=conversation.id,
@@ -171,7 +280,7 @@ async def process_send_template(
         attention_session_id=attention_session.id,
         direction=MessageDirection.outbound,
         sender=MessageSender.system,
-        content=None,
+        content=rendered_content,
         template_code=request.template.code,
         template_language=translation.language,
         template_payload=template_payload,
@@ -181,14 +290,18 @@ async def process_send_template(
     )
 
     # --- Send via channel provider ---
+    # Use the exact language code from the translation — must match what was
+    # registered in Meta (e.g. "es", "en", "es_ES").
+    send_language = translation.language
+
     wa_message_id: str | None = None
     try:
         wa_message_id = await wa_client.send_template(
             to=phone_code,
             channel_endpoint=channel_endpoint,
             template_name=translation.whatsapp_name,
-            language=translation.language,
-            components=request.template.components,
+            language=send_language,
+            components=send_components,
         )
         await message_repo.update_delivery(
             db, msg, DeliveryStatus.sent, wa_message_id=wa_message_id
@@ -216,6 +329,7 @@ async def process_send_template(
                 conversation, contact,
                 last_message=msg,
                 unread_count=unread_counts.get(conversation.id, 0),
+                ai_enabled=attention_session.ai_enabled,
             ),
             room=f"property:{prop.id}",
         )
