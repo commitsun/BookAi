@@ -7,10 +7,11 @@ Three types:
 - external_guest: everyone else (default)
 
 Called once when a session is created. The result is cached in
-session.caller_type so subsequent messages don't re-check.
+session.caller_type and session.odoo_user_id.
 """
 
 import logging
+from dataclasses import dataclass
 
 from app.services.instance_sdk_registry import InstanceSDKRegistry
 from app.models.instance import Instance
@@ -18,21 +19,23 @@ from app.models.instance import Instance
 log = logging.getLogger("caller_identifier")
 
 
+@dataclass
+class CallerIdentity:
+    caller_type: str  # "roomdoo" | "internal" | "external_guest"
+    odoo_user_id: int | None = None
+
+
 async def identify_caller(
     phone_code: str,
     sdk_registry: InstanceSDKRegistry,
     instance: Instance,
-) -> str:
-    """Identify the caller type from their phone number.
-
-    Returns: "roomdoo" | "internal" | "external_guest"
-    """
+) -> CallerIdentity:
+    """Identify the caller type from their phone number."""
     # 1. Roomdoo staff (whitelist from instance config)
     whitelist = set(instance.roomdoo_staff_phones or [])
-    # Match with and without country code prefix
     if phone_code in whitelist or phone_code[-9:] in {p[-9:] for p in whitelist}:
         log.info("Caller %s identified as roomdoo (whitelist)", phone_code)
-        return "roomdoo"
+        return CallerIdentity(caller_type="roomdoo")
 
     # 2. Internal hotel staff (user exists in Odoo)
     client = sdk_registry.get_client(instance)
@@ -49,9 +52,12 @@ async def identify_caller(
                     "Caller %s identified as internal (Odoo user: %s)",
                     phone_code, users[0].get("name"),
                 )
-                return "internal"
+                return CallerIdentity(
+                    caller_type="internal",
+                    odoo_user_id=users[0]["id"],
+                )
         except Exception as exc:
             log.debug("Odoo user lookup failed for %s: %s", phone_code, exc)
 
     # 3. Default: external guest
-    return "external_guest"
+    return CallerIdentity(caller_type="external_guest")

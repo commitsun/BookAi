@@ -48,6 +48,9 @@ class AgentLoader:
         self._cache.pop(technical_name, None)
 
     def list_for_caller_type(self, caller_type: str) -> list[CachedAgent]:
+        # roomdoo is a superuser — can access all agents
+        if caller_type == "roomdoo":
+            return list(self._cache.values())
         return [
             c for c in self._cache.values()
             if c.config.caller_type in (caller_type, "any")
