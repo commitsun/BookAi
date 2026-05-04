@@ -4,6 +4,7 @@ from sqlalchemy.orm import selectinload
 
 from app.models.template import (
     TemplateTranslationProperty,
+    TemplateTranslationWaba,
     WhatsAppTemplate,
     WhatsAppTemplateTranslation,
 )
@@ -52,6 +53,8 @@ async def create_template(
             footer_text=t.get("footer_text"),
             button_texts=t.get("button_texts"),
             parameters=t.get("parameters"),
+            body_example=t.get("body_example"),
+            header_example=t.get("header_example"),
         )
         db.add(trans)
         await db.flush()
@@ -98,6 +101,10 @@ async def upsert_translations(
                 trans.button_texts = t["button_texts"]
             if "parameters" in t:
                 trans.parameters = t["parameters"]
+            if "body_example" in t:
+                trans.body_example = t["body_example"]
+            if "header_example" in t:
+                trans.header_example = t["header_example"]
             await db.flush()
         else:
             trans = WhatsAppTemplateTranslation(
@@ -111,6 +118,8 @@ async def upsert_translations(
                 footer_text=t.get("footer_text"),
                 button_texts=t.get("button_texts"),
                 parameters=t.get("parameters"),
+                body_example=t.get("body_example"),
+                header_example=t.get("header_example"),
             )
             db.add(trans)
             await db.flush()
@@ -128,6 +137,31 @@ async def upsert_translations(
                 ))
 
     await db.flush()
+
+
+async def find_translation_for_property_by_prefix(
+    db: AsyncSession,
+    code: str,
+    lang_prefix: str,
+    property_id: int,
+) -> WhatsAppTemplateTranslation | None:
+    """Fallback: find translation whose language starts with prefix (e.g. 'en' matches 'en_US')."""
+    result = await db.execute(
+        select(WhatsAppTemplateTranslation)
+        .join(WhatsAppTemplate, WhatsAppTemplate.id == WhatsAppTemplateTranslation.template_id)
+        .join(
+            TemplateTranslationProperty,
+            TemplateTranslationProperty.translation_id == WhatsAppTemplateTranslation.id,
+        )
+        .where(
+            WhatsAppTemplate.code == code,
+            WhatsAppTemplateTranslation.language.like(f"{lang_prefix}_%"),
+            WhatsAppTemplateTranslation.active.is_(True),
+            TemplateTranslationProperty.property_id == property_id,
+        )
+        .limit(1)
+    )
+    return result.scalar_one_or_none()
 
 
 async def find_translation_for_property(
@@ -158,3 +192,48 @@ async def find_translation_for_property(
         )
     )
     return result.scalar_one_or_none()
+
+
+async def upsert_waba_entry(
+    db: AsyncSession,
+    translation_id: int,
+    waba_id: str,
+    meta_template_id: str | None = None,
+    meta_status: str = "draft",
+) -> TemplateTranslationWaba:
+    """Create or update a WABA entry for a translation."""
+    result = await db.execute(
+        select(TemplateTranslationWaba).where(
+            TemplateTranslationWaba.translation_id == translation_id,
+            TemplateTranslationWaba.waba_id == waba_id,
+        )
+    )
+    entry = result.scalar_one_or_none()
+
+    if entry:
+        if meta_template_id:
+            entry.meta_template_id = meta_template_id
+        if meta_status != "draft":
+            entry.meta_status = meta_status
+    else:
+        entry = TemplateTranslationWaba(
+            translation_id=translation_id,
+            waba_id=waba_id,
+            meta_template_id=meta_template_id,
+            meta_status=meta_status,
+        )
+        db.add(entry)
+
+    await db.flush()
+    return entry
+
+
+async def find_waba_entries(
+    db: AsyncSession, translation_id: int,
+) -> list[TemplateTranslationWaba]:
+    result = await db.execute(
+        select(TemplateTranslationWaba).where(
+            TemplateTranslationWaba.translation_id == translation_id,
+        )
+    )
+    return list(result.scalars().all())

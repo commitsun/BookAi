@@ -1,6 +1,6 @@
 from datetime import datetime
 
-from sqlalchemy import Boolean, ForeignKey, String, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, DateTime, ForeignKey, String, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -64,12 +64,6 @@ class WhatsAppTemplateTranslation(Base):
     components: Mapped[dict] = mapped_column(JSONB, nullable=False, default=list)
     active: Mapped[bool] = mapped_column(Boolean, default=True, nullable=False)
 
-    # Meta Cloud API state
-    meta_template_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
-    meta_status: Mapped[str] = mapped_column(
-        String(20), nullable=False, default="draft",
-    )  # draft | pending | approved | rejected | disabled
-
     # Template text with named placeholders (e.g. "Hola {{ guest_name }}")
     header_text: Mapped[str | None] = mapped_column(Text, nullable=True)
     body_text: Mapped[str | None] = mapped_column(Text, nullable=True)
@@ -79,6 +73,10 @@ class WhatsAppTemplateTranslation(Base):
     # Ordered parameter names — defines the name→position mapping for Meta
     # e.g. ["guest_name", "hotel_name", "checkin"] → {{1}}, {{2}}, {{3}}
     parameters: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+
+    # Example values for Meta template registration (required when body has params)
+    body_example: Mapped[list | None] = mapped_column(JSONB, nullable=True)
+    header_example: Mapped[list | None] = mapped_column(JSONB, nullable=True)
 
     created_at: Mapped[datetime] = mapped_column(default=func.now(), nullable=False)
 
@@ -109,3 +107,31 @@ class TemplateTranslationProperty(Base):
     translation: Mapped["WhatsAppTemplateTranslation"] = relationship(
         back_populates="translation_properties"
     )
+
+
+class TemplateTranslationWaba(Base):
+    """
+    Tracks a template translation's registration in a specific WABA.
+
+    A single translation (e.g. 'booking_confirmation' in 'es') can be registered
+    in multiple WABAs (e.g. one per hotel chain). Each WABA has its own
+    meta_template_id and approval status.
+    """
+
+    __tablename__ = "template_translation_waba"
+    __table_args__ = (
+        UniqueConstraint("translation_id", "waba_id", name="uq_translation_waba"),
+    )
+
+    id: Mapped[int] = mapped_column(primary_key=True)
+    translation_id: Mapped[int] = mapped_column(
+        ForeignKey("whatsapp_template_translations.id", ondelete="CASCADE"), nullable=False,
+    )
+    waba_id: Mapped[str] = mapped_column(String(255), nullable=False)
+    meta_template_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    meta_status: Mapped[str] = mapped_column(String(20), nullable=False, default="draft")
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), default=func.now(), nullable=False,
+    )
+
+    translation: Mapped["WhatsAppTemplateTranslation"] = relationship()

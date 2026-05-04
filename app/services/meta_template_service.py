@@ -32,6 +32,8 @@ async def create_template_in_meta(
     body_text: str | None = None,
     footer_text: str | None = None,
     button_texts: list[dict] | None = None,
+    body_example: list[str] | None = None,
+    header_example: list[str] | None = None,
 ) -> tuple[str, str]:
     """Create a template in Meta. Returns (meta_template_id, status).
 
@@ -40,17 +42,24 @@ async def create_template_in_meta(
     components = []
 
     if header_text:
-        components.append({
+        header_comp: dict = {
             "type": "HEADER",
             "format": "TEXT",
             "text": header_text,
-        })
+        }
+        if header_example:
+            header_comp["example"] = {
+                "header_text": header_example,
+            }
+        components.append(header_comp)
 
     if body_text:
-        components.append({
-            "type": "BODY",
-            "text": body_text,
-        })
+        body_comp: dict = {"type": "BODY", "text": body_text}
+        if body_example:
+            body_comp["example"] = {
+                "body_text": [body_example],
+            }
+        components.append(body_comp)
 
     if footer_text:
         components.append({
@@ -63,11 +72,18 @@ async def create_template_in_meta(
         for btn in button_texts:
             btn_type = btn.get("type", "URL").upper()
             if btn_type == "URL":
-                buttons.append({
+                url = btn.get("url", "")
+                url_btn: dict = {
                     "type": "URL",
                     "text": btn.get("text", ""),
-                    "url": btn.get("url", ""),
-                })
+                    "url": url,
+                }
+                if btn.get("example"):
+                    url_btn["example"] = btn["example"]
+                elif "{{" in url:
+                    # Auto-generate example for dynamic URL buttons
+                    url_btn["example"] = [url.replace("{{1}}", "example_value")]
+                buttons.append(url_btn)
             elif btn_type == "QUICK_REPLY":
                 buttons.append({
                     "type": "QUICK_REPLY",
@@ -98,7 +114,7 @@ async def create_template_in_meta(
     log.info("Creating template '%s' (%s) in Meta WABA %s", name, language, waba_id)
 
     try:
-        r = await http.post(url, json=payload, headers=headers, timeout=15)
+        r = await http.post(url, json=payload, headers=headers, timeout=30)
     except httpx.TimeoutException as exc:
         raise MetaTemplateError(0, f"Timeout: {exc}") from exc
 
@@ -169,5 +185,40 @@ async def check_template_status(
         if language and tmpl.get("language") != language:
             continue
         return tmpl.get("status", "").lower()
+
+    return None
+
+
+async def check_template_exists(
+    http: httpx.AsyncClient,
+    waba_id: str,
+    access_token: str,
+    name: str,
+    language: str | None = None,
+) -> tuple[str, str] | None:
+    """Check if a template exists on Meta and return (meta_template_id, status), or None."""
+    url = f"{GRAPH_API_BASE}/{waba_id}/message_templates"
+    headers = {"Authorization": f"Bearer {access_token}"}
+    params = {"name": name}
+
+    try:
+        r = await http.get(url, headers=headers, params=params, timeout=10)
+    except Exception as exc:
+        log.warning("Failed to check template existence '%s': %s", name, exc)
+        return None
+
+    if r.status_code != 200:
+        return None
+
+    data = r.json()
+    templates = data.get("data", [])
+
+    for tmpl in templates:
+        if language and tmpl.get("language") != language:
+            continue
+        meta_id = tmpl.get("id", "")
+        status = tmpl.get("status", "").lower()
+        if meta_id:
+            return meta_id, status
 
     return None
