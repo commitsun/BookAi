@@ -1,17 +1,22 @@
 """
+POST /api/v1/instances/register            — register new instance (provisioning key)
 POST /api/v1/setup                         — full instance setup (Odoo calls after install)
 POST /api/v1/instances/{id}/sync-properties — bulk sync properties from Odoo via SDK
 POST /webhooks/property-updated             — receive property changes from Odoo
 """
 
 import logging
+import secrets
 from typing import Literal
 
-from fastapi import APIRouter, Depends
-from pydantic import BaseModel
+import json
+
+from fastapi import APIRouter, Depends, Header, HTTPException, Request
+from pydantic import BaseModel, model_validator
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.api.dependencies import get_db, get_instance, get_sdk_registry
+from app.core.config import settings
 from app.models.instance import Instance
 from app.repositories import property_repo
 from app.services.instance_sdk_registry import InstanceSDKRegistry
@@ -22,16 +27,35 @@ log = logging.getLogger("property_webhooks")
 # ── Schemas ──────────────────────────────────────────────────────────
 
 class PropertyData(BaseModel):
+    model_config = {"extra": "ignore"}
+
     id: int
     name: str
-    external_code: str
+    external_code: str = ""
     bookai_mode: str = "disabled"
     tz: str = "UTC"
     email: str | None = None
     phone: str | None = None
+    # WhatsApp channel
+    bookai_wa_phone_number_id: str | None = None
+    bookai_wa_access_token: str | None = None
+    bookai_wa_account_id: str | None = None
+    bookai_wa_verify_token: str | None = None
+    bookai_wa_display_number: str | None = None
+
+    @model_validator(mode="before")
+    @classmethod
+    def _false_to_none(cls, data):
+        """Odoo sends False for empty fields instead of null."""
+        if isinstance(data, dict):
+            for k, v in data.items():
+                if v is False:
+                    data[k] = None
+        return data
 
 
 class PropertyUpdatedPayload(BaseModel):
+    model_config = {"extra": "ignore"}
     type: Literal["property_updated"]
     property_id: int
     property_data: PropertyData
@@ -64,10 +88,17 @@ webhook_router = APIRouter(prefix="/webhooks", tags=["property-webhooks"])
     ),
 )
 async def property_updated(
-    payload: PropertyUpdatedPayload,
+    request: Request,
     instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> dict:
+    raw = await request.json()
+    log.info("property-updated payload: %s", json.dumps(raw, default=str)[:1000])
+    try:
+        payload = PropertyUpdatedPayload(**raw)
+    except Exception as exc:
+        log.error("property-updated validation failed: %s", exc)
+        return {"status": "error", "detail": str(exc)}
     data = payload.property_data
     prop, created = await property_repo.upsert_from_odoo(
         db,
@@ -79,6 +110,11 @@ async def property_updated(
         tz=data.tz,
         email=data.email,
         phone=data.phone,
+        wa_phone_number_id=data.bookai_wa_phone_number_id,
+        wa_access_token=data.bookai_wa_access_token,
+        wa_account_id=data.bookai_wa_account_id,
+        wa_verify_token=data.bookai_wa_verify_token,
+        wa_display_number=data.bookai_wa_display_number,
     )
     await db.commit()
 
@@ -171,73 +207,66 @@ class SetupPayload(BaseModel):
     odoo_api_key: str
 
 
-@api_router.post(
-    "/setup",
-    summary="Full instance setup — called by Odoo after module install",
-    description=(
-        "Odoo calls this endpoint after the pms_bookai module is installed "
-        "and configured. Receives Odoo connection credentials, stores them, "
-        "verifies the SDK connection, syncs all properties, and pre-loads "
-        "AI agents into cache."
-    ),
-)
-async def instance_setup(
-    body: SetupPayload,
-    instance: Instance = Depends(get_instance),
-    db: AsyncSession = Depends(get_db),
-    sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
-) -> dict:
+async def _run_setup_steps(
+    instance: Instance,
+    db: AsyncSession,
+    sdk_registry: InstanceSDKRegistry,
+) -> tuple[list[dict], list["PropertyOut"]]:
+    """Shared setup logic: verify SDK, sync properties, load agents.
+
+    Returns (steps, synced_properties).
+    """
     steps: list[dict] = []
-
-    # 0. Store Odoo credentials on the instance
-    instance.instance_url = body.odoo_url
-    instance.roomdoo_db = body.odoo_db
-    instance.roomdoo_username = body.odoo_username
-    instance.roomdoo_password = body.odoo_api_key
-    await db.flush()
-
-    # Evict any cached client with old credentials
-    sdk_registry.evict(instance.id)
+    synced_properties: list[PropertyOut] = []
 
     # 1. Verify SDK connection
     client = sdk_registry.get_client(instance)
     if client is None:
-        return {
-            "status": "error",
-            "detail": "Failed to create SDK client with provided credentials.",
-            "steps": [],
-        }
+        steps.append({"step": "sdk_connection", "status": "error", "detail": "Failed to create SDK client"})
+        return steps, synced_properties
 
     try:
         await client._transport.authenticate()
         steps.append({"step": "sdk_connection", "status": "ok"})
     except Exception as exc:
-        return {
-            "status": "error",
-            "detail": f"SDK connection failed: {exc}",
-            "steps": [{"step": "sdk_connection", "status": "error", "detail": str(exc)}],
-        }
+        steps.append({"step": "sdk_connection", "status": "error", "detail": str(exc)})
+        return steps, synced_properties
 
-    # Credentials verified — persist them
     await db.commit()
 
     # 2. Sync properties
     try:
         odoo_properties = await client.properties.list()
+        log.info("SDK returned %d properties", len(odoo_properties))
         created_count = 0
-        synced_properties: list[PropertyOut] = []
         for odoo_prop in odoo_properties:
-            prop, created = await property_repo.upsert_from_odoo(
-                db,
-                instance_id=instance.id,
-                odoo_property_id=odoo_prop.id,
-                name=odoo_prop.name,
-                external_code=odoo_prop.external_code or odoo_prop.pms_property_code or "",
-                bookai_mode=odoo_prop.bookai_mode,
-                tz=odoo_prop.tz,
-                email=odoo_prop.email,
-                phone=odoo_prop.phone,
+            log.info(
+                "Syncing property: name=%s odoo_id=%s code=%s mode=%s",
+                odoo_prop.name, odoo_prop.id,
+                odoo_prop.external_code or odoo_prop.pms_property_code or "",
+                odoo_prop.bookai_mode,
             )
+            try:
+                prop, created = await property_repo.upsert_from_odoo(
+                    db,
+                    instance_id=instance.id,
+                    odoo_property_id=odoo_prop.id,
+                    name=odoo_prop.name,
+                    external_code=odoo_prop.external_code or odoo_prop.pms_property_code or "",
+                    bookai_mode=odoo_prop.bookai_mode,
+                    tz=odoo_prop.tz,
+                    email=odoo_prop.email,
+                    phone=odoo_prop.phone,
+                    wa_phone_number_id=getattr(odoo_prop, "bookai_wa_phone_number_id", None),
+                    wa_access_token=getattr(odoo_prop, "bookai_wa_access_token", None),
+                    wa_account_id=getattr(odoo_prop, "bookai_wa_account_id", None),
+                    wa_verify_token=getattr(odoo_prop, "bookai_wa_verify_token", None),
+                    wa_display_number=getattr(odoo_prop, "bookai_wa_display_number", None),
+                )
+                log.info("  → property id=%d created=%s", prop.id, created)
+            except Exception as prop_exc:
+                log.error("Failed to sync property %s (odoo_id=%d): %s", odoo_prop.name, odoo_prop.id, prop_exc)
+                continue
             if created:
                 created_count += 1
             synced_properties.append(PropertyOut(
@@ -262,8 +291,9 @@ async def instance_setup(
 
     # 3. Pre-load agents into cache
     try:
-        loader = await sdk_registry.get_or_load_agents(instance)
+        loader = await sdk_registry.get_or_load_agents(instance, db)
         agent_count = loader.count if loader else 0
+        await db.commit()
         steps.append({
             "step": "load_agents",
             "status": "ok",
@@ -271,6 +301,102 @@ async def instance_setup(
         })
     except Exception as exc:
         steps.append({"step": "load_agents", "status": "error", "detail": str(exc)})
+
+    return steps, synced_properties
+
+
+# ── Register: create new instance ──────────────────────────────────────
+
+
+@api_router.post(
+    "/register",
+    summary="Register a new Odoo instance — requires provisioning key",
+    description=(
+        "Creates a new BookAI instance for an Odoo installation. "
+        "Requires the master provisioning key (not a bearer token). "
+        "Returns a bearer_token that Odoo must persist for all future calls."
+    ),
+)
+async def register_instance(
+    body: SetupPayload,
+    db: AsyncSession = Depends(get_db),
+    sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
+    x_provisioning_key: str | None = Header(default=None),
+) -> dict:
+    # Verify provisioning key
+    if not settings.provisioning_key:
+        raise HTTPException(status_code=503, detail="Provisioning not configured")
+    if x_provisioning_key != settings.provisioning_key:
+        raise HTTPException(status_code=401, detail="Invalid provisioning key")
+
+    # Generate bearer token
+    bearer_token = secrets.token_urlsafe(32)
+
+    # Create instance
+    instance = Instance(
+        instance_url=body.odoo_url,
+        bearer_token=bearer_token,
+        bookai_enabled=True,
+        active=True,
+        roomdoo_db=body.odoo_db,
+        roomdoo_username=body.odoo_username,
+        roomdoo_password=body.odoo_api_key,
+    )
+    db.add(instance)
+    await db.commit()
+
+    log.info("Registered new instance %d for %s", instance.id, body.odoo_url)
+
+    # Run setup steps
+    sdk_registry.evict(instance.id)
+    steps, synced_properties = await _run_setup_steps(instance, db, sdk_registry)
+
+    all_ok = all(s["status"] == "ok" for s in steps)
+    log.info(
+        "Register %s for instance %d (%s): %s",
+        "completed" if all_ok else "partial",
+        instance.id, body.odoo_url,
+        ", ".join(f'{s["step"]}={s["status"]}' for s in steps),
+    )
+
+    return {
+        "status": "ok" if all_ok else "partial",
+        "instance_id": instance.id,
+        "bearer_token": bearer_token,
+        "steps": steps,
+        "properties": [p.model_dump() for p in synced_properties] if all_ok else [],
+    }
+
+
+# ── Setup: update existing instance ────────────────────────────────────
+
+
+@api_router.post(
+    "/setup",
+    summary="Full instance setup — called by Odoo after module install",
+    description=(
+        "Odoo calls this endpoint after the pms_bookai module is installed "
+        "and configured. Receives Odoo connection credentials, stores them, "
+        "verifies the SDK connection, syncs all properties, and pre-loads "
+        "AI agents into cache."
+    ),
+)
+async def instance_setup(
+    body: SetupPayload,
+    instance: Instance = Depends(get_instance),
+    db: AsyncSession = Depends(get_db),
+    sdk_registry: InstanceSDKRegistry = Depends(get_sdk_registry),
+) -> dict:
+    # Update Odoo credentials
+    instance.instance_url = body.odoo_url
+    instance.roomdoo_db = body.odoo_db
+    instance.roomdoo_username = body.odoo_username
+    instance.roomdoo_password = body.odoo_api_key
+    await db.flush()
+    sdk_registry.evict(instance.id)
+
+    # Run shared setup steps
+    steps, synced_properties = await _run_setup_steps(instance, db, sdk_registry)
 
     all_ok = all(s["status"] == "ok" for s in steps)
     log.info(

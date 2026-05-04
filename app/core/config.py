@@ -19,5 +19,8 @@ class Settings(BaseSettings):
     # Ollama URL for sensitive_data agents (local LLM)
     ollama_url: str | None = None
 
+    # Master key for registering new instances (POST /api/v1/instances/register)
+    provisioning_key: str | None = None
+
 
 settings = Settings()

@@ -80,12 +80,25 @@ class WebhookStatus(BaseModel):
     errors: list[dict] | None = None
 
 
+class WebhookTemplateStatusUpdate(BaseModel):
+    event: str | None = None  # APPROVED, REJECTED, PENDING_DELETION, etc.
+    message_template_id: int | None = None
+    message_template_name: str | None = None
+    message_template_language: str | None = None
+    reason: str | None = None
+
+
 class WebhookValue(BaseModel):
     messaging_product: str | None = None
     metadata: WebhookMetadata | None = None
     contacts: list[WebhookContact] | None = None
     messages: list[WebhookMessage] | None = None
     statuses: list[WebhookStatus] | None = None
+    # Template status updates
+    event: str | None = None
+    message_template_id: int | None = None
+    message_template_name: str | None = None
+    message_template_language: str | None = None
 
 
 class WebhookChange(BaseModel):

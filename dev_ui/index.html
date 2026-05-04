@@ -474,6 +474,11 @@
   <button id="btn-connect">Conectar</button>
   <div id="status-dot"></div>
   <span id="status-text">Desconectado</span>
+  <span style="margin-left:20px;color:#aaa;font-size:12px">Vista</span>
+  <select id="sel-view" style="padding:5px 8px;border:none;border-radius:4px;font-size:13px;background:#2d2d44;color:#fff">
+    <option value="inbox">Inbox Huéspedes</option>
+    <option value="internal">Chat Interno</option>
+  </select>
   <span style="margin-left:12px;color:#aaa;font-size:12px">Idioma</span>
   <select id="sel-lang" style="padding:5px 8px;border:none;border-radius:4px;font-size:13px;background:#2d2d44;color:#fff">
     <option value="">Original</option>
@@ -704,7 +709,8 @@ function buildConvItem(conv) {
   el.dataset.id = conv.id
 
   const name = conv.contact?.display_name || conv.contact?.phone_code || "—"
-  const preview = conv.last_message?.content || ""
+  const lm = conv.last_message
+  const preview = lm?.content || (lm?.template_code ? `📋 ${lm.template_code}` : "")
   const time = conv.last_message?.created_at ? relativeTime(conv.last_message.created_at) : ""
   const unread = conv.unread_count || 0
   const badge = unread > 0
@@ -961,9 +967,14 @@ function appendMessage(msg, requestedLang) {
 
   // Translation state
   const needsTranslation = requestedLang && !msg.is_translated && msg.content_language !== requestedLang
+  let contentText = msg.content || ""
+  if (!contentText && msg.template_code) {
+    const tpl = msg.template_payload || {}
+    contentText = `📋 Plantilla: ${msg.template_code}` + (tpl.language ? ` (${tpl.language})` : "")
+  }
   const contentHtml = needsTranslation
     ? `<span style="opacity:0.5;font-style:italic">Idioma no disponible</span>`
-    : esc(msg.content || "")
+    : esc(contentText)
   const translatedBadge = msg.is_translated
     ? `<span style="opacity:0.6;font-size:10px"> · 🌐 ${esc(msg.content_language)}</span>`
     : ""
@@ -1231,6 +1242,179 @@ function relativeTime(iso) {
   if (h < 24) return `${h}h`
   return `${Math.floor(h / 24)}d`
 }
+
+// ── Internal Chat Mode ──────────────────────────────────────────────
+
+let internalConvId = null
+let internalConvs = []
+
+const viewSel = document.getElementById("sel-view")
+viewSel.addEventListener("change", () => {
+  if (viewSel.value === "internal") {
+    loadInternalConversations()
+  } else {
+    loadConversations()
+  }
+})
+
+async function loadInternalConversations() {
+  const propId = document.getElementById("inp-property").value
+  const token = document.getElementById("inp-token").value
+  const r = await fetch(`/api/v1/internal/conversations?property_id=${propId}&conversation_type=roomdoo&odoo_user_id=7&limit=50`, {
+    headers: { "Authorization": `Bearer ${token}` }
+  })
+  if (!r.ok) return
+  const data = await r.json()
+  internalConvs = data.conversations || []
+
+  const list = document.getElementById("conv-list")
+  list.innerHTML = ""
+
+  // New chat button
+  const newBtn = document.createElement("div")
+  newBtn.className = "conv-item"
+  newBtn.style.cssText = "text-align:center;color:#e94560;font-weight:600;cursor:pointer;border-bottom:2px solid #e94560"
+  newBtn.textContent = "+ Nuevo chat interno"
+  newBtn.onclick = createInternalConversation
+  list.appendChild(newBtn)
+
+  for (const conv of internalConvs) {
+    const el = document.createElement("div")
+    el.className = "conv-item" + (internalConvId === conv.id ? " active" : "")
+    el.dataset.id = conv.id
+    const title = conv.title || "Sin título"
+    const preview = conv.last_message?.content || ""
+    const time = conv.last_message?.created_at ? relativeTime(conv.last_message.created_at) : ""
+    el.innerHTML = `
+      <div style="display:flex;justify-content:space-between;align-items:center">
+        <strong style="font-size:13px">${esc(title)}</strong>
+        <span style="font-size:11px;color:#999">${esc(time)}</span>
+      </div>
+      <div style="font-size:12px;color:#666;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:2px">${esc(preview.substring(0, 80))}</div>
+    `
+    el.onclick = () => openInternalConversation(conv.id)
+    list.appendChild(el)
+  }
+}
+
+async function createInternalConversation() {
+  const propId = document.getElementById("inp-property").value
+  const token = document.getElementById("inp-token").value
+  const r = await fetch("/api/v1/internal/conversations", {
+    method: "POST",
+    headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+    body: JSON.stringify({ property_id: parseInt(propId), odoo_user_id: 7, odoo_user_login: "admin", conversation_type: "roomdoo" })
+  })
+  if (!r.ok) { alert("Error creating conversation"); return }
+  const data = await r.json()
+  internalConvId = data.conversation_id
+  loadInternalConversations()
+  openInternalConversation(data.conversation_id)
+}
+
+async function openInternalConversation(convId) {
+  internalConvId = convId
+  const token = document.getElementById("inp-token").value
+
+  // Highlight active
+  document.querySelectorAll("#conv-list .conv-item").forEach(el => {
+    el.classList.toggle("active", parseInt(el.dataset.id) === convId)
+  })
+
+  // Load messages
+  const r = await fetch(`/api/v1/internal/conversations/${convId}/messages?limit=100`, {
+    headers: { "Authorization": `Bearer ${token}` }
+  })
+  if (!r.ok) return
+  const data = await r.json()
+
+  const panel = document.getElementById("panel-right")
+  const conv = internalConvs.find(c => c.id === convId)
+  const title = conv?.title || "Chat interno"
+
+  panel.innerHTML = `
+    <div id="chat-header" style="padding:10px 16px;border-bottom:1px solid #e0e0e0">
+      <strong>${esc(title)}</strong>
+      <span style="color:#999;font-size:12px;margin-left:8px">ID: ${convId}</span>
+    </div>
+    <div id="msgs" style="flex:1;overflow-y:auto;padding:12px"></div>
+    <div id="send-bar" style="display:flex;gap:8px;padding:10px 12px;border-top:1px solid #e0e0e0">
+      <input id="internal-input" type="text" placeholder="Escribe un mensaje..." style="flex:1;padding:8px 12px;border:1px solid #ddd;border-radius:8px;font-size:14px">
+      <button id="internal-send" style="padding:8px 16px;background:#e94560;color:#fff;border:none;border-radius:8px;cursor:pointer">Enviar</button>
+    </div>
+  `
+
+  const msgs = document.getElementById("msgs")
+  for (const m of data.messages) {
+    const isAi = m.sender === "ai"
+    const row = document.createElement("div")
+    row.className = `msg-row ${isAi ? "inbound" : "outbound"}`
+    const time = m.created_at ? new Date(m.created_at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }) : ""
+    const label = isAi ? "IA" : "Tú"
+    row.innerHTML = `
+      <div class="bubble">
+        ${esc(m.content || "")}
+        <div class="bubble-meta">${esc(label)} · ${esc(time)}</div>
+      </div>
+    `
+    msgs.appendChild(row)
+  }
+  msgs.scrollTop = msgs.scrollHeight
+
+  // Send handler
+  const inp = document.getElementById("internal-input")
+  const btn = document.getElementById("internal-send")
+
+  async function sendInternal() {
+    const text = inp.value.trim()
+    if (!text) return
+    inp.value = ""
+
+    // Show user message immediately
+    const row = document.createElement("div")
+    row.className = "msg-row outbound"
+    row.innerHTML = `<div class="bubble">${esc(text)}<div class="bubble-meta">Tú · ahora</div></div>`
+    msgs.appendChild(row)
+    msgs.scrollTop = msgs.scrollHeight
+
+    const r = await fetch(`/api/v1/internal/conversations/${convId}/messages`, {
+      method: "POST",
+      headers: { "Authorization": `Bearer ${token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ content: text, odoo_user_id: 7 })
+    })
+    if (!r.ok) { alert("Error sending"); return }
+
+    // Poll for AI response
+    let attempts = 0
+    const poll = setInterval(async () => {
+      attempts++
+      if (attempts > 30) { clearInterval(poll); return }
+      const r2 = await fetch(`/api/v1/internal/conversations/${convId}/messages?limit=1`, {
+        headers: { "Authorization": `Bearer ${token}` }
+      })
+      if (!r2.ok) return
+      const d2 = await r2.json()
+      const last = d2.messages?.[d2.messages.length - 1]
+      if (last && last.sender === "ai" && !document.querySelector(`[data-msgid="${last.id}"]`)) {
+        clearInterval(poll)
+        const aiRow = document.createElement("div")
+        aiRow.className = "msg-row inbound"
+        aiRow.dataset.msgid = last.id
+        const t = last.created_at ? new Date(last.created_at).toLocaleTimeString("es", { hour: "2-digit", minute: "2-digit" }) : ""
+        aiRow.innerHTML = `<div class="bubble">${esc(last.content || "")}<div class="bubble-meta">IA · ${esc(t)}</div></div>`
+        msgs.appendChild(aiRow)
+        msgs.scrollTop = msgs.scrollHeight
+        // Refresh list to update title/last message
+        loadInternalConversations()
+      }
+    }, 2000)
+  }
+
+  btn.onclick = sendInternal
+  inp.onkeydown = (e) => { if (e.key === "Enter") sendInternal() }
+  inp.focus()
+}
+
 </script>
 </body>
 </html>

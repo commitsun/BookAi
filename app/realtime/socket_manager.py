@@ -69,7 +69,7 @@ def create_socket_server(cors_origins: list[str]) -> socketio.AsyncServer:
     async def connect(sid: str, environ: dict, auth: dict | None) -> bool:
         auth = auth or {}
         token = auth.get("token", "")
-        property_id = auth.get("property_id")
+        property_id = auth.get("property_id")  # Odoo property ID
 
         if not token:
             log.warning("Socket.IO connect rejected: no token (sid=%s)", sid)
@@ -85,29 +85,35 @@ def create_socket_server(cors_origins: list[str]) -> socketio.AsyncServer:
                 return False
 
             # property_id=0 is the virtual "unrouted" inbox — no property check needed
-            if property_id != 0:
+            if property_id == 0:
+                internal_property_id = 0
+            else:
                 result = await db.execute(
                     select(Property.id).where(
-                        Property.id == property_id,
+                        Property.odoo_property_id == property_id,
                         Property.instance_id == instance.id,
                     )
                 )
-                if result.scalar_one_or_none() is None:
+                internal_property_id = result.scalar_one_or_none()
+                if internal_property_id is None:
                     log.warning(
-                        "Socket.IO connect rejected: property %s not in instance %s (sid=%s)",
-                        property_id,
-                        instance.id,
-                        sid,
+                        "Socket.IO connect rejected: "
+                        "odoo_property_id %s not in "
+                        "instance %s (sid=%s)",
+                        property_id, instance.id, sid,
                     )
                     return False
 
-        await sio.save_session(sid, {"instance_id": instance.id, "property_id": property_id})
-        await sio.enter_room(sid, f"property:{property_id}")
+        await sio.save_session(sid, {
+            "instance_id": instance.id,
+            "property_id": internal_property_id,
+        })
+        await sio.enter_room(sid, f"property:{internal_property_id}")
         log.info(
-            "Socket.IO connected sid=%s instance=%s property=%s",
-            sid,
-            instance.id,
-            property_id,
+            "Socket.IO connected sid=%s instance=%s "
+            "odoo_property=%s internal=%s",
+            sid, instance.id,
+            property_id, internal_property_id,
         )
         return True
 

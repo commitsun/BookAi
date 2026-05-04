@@ -1,4 +1,6 @@
+import asyncio
 import logging
+from pathlib import Path
 
 logging.basicConfig(level=logging.INFO, format="%(name)s %(levelname)s %(message)s")
 log = logging.getLogger("bookai")
@@ -8,6 +10,7 @@ from contextlib import asynccontextmanager
 import httpx
 import socketio
 from fastapi import FastAPI
+from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from sqlalchemy import text
 
@@ -19,6 +22,7 @@ from app.api.v1 import (
     email_webhooks,
     escalations,
     folios,
+    internal,
     mcp_endpoints,
     property_webhooks,
     template_crud,
@@ -92,6 +96,27 @@ _TAGS = [
 sio = create_socket_server(cors_origins=settings.socket_cors_origins)
 
 
+async def _escalation_check_loop(app: FastAPI) -> None:
+    """Periodic check for escalation timeouts — sends notifications."""
+    from app.core.database import SessionLocal
+    from app.services.escalation_notifier import check_and_notify
+
+    await asyncio.sleep(10)  # Wait for app to fully start
+    while True:
+        try:
+            await asyncio.sleep(60)
+            async with SessionLocal() as db:
+                count = await check_and_notify(
+                    db, app.state.wa_client, app.state.sdk_registry,
+                )
+                if count:
+                    log.info("Escalation notifier: sent %d notifications", count)
+        except asyncio.CancelledError:
+            break
+        except Exception as exc:
+            log.warning("Escalation check failed: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(app: FastAPI):
     async with engine.connect() as conn:
@@ -125,8 +150,13 @@ async def lifespan(app: FastAPI):
     except Exception as exc:
         log.warning("MCP auto-reconnect failed: %s", exc)
 
+    # Start escalation timeout check loop
+    escalation_task = asyncio.create_task(_escalation_check_loop(app))
+
     yield
 
+    # Shutdown
+    escalation_task.cancel()
     await app.state.mcp_manager.close_all()
     await app.state.sdk_registry.close_all()
     await http_client.aclose()
@@ -142,6 +172,15 @@ app = FastAPI(
     lifespan=lifespan,
 )
 
+if settings.socket_cors_origins:
+    app.add_middleware(
+        CORSMiddleware,
+        allow_origins=settings.socket_cors_origins,
+        allow_credentials=True,
+        allow_methods=["*"],
+        allow_headers=["*"],
+    )
+
 app.include_router(templates.router, prefix="/api/v1")
 app.include_router(template_crud.router, prefix="/api/v1")
 app.include_router(chatter.router, prefix="/api/v1")
@@ -150,6 +189,7 @@ app.include_router(folios.router, prefix="/api/v1")
 app.include_router(email.router, prefix="/api/v1")
 app.include_router(property_webhooks.api_router, prefix="/api/v1")
 app.include_router(escalations.router, prefix="/api/v1")
+app.include_router(internal.router, prefix="/api/v1")
 app.include_router(webhooks.router)
 app.include_router(email_webhooks.router)
 app.include_router(property_webhooks.webhook_router)
@@ -157,7 +197,11 @@ app.include_router(ai_webhooks.router)
 app.include_router(ai_webhooks.sdk_router, prefix="/api/v1")
 app.include_router(mcp_endpoints.api_router, prefix="/api/v1")
 app.include_router(mcp_endpoints.webhook_router)
-app.mount("/media", StaticFiles(directory="/app/media"), name="media")
+_media_dir = Path("/app/media")
+if not _media_dir.exists():
+    _media_dir = Path("media")
+    _media_dir.mkdir(exist_ok=True)
+app.mount("/media", StaticFiles(directory=str(_media_dir)), name="media")
 app.mount("/dev-ui", StaticFiles(directory="dev_ui", html=True), name="dev-ui")
 
 

@@ -29,6 +29,18 @@ async def find_property_by_roomdoo_code(
     return result.scalar_one_or_none()
 
 
+async def find_property_by_odoo_property_id(
+    db: AsyncSession, odoo_property_id: int, instance_id: int
+) -> Property | None:
+    result = await db.execute(
+        select(Property).where(
+            Property.odoo_property_id == odoo_property_id,
+            Property.instance_id == instance_id,
+        )
+    )
+    return result.scalar_one_or_none()
+
+
 async def find_channel_endpoint_by_external_code(
     db: AsyncSession, external_code: str
 ) -> ChannelEndpoint | None:

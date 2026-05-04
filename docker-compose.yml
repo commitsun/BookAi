@@ -29,7 +29,9 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-    command: uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload
+    extra_hosts:
+      - "devel.odoo:172.24.0.14"
+    command: bash -c "pip install --quiet /roomdoo-sdk mcp litellm && uvicorn main:socket_app --host 0.0.0.0 --port 8000 --reload"
     restart: unless-stopped
 
 volumes:

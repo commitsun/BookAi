@@ -50,18 +50,37 @@ class InstanceSDKRegistry:
     def get_loader(self, instance_id: int) -> AgentLoader | None:
         return self._loaders.get(instance_id)
 
-    async def get_or_load_agents(self, instance: Instance) -> AgentLoader | None:
-        """Return the loader for this instance, creating and populating it if needed."""
-        if instance.id in self._loaders:
-            return self._loaders[instance.id]
+    async def get_or_load_agents(
+        self, instance: Instance, db=None,
+    ) -> AgentLoader | None:
+        """Return the loader for this instance, creating and populating it if needed.
 
-        client = self.get_client(instance)
-        if client is None:
-            return None
+        If ``db`` is provided, agent permissions are synced to the local
+        agents table on first load (security source of truth).
+        """
+        existing = instance.id in self._loaders
 
-        loader = AgentLoader(client)
-        await loader.load_all()
-        self._loaders[instance.id] = loader
+        if not existing:
+            client = self.get_client(instance)
+            if client is None:
+                return None
+            loader = AgentLoader(client)
+            await loader.load_all()
+            self._loaders[instance.id] = loader
+        else:
+            loader = self._loaders[instance.id]
+
+        # Sync permissions to DB (on first load, or if table is empty)
+        if db is not None and loader._cache:
+            try:
+                from app.repositories import agent_repo
+                count = await agent_repo.count_for_instance(db, instance.id)
+                if not existing or count == 0:
+                    all_configs = [c.config for c in loader._cache.values()]
+                    await agent_repo.sync_all_from_sdk(db, instance.id, all_configs)
+            except Exception as exc:
+                log.warning("Agent DB sync failed for instance %d: %s", instance.id, exc)
+
         return loader
 
     def evict(self, instance_id: int) -> None:

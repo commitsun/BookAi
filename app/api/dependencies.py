@@ -8,7 +8,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.core.database import get_db
-from app.models.instance import Instance
+from app.models.instance import Instance, Property
 from app.repositories import instance_repo
 from app.services.email_channel_client import EmailChannelClient
 from app.services.instance_sdk_registry import InstanceSDKRegistry
@@ -42,6 +42,32 @@ async def get_instance(
             detail="BookAI is disabled for this instance",
         )
     return instance
+
+
+async def resolve_property(
+    odoo_property_id: int,
+    instance: Instance,
+    db: AsyncSession,
+) -> Property | None:
+    """Resolve an external (Odoo) property ID to the internal Property.
+
+    The external API always receives Odoo property IDs from clients.
+    This function translates them to the internal Property object.
+
+    Returns None for odoo_property_id=0 (unrouted inbox).
+    Raises 404 if the odoo_property_id is not found in the instance.
+    """
+    if odoo_property_id == 0:
+        return None
+    prop = await instance_repo.find_property_by_odoo_property_id(
+        db, odoo_property_id, instance.id,
+    )
+    if prop is None:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Property with property_id={odoo_property_id} not found for this instance",
+        )
+    return prop
 
 
 def get_wa_client(request: Request) -> WhatsAppClient:
