@@ -1,4 +1,3 @@
-import re
 from datetime import date, datetime, timezone
 
 from sqlalchemy import select
@@ -6,28 +5,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.models.folio import Folio, SessionFolio
 
-# Characters that are unsafe in URL path segments.
-# These are replaced with '_' so that folio codes can appear in URLs without
-# ambiguity. Callers should normalize before building URLs; BookAI also
-# normalizes on ingestion and lookup for robustness.
-_UNSAFE_RE = re.compile(r"[/?#%&= ]")
-
-
-def normalize_code(code: str) -> str:
-    """Return a URL-safe version of an Odoo external folio code.
-
-    Replaces '/', '?', '#', '%', '&', '=', and space with '_'.
-    Example: '206/26/003' → '206_26_003'
-    """
-    return _UNSAFE_RE.sub("_", code)
-
 
 async def find_by_code(
     db: AsyncSession, odoo_external_code: str
 ) -> Folio | None:
     result = await db.execute(
         select(Folio).where(
-            Folio.odoo_external_code == normalize_code(odoo_external_code)
+            Folio.odoo_external_code == odoo_external_code
         )
     )
     return result.scalar_one_or_none()
@@ -55,15 +39,14 @@ async def get_or_create(
     checkin_date: date | None = None,
     checkout_date: date | None = None,
 ) -> tuple[Folio, bool]:
-    safe_code = normalize_code(odoo_external_code)
     result = await db.execute(
-        select(Folio).where(Folio.odoo_external_code == safe_code)
+        select(Folio).where(Folio.odoo_external_code == odoo_external_code)
     )
     folio = result.scalar_one_or_none()
     if folio:
         return folio, False
     folio = Folio(
-        odoo_external_code=safe_code,
+        odoo_external_code=odoo_external_code,
         odoo_folio_id=odoo_folio_id,
         checkin_date=checkin_date,
         checkout_date=checkout_date,

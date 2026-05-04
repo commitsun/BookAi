@@ -12,7 +12,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from app.api.dependencies import get_db, get_instance
 from app.models.instance import Instance
 from app.repositories import folio_repo
-from app.repositories.folio_repo import normalize_code
 from app.schemas.folio import (
     FolioEventRequest,
     FolioEventResponse,
@@ -27,13 +26,9 @@ router = APIRouter(prefix="/folios", tags=["folios"])
 _SUMMARY = "Update cached folio fields"
 
 _CODE_FORMAT_NOTE = """
-**External code (`odoo_external_code`):** BookAI normalizes the code on
-ingestion and lookup, replacing URL-unsafe characters
-(`/`, `?`, `#`, `%`, `&`, `=`, space) with `_`.
-The preferred form in URLs is the normalized code (e.g. `206_26_003`),
-but the API also accepts the raw Odoo format (e.g. `206/26/003`) and
-normalizes it automatically. The `folio_code` field in responses always
-returns the normalized form.
+**External code (`odoo_external_code`):** stored as-is from the PMS
+(e.g. `206/26/003`). The endpoint uses a path parameter, so slashes
+in the code are supported natively.
 """
 
 _DESCRIPTION = """
@@ -72,7 +67,6 @@ async def update_folio_cache(
     _instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> FolioUpdateResponse:
-    odoo_external_code = normalize_code(odoo_external_code)
     folio = await folio_repo.find_by_code(db, odoo_external_code)
     if folio is None:
         raise HTTPException(
@@ -122,7 +116,6 @@ async def folio_event(
     instance: Instance = Depends(get_instance),
     db: AsyncSession = Depends(get_db),
 ) -> FolioEventResponse:
-    odoo_external_code = normalize_code(odoo_external_code)
     notes_created = await folio_event_service.process_folio_event(
         db, instance, odoo_external_code, body
     )

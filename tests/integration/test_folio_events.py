@@ -337,11 +337,9 @@ async def test_slash_in_code_normalized_in_url(
     seed_conversation,
     seed_attention_session,
 ) -> None:
-    """Folio codes with '/' in the URL are normalized to '_' and matched correctly."""
-    from app.repositories.folio_repo import normalize_code
-
+    """Folio codes with '/' in the URL path are stored and matched as-is."""
     raw_code = "206/26/TEST"
-    folio = await _make_folio(db, code=normalize_code(raw_code))
+    folio = await _make_folio(db, code=raw_code)
     await _link_folio_to_session(db, seed_attention_session.id, folio.id)
 
     # Call the API with the raw code containing slashes in the URL path
@@ -352,5 +350,5 @@ async def test_slash_in_code_normalized_in_url(
     )
     assert response.status_code == 200
     data = response.json()
-    assert data["folio_code"] == normalize_code(raw_code)
+    assert data["folio_code"] == raw_code
     assert data["notes_created"] == 1
