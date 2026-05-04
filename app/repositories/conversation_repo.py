@@ -1,6 +1,6 @@
 from datetime import datetime, timezone
 
-from sqlalchemy import func, select
+from sqlalchemy import case, exists, func, literal, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -13,13 +13,21 @@ async def list_for_property(
     db: AsyncSession,
     property_id: int,
     limit: int = 50,
+    conversation_type: str = "guest",
 ) -> list[Conversation]:
     """
-    Return conversations for a property ordered by last message time (most recent first).
+    Return conversations for a property, ordered by priority groups then by
+    last message time (most recent first) within each group.
 
-    Uses a correlated subquery for ordering so that the inbox always reflects actual
-    last activity, regardless of conversation.updated_at staleness.
+    Priority groups:
+      0 — Escalated: conversations with at least one pending escalation.
+      1 — AI off + unread: AI disabled and unread inbound messages exist.
+      2 — Everything else.
+
+    Uses correlated subqueries so the inbox reflects actual state.
     """
+    from app.models.escalation import Escalation
+
     # Exclude auto-generated folio-event notes (template_code IS NOT NULL)
     # from ordering so they don't bump conversations in the inbox.
     last_msg_at = (
@@ -34,6 +42,64 @@ async def list_for_property(
         .correlate(Conversation)
         .scalar_subquery()
     )
+
+    # Group 0: pending escalation for this property's session
+    has_escalation = (
+        exists(
+            select(literal(1))
+            .select_from(Escalation)
+            .join(AttentionSession, AttentionSession.id == Escalation.session_id)
+            .where(
+                Escalation.conversation_id == Conversation.id,
+                Escalation.status == "pending",
+                AttentionSession.property_id == property_id,
+            )
+        )
+    )
+
+    # Group 1: AI disabled + has unread inbound messages
+    ai_off = (
+        exists(
+            select(literal(1))
+            .select_from(AttentionSession)
+            .where(
+                AttentionSession.conversation_id == Conversation.id,
+                AttentionSession.property_id == property_id,
+                AttentionSession.status == SessionStatus.active,
+                AttentionSession.ai_enabled == False,  # noqa: E712
+            )
+        )
+    )
+
+    read_at_subq = (
+        select(ConversationRead.last_read_at)
+        .where(
+            ConversationRead.conversation_id == Conversation.id,
+            ConversationRead.property_id == property_id,
+        )
+        .correlate(Conversation)
+        .scalar_subquery()
+    )
+
+    has_unread = (
+        exists(
+            select(literal(1))
+            .select_from(Message)
+            .where(
+                Message.conversation_id == Conversation.id,
+                Message.direction == MessageDirection.inbound,
+                (read_at_subq == None) |  # noqa: E711
+                (Message.created_at > read_at_subq),
+            )
+        )
+    )
+
+    priority = case(
+        (has_escalation, 0),
+        (ai_off & has_unread, 1),
+        else_=2,
+    )
+
     stmt = (
         select(Conversation)
         .where(
@@ -41,10 +107,11 @@ async def list_for_property(
                 select(AttentionSession.conversation_id)
                 .where(AttentionSession.property_id == property_id)
                 .distinct()
-            )
+            ),
+            Conversation.conversation_type == conversation_type,
         )
         .options(selectinload(Conversation.contact))
-        .order_by(last_msg_at.desc().nullslast())
+        .order_by(priority, last_msg_at.desc().nullslast())
         .limit(limit)
     )
     result = await db.execute(stmt)
@@ -98,13 +165,17 @@ async def get_or_create(
     db: AsyncSession,
     contact_id: int,
 ) -> tuple[Conversation, bool]:
+    """Get or create a guest conversation for a contact."""
     result = await db.execute(
-        select(Conversation).where(Conversation.contact_id == contact_id)
+        select(Conversation).where(
+            Conversation.contact_id == contact_id,
+            Conversation.conversation_type == "guest",
+        )
     )
     conv = result.scalar_one_or_none()
     if conv:
         return conv, False
-    conv = Conversation(contact_id=contact_id)
+    conv = Conversation(contact_id=contact_id, conversation_type="guest")
     db.add(conv)
     await db.flush()
     return conv, True
