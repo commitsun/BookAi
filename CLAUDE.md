@@ -64,7 +64,9 @@ Microservicio Python que actúa como backend de canal conversacional entre:
 | Phone | `phonenumbers` |
 | Testing | `pytest` + `pytest-asyncio` |
 
-**Excluidos explícitamente:** `langchain`, `langgraph`, `openai`, `fastmcp`, `mcp`, `boto3`, `python-docx`, `nest_asyncio`, `deep-translator`, `langdetect`, RabbitMQ.
+**Excluidos explícitamente:** `langchain`, `langgraph`, `openai`, `fastmcp`, `boto3`, `python-docx`, `nest_asyncio`, `deep-translator`, `langdetect`, RabbitMQ.
+
+> Nota sobre `mcp`: la librería `mcp` (Model Context Protocol SDK) **sí** se usa, pero exclusivamente para conectar con servidores MCP **externos** a Odoo. La integración con Roomdoo/PMS va por el SDK Python (`vendor/roomdoo_sdk/` provisionalmente), no por MCP — eso es lo que prohíbe la restricción de la sección anterior.
 
 ---
 

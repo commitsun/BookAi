@@ -10,12 +10,14 @@ WORKDIR /app
 COPY pyproject.toml .
 RUN pip install --no-cache-dir -e ".[dev]"
 
-# roomdoo-sdk: in dev it's mounted as a volume at /roomdoo-sdk;
-# for production, copy it into the image before this stage.
-RUN if [ -d /roomdoo-sdk ]; then pip install --no-cache-dir /roomdoo-sdk; fi
+# roomdoo-sdk lives vendored at vendor/roomdoo_sdk until it moves to its own repo.
+# Editable install so the bind mount in docker-compose.yml picks up local edits.
+COPY vendor/roomdoo_sdk ./vendor/roomdoo_sdk
+RUN pip install --no-cache-dir -e ./vendor/roomdoo_sdk
 
 ENV PYTHONPATH=/app
 COPY . .
 
 EXPOSE 8000
-CMD ["uvicorn", "main:socket_app", "--host", "0.0.0.0", "--port", "8000"]
+COPY entrypoint.sh .
+ENTRYPOINT ["./entrypoint.sh"]

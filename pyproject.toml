@@ -24,7 +24,8 @@ dependencies = [
     "aiofiles>=23.0",
     "langdetect>=1.0.9",
     "litellm>=1.40.0",
-    # roomdoo-sdk: installed separately (editable in dev, from /roomdoo-sdk in Docker)
+    "mcp>=1.0.0",
+    # roomdoo-sdk: vendored in repo at vendor/roomdoo_sdk and installed editable from the Dockerfile
 ]
 
 [project.optional-dependencies]
